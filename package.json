@@ -1,0 +1,35 @@
+{
+  "name": "@optra-ai/prism-plugin",
+  "version": "0.1.0",
+  "description": "AI coding agent governance plugin for Claude Code — prompt quality scoring, cost tracking, and real-time optimization",
+  "license": "MIT",
+  "author": {
+    "name": "Optra",
+    "url": "https://optra-ai.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/grumatic/optra-prism-plugin"
+  },
+  "homepage": "https://prism.optra-ai.com",
+  "files": [
+    "lib/",
+    "commands/",
+    "skills/",
+    "hooks/",
+    ".claude-plugin/",
+    "CHANGELOG.md",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "claude-code",
+    "plugin",
+    "governance",
+    "prompt-quality",
+    "cost-optimization",
+    "telemetry"
+  ]
+}

@@ -1,0 +1,36 @@
+name: Release Plugin
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Validate tag matches plugin.json
+        run: |
+          PLUGIN_VERSION=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('.claude-plugin/plugin.json','utf8')).version)")
+          if [ "$PLUGIN_VERSION" != "${{ steps.version.outputs.version }}" ]; then
+            echo "::error::Tag v${{ steps.version.outputs.version }} != plugin.json version $PLUGIN_VERSION"
+            exit 1
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: "Prism Plugin v${{ steps.version.outputs.version }}"
+          generate_release_notes: true

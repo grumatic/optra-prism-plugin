@@ -1,0 +1,18 @@
+{
+  "name": "optra-prism",
+  "owner": {
+    "name": "Optra",
+    "email": "support@optra-ai.com"
+  },
+  "metadata": {
+    "description": "AI coding agent governance plugins by Optra"
+  },
+  "plugins": [
+    {
+      "name": "prism",
+      "source": "./",
+      "description": "AI coding agent governance — prompt scoring, cost tracking, and real-time optimization for Claude Code",
+      "version": "0.1.0"
+    }
+  ]
+}

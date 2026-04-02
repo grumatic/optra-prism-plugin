@@ -1,0 +1,39 @@
+{
+  "name": "prism",
+  "description": "AI coding agent governance — prompt scoring, cost tracking, and real-time optimization for Claude Code",
+  "version": "0.1.0",
+  "author": {
+    "name": "Optra",
+    "url": "https://prism.optra-ai.com"
+  },
+  "homepage": "https://prism.optra-ai.com",
+  "repository": "https://github.com/grumatic/optra-prism-plugin",
+  "license": "MIT",
+  "hooks": "./hooks/hooks.json",
+  "keywords": [
+    "governance",
+    "cost-optimization",
+    "prompt-quality",
+    "token-tracking",
+    "telemetry",
+    "budgets"
+  ],
+  "userConfig": {
+    "apiKey": {
+      "description": "Your Optra API key (starts with gck_)",
+      "sensitive": true
+    },
+    "enableGateway": {
+      "description": "Route Claude Code API calls through Optra gateway for governance (true/false)",
+      "sensitive": false
+    },
+    "environment": {
+      "description": "Target environment (production, staging, development, local)",
+      "sensitive": false
+    },
+    "prismThreshold": {
+      "description": "Minimum prompt quality score 0-10 (prompts below this are blocked)",
+      "sensitive": false
+    }
+  }
+}
