@@ -12,7 +12,7 @@
       "name": "prism",
       "source": "./",
       "description": "AI coding agent governance — prompt scoring, cost tracking, and real-time optimization for Claude Code",
-      "version": "0.1.0"
+      "version": "0.3.0"
     }
   ]
 }

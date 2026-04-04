@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `lib/config.js` — config endpoint client with 24h cache at `${CLAUDE_PLUGIN_DATA}/config-cache.json`
+
+### Changed
+- URL resolution via config endpoint (`ingest.prism.optra-ai.com/v1/plugin/config`) — no hardcoded environment URLs in plugin source
+- Removed `environment` from userConfig (server resolves from API key)
+- `lib/env.js` reads URLs from config cache instead of hardcoded `DEFAULTS` object
+- `lib/settings.js` reads ingest URL from config cache instead of `URL_DEFAULTS`
+- `session-start.sh` resolves URLs from config cache instead of `case PRISM_ENV` block
+- Internal dev uses env var overrides: `PRISM_INGEST_URL`, `PRISM_GATEWAY_URL`, `PRISM_CODER_URL`
+
 ## [0.1.0] - 2026-04-02
 
 ### Added

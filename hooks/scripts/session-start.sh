@@ -1,6 +1,7 @@
 #!/bin/bash
 # ─── Session Start Hook ───
 # Reads API key from userConfig (CLAUDE_PLUGIN_OPTION_*) or ~/.prism/config.json.
+# Resolves service URLs from config endpoint cache (lib/config.js).
 # Shows error on every session until a valid gck_* key is configured.
 #
 # OTEL env vars are NOT set here — they must exist before Claude Code starts.
@@ -60,21 +61,7 @@ if [ -f "$CONFIG_FILE" ]; then
 fi
 
 PRISM_THRESHOLD="${PRISM_THRESHOLD:-4}"
-ENABLE_GATEWAY="${ENABLE_GATEWAY:-false}"
-
-# Read env (userConfig → env var → legacy config)
-if [ -z "${PRISM_ENV:-}" ]; then
-  PRISM_ENV="${CLAUDE_PLUGIN_OPTION_environment:-}"
-  if [ -z "$PRISM_ENV" ] && [ -f "$CONFIG_FILE" ]; then
-    PRISM_ENV=$(CONFIG_PATH="$CONFIG_FILE" node -e "
-      try {
-        const c = JSON.parse(require('fs').readFileSync(process.env.CONFIG_PATH, 'utf8'));
-        process.stdout.write(c.env || '');
-      } catch {}
-    " 2>/dev/null || true)
-  fi
-  PRISM_ENV="${PRISM_ENV:-production}"
-fi
+ENABLE_GATEWAY="${ENABLE_GATEWAY:-true}"
 
 # ─── Validate key ───
 
@@ -90,30 +77,51 @@ case "$API_KEY" in
     ;;
 esac
 
-# ─── Environment → URLs ───
+# ─── Resolve URLs from config endpoint (env var → cache → fetch) ───
 
-case "${PRISM_ENV}" in
-  local)
-    GATEWAY_URL="http://localhost:3003"
-    PRISM_CODER_URL="http://localhost:9001"
-    INGEST_URL="http://localhost:9005"
-    ;;
-  development|dev)
-    GATEWAY_URL="https://gateway.dev.optra-ai.com/v1"
-    PRISM_CODER_URL="https://dashboard.prism.dev.optra-ai.com"
-    INGEST_URL="https://ingest.dev.optra-ai.com"
-    ;;
-  staging)
-    GATEWAY_URL="https://gateway.staging.optra-ai.com/v1"
-    PRISM_CODER_URL="https://dashboard.prism.staging.optra-ai.com"
-    INGEST_URL="https://ingest.staging.optra-ai.com"
-    ;;
-  *)
-    GATEWAY_URL="https://gateway.optra-ai.com/v1"
-    PRISM_CODER_URL="https://dashboard.prism.optra-ai.com"
-    INGEST_URL="https://ingest.optra-ai.com"
-    ;;
-esac
+RESOLVED_URLS=$(node -e "
+  const { getConfig, fetchConfig } = require('${PLUGIN_ROOT}/lib/config');
+  const apiKey = '${API_KEY}';
+
+  async function resolve() {
+    // Try synchronous cache first
+    const config = getConfig(apiKey);
+    if (config.ingest_url) {
+      return config;
+    }
+    // Cache miss — fetch from config endpoint
+    const fetched = await fetchConfig(apiKey);
+    return fetched || {};
+  }
+
+  resolve()
+    .then(c => process.stdout.write(JSON.stringify(c)))
+    .catch(() => process.stdout.write('{}'));
+" 2>/dev/null || echo '{}')
+
+INGEST_URL=$(echo "$RESOLVED_URLS" | node -e "
+  const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+  process.stdout.write(d.ingest_url || '');
+" 2>/dev/null || true)
+
+GATEWAY_URL=$(echo "$RESOLVED_URLS" | node -e "
+  const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+  process.stdout.write(d.gateway_url || '');
+" 2>/dev/null || true)
+
+ANTHROPIC_BASE_URL=$(echo "$RESOLVED_URLS" | node -e "
+  const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+  process.stdout.write(d.anthropic_base_url || d.gateway_url || '');
+" 2>/dev/null || true)
+
+# Env var overrides (for local dev)
+INGEST_URL="${PRISM_INGEST_URL:-${INGEST_URL}}"
+GATEWAY_URL="${PRISM_GATEWAY_URL:-${GATEWAY_URL}}"
+ANTHROPIC_BASE_URL="${PRISM_GATEWAY_URL:-${ANTHROPIC_BASE_URL}}"
+
+if [ -z "$INGEST_URL" ]; then
+  echo "[Prism] WARNING: Could not resolve service URLs. Run /prism:setup to refresh config." >&2
+fi
 
 # ─── Check & sync OTEL settings in ~/.claude/settings.json ───
 
@@ -131,9 +139,9 @@ fi
 
 if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
   # Gateway routing — only when opted in
-  if [ "$ENABLE_GATEWAY" = "true" ]; then
+  if [ "$ENABLE_GATEWAY" = "true" ] && [ -n "$ANTHROPIC_BASE_URL" ]; then
     cat >> "$CLAUDE_ENV_FILE" <<EOF
-export ANTHROPIC_BASE_URL=${GATEWAY_URL}
+export ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL}
 export ANTHROPIC_CUSTOM_HEADERS="X-Gateway-Api-Key: ${API_KEY}
 x-prism-source: claude-code"
 EOF
@@ -143,7 +151,6 @@ EOF
   cat >> "$CLAUDE_ENV_FILE" <<EOF
 export PRISM_THRESHOLD=${PRISM_THRESHOLD}
 export PRISM_GCK_KEY=${API_KEY}
-export PRISM_CODER_URL=${PRISM_CODER_URL}
 export PRISM_INGEST_URL=${INGEST_URL}
 export PRISM_DEBUG=${PRISM_DEBUG:-0}
 EOF
@@ -166,6 +173,17 @@ if [ -n "$DATA_DIR" ]; then
   fi
 fi
 
+# ─── Reset session state ───
+
+if [ -n "$DATA_DIR" ]; then
+  STATE_FILE="${DATA_DIR}/session-state.json"
+  node -e "
+    const fs = require('fs');
+    fs.mkdirSync('${DATA_DIR}', { recursive: true });
+    fs.writeFileSync('${STATE_FILE}', JSON.stringify({ turnCount: 0, sessionStart: Date.now(), sessionId: '' }));
+  " 2>/dev/null || true
+fi
+
 # ─── Confirmation ───
 
 GATEWAY_STATUS="disabled"
@@ -173,6 +191,6 @@ if [ "$ENABLE_GATEWAY" = "true" ]; then
   GATEWAY_STATUS="enabled"
 fi
 
-echo "[Prism] Session started — env=${PRISM_ENV} gateway=${GATEWAY_STATUS} key=${API_KEY:0:12}... ingest=${INGEST_URL}" >&2
+echo "[Prism] Session started — gateway=${GATEWAY_STATUS} key=${API_KEY:0:12}... ingest=${INGEST_URL:-unknown}" >&2
 
 exit 0

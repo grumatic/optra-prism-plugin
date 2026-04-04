@@ -1,7 +1,7 @@
 {
   "name": "prism",
-  "description": "AI coding agent governance — prompt scoring, cost tracking, and real-time optimization for Claude Code",
-  "version": "0.1.0",
+  "description": "AI coding agent governance — prompt scoring, cost tracking, waste detection, and real-time optimization for Claude Code",
+  "version": "0.3.0",
   "author": {
     "name": "Optra",
     "url": "https://prism.optra-ai.com"
@@ -9,7 +9,6 @@
   "homepage": "https://prism.optra-ai.com",
   "repository": "https://github.com/grumatic/optra-prism-plugin",
   "license": "MIT",
-  "hooks": "./hooks/hooks.json",
   "keywords": [
     "governance",
     "cost-optimization",
@@ -18,21 +17,31 @@
     "telemetry",
     "budgets"
   ],
+  "hooks": "./hooks/hooks.json",
+  "skills": "./skills",
   "userConfig": {
     "apiKey": {
+      "title": "API Key",
+      "type": "string",
       "description": "Your Optra API key (starts with gck_)",
       "sensitive": true
     },
     "enableGateway": {
-      "description": "Route Claude Code API calls through Optra gateway for governance (true/false)",
-      "sensitive": false
-    },
-    "environment": {
-      "description": "Target environment (production, staging, development, local)",
+      "title": "Enable Gateway",
+      "type": "boolean",
+      "description": "Route Claude Code API calls through Optra gateway for governance (default: true). Use /prism:status to toggle.",
       "sensitive": false
     },
     "prismThreshold": {
+      "title": "PRISM Threshold",
+      "type": "number",
       "description": "Minimum prompt quality score 0-10 (prompts below this are blocked)",
+      "sensitive": false
+    },
+    "showStatusLine": {
+      "title": "Show Status Line",
+      "type": "boolean",
+      "description": "Show the [Prism] status line after every turn (default: true). Use /prism:status to toggle.",
       "sensitive": false
     }
   }

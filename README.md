@@ -14,10 +14,13 @@ AI coding governance plugin for Claude Code. Scores prompt quality in real-time,
 # 1. Add the marketplace
 /plugin marketplace add grumatic/optra-prism-plugin
 
-# 2. Configure your API key
+# 2. Install the plugin
+/plugin install prism@optra-prism
+
+# 3. Configure your API key
 /prism:setup gck_YOUR_API_KEY
 
-# 3. Restart Claude Code for OTEL telemetry to take effect
+# 4. Restart Claude Code for OTEL telemetry to take effect
 ```
 
 ### Alternative: Shell installer
@@ -49,30 +52,30 @@ Three hooks run automatically:
 
 | Command | Description |
 |---------|-------------|
-| `/prism:setup` | Configure API key and gateway routing |
-| `/prism:status` | Connection status, gateway mode, config |
-| `/prism:cost` | Session cost summary |
-| `/prism:score` | Prompt quality check and tips |
-| `/prism:recommend` | Token-saving recommendations |
+| `/prism:setup` | Configure API key, enable telemetry + gateway |
+| `/prism:status` | Connection health, gateway toggle, session info |
+| `/prism:cost` | Session cost, token usage |
+| `/prism:score` | Weakest dimension, coaching tips, optimization advice |
+| `/prism:report` | Full review — trends, habits, waste, worst prompts |
 | `/prism:uninstall` | Remove plugin config and OTEL settings |
 
 ## Configuration
 
-Set `PRISM_ENV` to control which environment the plugin targets (or configure via `/prism:setup`):
+All service URLs (ingest, gateway, dashboard) are resolved automatically from your API key — no manual URL configuration needed. The plugin calls a config endpoint on setup and caches the result.
 
-| Value | Gateway | Ingest |
-|-------|---------|--------|
-| `local` | `localhost:3003` | `localhost:9005` |
-| `development` | `gateway.dev.optra-ai.com` | `ingest.dev.optra-ai.com` |
-| `staging` | `gateway.staging.optra-ai.com` | `ingest.staging.optra-ai.com` |
-| `production` (default) | `gateway.optra-ai.com` | `ingest.optra-ai.com` |
+For local development, override with env vars:
+
+```bash
+PRISM_INGEST_URL=http://localhost:9005 PRISM_GATEWAY_URL=http://localhost:3003 claude
+```
 
 ## How It Works
 
 ```
 /prism:setup gck_KEY
     │
-    ├─→ Writes config (API key, env, threshold, gateway choice)
+    ├─→ Calls config endpoint → resolves URLs from API key
+    ├─→ Caches config locally
     └─→ Syncs OTEL env vars to ~/.claude/settings.json (global)
 
 Claude Code starts
