@@ -17,7 +17,6 @@
     "telemetry",
     "budgets"
   ],
-  "hooks": "./hooks/hooks.json",
   "skills": "./skills",
   "userConfig": {
     "apiKey": {
