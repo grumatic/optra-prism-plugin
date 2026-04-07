@@ -8,7 +8,7 @@ Generate a comprehensive review from PRISM data covering the last 30 days. This 
 
 **API:** `GET /v1/intelligence/prism?from={30d_ago_ISO}&limit=1000`
 - Auth: `Authorization: Bearer {apiKey}` — read `apiKey` from `~/.prism/config.json`
-- URL: try engine at `http://localhost:9007`, fallback to `$PRISM_INGEST_URL`
+- URL: use `$PRISM_INGEST_URL` if set, otherwise `https://ingest.prism.optra-ai.com`
 
 Also fetch waste data: `GET /v1/intelligence/waste?limit=20` (same auth/URL pattern).
 

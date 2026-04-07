@@ -14,7 +14,7 @@ Offer to score their most recent prompt or any prompt they paste in using the PR
 
 **API:** `GET /v1/intelligence/prism?from={7d_ago_ISO}&limit=200`
 - Auth: `Authorization: Bearer {apiKey}` — read `apiKey` from `~/.prism/config.json`
-- URL: try engine at `http://localhost:9007`, fallback to `$PRISM_INGEST_URL`
+- URL: use `$PRISM_INGEST_URL` if set, otherwise `https://ingest.prism.optra-ai.com`
 
 **Compute:** Average each dimension across all turns:
 - PQ=(pqSpecificity+pqDecomposition)/2, IE=(ieConvergence+ieRecovery)/2, VD=(vdReview+vdValidation)/2
