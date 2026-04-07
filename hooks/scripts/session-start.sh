@@ -148,10 +148,13 @@ EOF
   fi
 
   # Always set these (telemetry + scoring work without gateway)
+  # Note: PRISM_INGEST_URL is intentionally NOT exported here to avoid a
+  # self-reinforcing loop where the hook-set value persists across sessions,
+  # making it impossible to distinguish user overrides from hook defaults.
+  # Skills and lib/env.js fall back to config cache → production URL when unset.
   cat >> "$CLAUDE_ENV_FILE" <<EOF
 export PRISM_THRESHOLD=${PRISM_THRESHOLD}
 export PRISM_GCK_KEY=${API_KEY}
-export PRISM_INGEST_URL=${INGEST_URL}
 export PRISM_DEBUG=${PRISM_DEBUG:-0}
 EOF
 fi
