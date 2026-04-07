@@ -1,7 +1,7 @@
 {
   "name": "@optra-ai/prism-plugin",
   "version": "0.3.0",
-  "description": "AI coding agent governance plugin for Claude Code — prompt quality scoring, cost tracking, and real-time optimization",
+  "description": "AI vibe coding intelligence plugin for Claude Code — prompt quality scoring, cost tracking, and real-time optimization",
   "license": "MIT",
   "author": {
     "name": "Optra",
@@ -26,7 +26,7 @@
   "keywords": [
     "claude-code",
     "plugin",
-    "governance",
+    "intelligence",
     "prompt-quality",
     "cost-optimization",
     "telemetry"

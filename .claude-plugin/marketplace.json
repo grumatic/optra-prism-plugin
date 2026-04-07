@@ -5,13 +5,13 @@
     "email": "support@optra-ai.com"
   },
   "metadata": {
-    "description": "AI coding agent governance plugins by Optra"
+    "description": "AI vibe coding intelligence plugins by Optra"
   },
   "plugins": [
     {
       "name": "prism",
       "source": "./",
-      "description": "AI coding agent governance — prompt scoring, cost tracking, and real-time optimization for Claude Code",
+      "description": "AI vibe coding intelligence — prompt scoring, cost tracking, and real-time optimization for Claude Code",
       "version": "0.3.0"
     }
   ]

@@ -1,6 +1,6 @@
 {
   "name": "prism",
-  "description": "AI coding agent governance — prompt scoring, cost tracking, waste detection, and real-time optimization for Claude Code",
+  "description": "AI vibe coding intelligence — prompt scoring, cost tracking, waste detection, and real-time optimization for Claude Code",
   "version": "0.3.0",
   "author": {
     "name": "Optra",
@@ -10,7 +10,7 @@
   "repository": "https://github.com/grumatic/optra-prism-plugin",
   "license": "MIT",
   "keywords": [
-    "governance",
+    "intelligence",
     "cost-optimization",
     "prompt-quality",
     "token-tracking",
@@ -28,7 +28,7 @@
     "enableGateway": {
       "title": "Enable Gateway",
       "type": "boolean",
-      "description": "Route Claude Code API calls through Optra gateway for governance (default: true). Use /prism:status to toggle.",
+      "description": "Route Claude Code API calls through Optra gateway for intelligence (default: true). Use /prism:status to toggle.",
       "sensitive": false
     },
     "prismThreshold": {

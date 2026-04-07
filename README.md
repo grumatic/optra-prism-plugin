@@ -1,6 +1,6 @@
 # Optra Prism — Claude Code Plugin
 
-AI coding governance plugin for Claude Code. Scores prompt quality in real-time, captures telemetry for dashboard analytics, tracks session costs, and optionally routes requests through the Optra gateway for budget enforcement and guardrails.
+AI vibe coding intelligence plugin for Claude Code. Scores prompt quality in real-time, captures telemetry for dashboard analytics, tracks session costs, and optionally routes requests through the Optra gateway for budget enforcement and guardrails.
 
 ## Requirements
 
@@ -34,7 +34,7 @@ curl -sL https://optra-ai.com/install-plugin.sh | bash -s -- gck_YOUR_KEY
 | Mode | What happens | Latency impact |
 |------|-------------|----------------|
 | **Telemetry only** (default) | OTEL export + prompt scoring + cost tracking. API calls go directly to Anthropic. | None |
-| **Full governance** | All of the above, plus API calls route through Optra gateway for budget enforcement, guardrails, and full request/response logging. | Small hop |
+| **Full intelligence** | All of the above, plus API calls route through Optra gateway for budget enforcement, guardrails, and full request/response logging. | Small hop |
 
 Choose your mode during `/prism:setup`. You can change it anytime.
 
