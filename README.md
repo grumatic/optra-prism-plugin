@@ -61,12 +61,10 @@ Three hooks run automatically:
 
 ## Configuration
 
-All service URLs (ingest, gateway, dashboard) are resolved automatically from your API key — no manual URL configuration needed. The plugin calls a config endpoint on setup and caches the result.
-
-For local development, override with env vars:
+All service URLs (ingest, gateway, dashboard) are resolved automatically from your API key via the config endpoint (`https://ingest.prism.optra-ai.com/v1/plugin/config`). Only `PRISM_INGEST_URL` can be overridden for local dev:
 
 ```bash
-PRISM_INGEST_URL=http://localhost:9005 PRISM_GATEWAY_URL=http://localhost:3003 claude
+PRISM_INGEST_URL=http://localhost:9005 claude
 ```
 
 ## How It Works

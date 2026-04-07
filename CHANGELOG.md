@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `lib/env.js` reads URLs from config cache instead of hardcoded `DEFAULTS` object
 - `lib/settings.js` reads ingest URL from config cache instead of `URL_DEFAULTS`
 - `session-start.sh` resolves URLs from config cache instead of `case PRISM_ENV` block
-- Internal dev uses env var overrides: `PRISM_INGEST_URL`, `PRISM_GATEWAY_URL`, `PRISM_CODER_URL`
+- Only `PRISM_INGEST_URL` env var override allowed; gateway/dashboard URLs always from config endpoint
 
 ## [0.1.0] - 2026-04-02
 

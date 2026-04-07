@@ -77,14 +77,19 @@ case "$API_KEY" in
     ;;
 esac
 
-# ─── Resolve URLs from config endpoint (env var → cache → fetch) ───
+# ─── Resolve URLs from config endpoint (cache → fetch → production fallback) ───
+#
+# getConfig() reads cache + production fallbacks only (no env var overrides).
+# This prevents a self-reinforcing loop where this hook writes PRISM_INGEST_URL
+# to CLAUDE_ENV_FILE → next session getConfig() reads it → writes it again,
+# permanently locking to localhost even after setup.
 
 RESOLVED_URLS=$(node -e "
   const { getConfig, fetchConfig } = require('${PLUGIN_ROOT}/lib/config');
   const apiKey = '${API_KEY}';
 
   async function resolve() {
-    // Try synchronous cache first
+    // Try synchronous cache first (no network call)
     const config = getConfig(apiKey);
     if (config.ingest_url) {
       return config;
@@ -114,14 +119,9 @@ ANTHROPIC_BASE_URL=$(echo "$RESOLVED_URLS" | node -e "
   process.stdout.write(d.anthropic_base_url || d.gateway_url || '');
 " 2>/dev/null || true)
 
-# Env var overrides (for local dev)
-INGEST_URL="${PRISM_INGEST_URL:-${INGEST_URL}}"
-GATEWAY_URL="${PRISM_GATEWAY_URL:-${GATEWAY_URL}}"
-ANTHROPIC_BASE_URL="${PRISM_GATEWAY_URL:-${ANTHROPIC_BASE_URL}}"
-
-if [ -z "$INGEST_URL" ]; then
-  echo "[Prism] WARNING: Could not resolve service URLs. Run /prism:setup to refresh config." >&2
-fi
+# Only PRISM_INGEST_URL can be overridden (for local dev).
+# Default to production if config endpoint and cache are both unavailable.
+INGEST_URL="${PRISM_INGEST_URL:-${INGEST_URL:-https://ingest.prism.optra-ai.com}}"
 
 # ─── Check & sync OTEL settings in ~/.claude/settings.json ───
 
@@ -191,6 +191,10 @@ if [ "$ENABLE_GATEWAY" = "true" ]; then
   GATEWAY_STATUS="enabled"
 fi
 
-echo "[Prism] Session started — gateway=${GATEWAY_STATUS} key=${API_KEY:0:12}... ingest=${INGEST_URL:-unknown}" >&2
+echo "[Prism] Session started — gateway=${GATEWAY_STATUS} key=${API_KEY:0:12}..." >&2
+echo "[Prism] Endpoints:" >&2
+echo "        Ingest:    ${INGEST_URL:-unknown}" >&2
+echo "        Gateway:   ${GATEWAY_URL:-unknown}" >&2
+echo "        Anthropic: ${ANTHROPIC_BASE_URL:-unknown}" >&2
 
 exit 0
