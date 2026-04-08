@@ -27,11 +27,16 @@ Uninstall the Prism plugin and clean up all configuration.
    fi
    ```
 
-4. Remove the Prism config directory and plugin cache:
+4. Remove the Prism config directory, plugin cache, and marketplace data:
    ```bash
    rm -rf ~/.prism
    rm -rf ~/.claude/plugins/cache/optra-prism
+   rm -rf ~/.claude/plugins/marketplaces/optra-prism
    ```
 
-5. Confirm: "Prism plugin uninstalled. **Restart Claude Code** to stop OTEL telemetry."
-   Note: No need to unregister from Claude Code — the `--plugin-dir` flag is only active for the session it was passed in.
+5. Unregister the marketplace:
+   ```bash
+   claude plugin marketplace remove grumatic/optra-prism-plugin 2>/dev/null || true
+   ```
+
+6. Confirm: "Prism plugin uninstalled. **Restart Claude Code** to complete removal."
