@@ -1,5 +1,5 @@
 ---
-name: prism:status
+name: status
 description: Show Prism connection status, toggle gateway routing
 user-invocable: true
 ---

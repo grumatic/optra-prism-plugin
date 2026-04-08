@@ -1,5 +1,5 @@
 ---
-name: prism:report
+name: report
 description: Comprehensive PRISM review — trends, habits, waste, worst prompts
 user-invocable: true
 ---

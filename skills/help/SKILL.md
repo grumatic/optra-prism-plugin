@@ -1,5 +1,5 @@
 ---
-name: prism:help
+name: help
 description: Show all available Prism plugin commands and how to use them
 user-invocable: true
 ---
