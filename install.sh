@@ -98,12 +98,12 @@ EOF
       if [ -f "$PLUGIN_ROOT/lib/settings.js" ]; then
         node "${PLUGIN_ROOT}/lib/settings.js" sync 2>/dev/null && \
           info "OTEL telemetry configured in ~/.claude/settings.json" || \
-          info "WARNING: Could not write OTEL settings — run /prism:setup after starting Claude Code"
+          info "WARNING: Could not write OTEL settings — restart Claude Code after starting"
       fi
 
       echo ""
       echo "Start Claude Code — the plugin activates automatically."
-      echo "Gateway routing is disabled by default. Run /prism:setup to enable it."
+      echo "Gateway routing is disabled by default. Run /prism:status to toggle it."
       ;;
     *)
       echo ""
@@ -113,7 +113,7 @@ EOF
   esac
 else
   echo ""
-  echo "No API key provided. Run /prism:setup inside Claude Code to configure:"
+  echo "No API key provided. You'll be prompted for it when installing the plugin."
   echo ""
   echo "  Or reinstall with your key:"
   echo "  curl -sL https://optra-ai.com/install-plugin.sh | bash -s -- gck_YOUR_KEY"

@@ -31,7 +31,8 @@ fi
 if [ -z "$API_KEY" ]; then
   echo "" >&2
   echo "[Prism] No API key configured." >&2
-  echo "        Run /prism:setup to enter your gck_* key." >&2
+  echo "        Reinstall with: /plugin install prism  (you'll be prompted for your key)" >&2
+  echo "        Or run: /prism:setup gck_YOUR_KEY" >&2
   echo "" >&2
   exit 0
 fi
@@ -71,7 +72,7 @@ case "$API_KEY" in
     echo "" >&2
     echo "[Prism] Invalid API key format: '${API_KEY:0:8}...'" >&2
     echo "        Expected key starting with gck_*" >&2
-    echo "        Run /prism:setup to fix." >&2
+    echo "        Reinstall with: /plugin install prism  (you'll be prompted for your key)" >&2
     echo "" >&2
     exit 0
     ;;

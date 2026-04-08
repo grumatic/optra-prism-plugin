@@ -46,4 +46,4 @@ No API key? Get one at: https://dashboard.prism.optra-ai.com/setup
    > Gateway routing **enabled**. Budget enforcement, guardrails, and usage logging active.
    > To toggle routing mode: `/prism:status`
 
-6. Remind: "**Restart Claude Code for changes to take effect.**"
+6. Remind: "**Restart Claude Code to activate telemetry.**"
