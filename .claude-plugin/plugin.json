@@ -1,7 +1,7 @@
 {
   "name": "prism",
   "description": "AI vibe coding intelligence — prompt scoring, cost tracking, waste detection, and real-time optimization for Claude Code",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "author": {
     "name": "Optra",
     "url": "https://prism.optra-ai.com"
