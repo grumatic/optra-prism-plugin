@@ -43,6 +43,8 @@ check_node
 # Prefer marketplace install if Claude Code CLI is available
 if command -v claude &>/dev/null; then
   info "Installing via Claude Code marketplace..."
+  # Clear stale plugin cache to force fresh download
+  rm -rf "${HOME}/.claude/plugins/cache/optra-prism" 2>/dev/null || true
   if claude plugin marketplace add "$MARKETPLACE_REPO" 2>/dev/null; then
     info "Marketplace registered: ${MARKETPLACE_REPO}"
     info "Plugin will be installed automatically on next Claude Code session."

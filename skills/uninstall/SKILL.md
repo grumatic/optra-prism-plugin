@@ -27,9 +27,10 @@ Uninstall the Prism plugin and clean up all configuration.
    fi
    ```
 
-4. Remove the Prism config directory:
+4. Remove the Prism config directory and plugin cache:
    ```bash
    rm -rf ~/.prism
+   rm -rf ~/.claude/plugins/cache/optra-prism
    ```
 
 5. Confirm: "Prism plugin uninstalled. **Restart Claude Code** to stop OTEL telemetry."
