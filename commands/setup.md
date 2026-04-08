@@ -1,5 +1,5 @@
 ---
-name: setup
+name: prism:setup
 description: Configure the Prism plugin with your gck_* API key
 user-invocable: true
 ---

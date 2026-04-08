@@ -1,5 +1,5 @@
 ---
-name: uninstall
+name: prism:uninstall
 description: Uninstall the Prism plugin — remove config, OTEL settings, and plugin registration
 user-invocable: true
 ---

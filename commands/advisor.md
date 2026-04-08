@@ -1,5 +1,5 @@
 ---
-name: advisor
+name: prism:advisor
 description: Prompt optimization advisor — helps developers write better prompts that save tokens and time
 user-invocable: true
 ---

@@ -1,5 +1,5 @@
 ---
-name: cost
+name: prism:cost
 description: Show current session cost and token usage summary
 user-invocable: true
 ---

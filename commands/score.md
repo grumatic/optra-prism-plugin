@@ -1,5 +1,5 @@
 ---
-name: score
+name: prism:score
 description: PRISM score — weakest dimension, coaching, and optimization tips
 user-invocable: true
 ---
