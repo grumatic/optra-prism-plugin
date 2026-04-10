@@ -22,6 +22,7 @@ Show the Prism plugin configuration, connection health, and allow gateway toggli
    - **Ingest URL:** `ingest_url` field (fallback: `https://ingest.prism.optra-ai.com`)
    - **Gateway URL:** `gateway_url` field (if gateway enabled)
    - **OTEL Logs:** `$OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` (fallback: `https://ingest.prism.optra-ai.com/v1/logs`)
+   - **OTEL Metrics:** `$OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` (fallback: `https://ingest.prism.optra-ai.com/v1/metrics`)
 
 5. **Active features:** OTel telemetry (always on), PRISM gate with threshold from config (always on), prompt capture (always on), gateway routing (if enabled).
 
