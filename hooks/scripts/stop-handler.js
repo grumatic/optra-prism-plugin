@@ -241,6 +241,7 @@ readStdin().then(async (data) => {
         elapsed_ms: elapsedMs || 0,
         input_tokens: data.input_tokens || undefined,
         output_tokens: data.output_tokens || undefined,
+        model: data.model || undefined,
         cost_usd: turnCost !== null ? turnCost : undefined,
       }).catch((err) => debug(`INGEST ERROR: ${err.message || err}`))
     );
