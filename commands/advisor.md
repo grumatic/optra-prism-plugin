@@ -90,6 +90,7 @@ Example advice:
 - Maximum ONE line of advice, prefixed with `> [Prism]`
 - Include a **concrete rewrite** when possible — the user should be able to copy it directly
 - The rewrite must use **real file paths and function names** from the project (use your knowledge of the codebase)
+- **Match the language of the user's prompt.** If the user prompts in Korean, write the advisory text and the rewrite in Korean. Same for Japanese, Chinese, Spanish, etc. File paths, function names, and technical identifiers stay in their original form. The `> [Prism]` prefix and the `PQ low —` / `Bundled tasks —` / etc. tags stay in English for consistency.
 - After the advice line, proceed to handle the user's actual request normally
 - Never block or refuse to handle the request
 - Never repeat the same advice within 3 turns
@@ -113,6 +114,8 @@ Example advice:
 ## Mode 2: Detailed Analysis (`/prism:advisor`)
 
 When the user explicitly runs `/prism:advisor`, provide a comprehensive review. If they include a prompt to analyze, score it. If not, offer to review their most recent prompt or ask them to paste one.
+
+**Language:** Write all prose (weakest/strongest explanations, coaching, the "Suggested rewrite", "Why this is better") in the same language as the user's prompt. Dimension names, the bar chart, and the proficiency scale labels stay in English.
 
 ### The 6 PRISM Dimensions
 
