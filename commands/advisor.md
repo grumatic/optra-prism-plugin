@@ -13,16 +13,6 @@ You have access to PRISM scoring knowledge. You operate in two modes:
 
 ---
 
-## Language
-
-Read `~/.prism/config.json` and look for a `language` field (e.g. `"en"`, `"ko"`, `"ja"`, `"zh"`, `"es"`). This is the **user's configured preferred language** and takes priority over the language of any individual prompt. If the field is missing or empty, default to English.
-
-All advisory prose — Mode 1 one-liners, Mode 2 weakest/strongest explanations, coaching, "Suggested rewrite", and "Why this is better" — must be in this language. File paths, function names, and other technical identifiers stay in their original form. The `> [Prism]` prefix, dimension codes (PQ/IE/VD/CQ/TU/AF), and tag prefixes like `PQ low —` / `Bundled tasks —` stay in English for consistency.
-
-Do not switch languages based on the language of the prompt. If the user has `"language": "ko"` set, write Korean advice even when their prompt is in English, and vice versa.
-
----
-
 ## Session Context
 
 Before evaluating a prompt, read the session context file for metrics. Use the Read tool to read:
@@ -100,7 +90,7 @@ Example advice:
 - Maximum ONE line of advice, prefixed with `> [Prism]`
 - Include a **concrete rewrite** when possible — the user should be able to copy it directly
 - The rewrite must use **real file paths and function names** from the project (use your knowledge of the codebase)
-- Use the user's configured language (see the "Language" section above) — not the language of the prompt
+- **Match the language of the user's prompt.** If the user prompts in Korean, write the advisory text and the rewrite in Korean. Same for Japanese, Chinese, Spanish, etc. File paths, function names, and technical identifiers stay in their original form. The `> [Prism]` prefix and the `PQ low —` / `Bundled tasks —` / etc. tags stay in English for consistency.
 - After the advice line, proceed to handle the user's actual request normally
 - Never block or refuse to handle the request
 - Never repeat the same advice within 3 turns
@@ -125,7 +115,7 @@ Example advice:
 
 When the user explicitly runs `/prism:advisor`, provide a comprehensive review. If they include a prompt to analyze, score it. If not, offer to review their most recent prompt or ask them to paste one.
 
-**Language:** Use the user's configured language from `~/.prism/config.json` (see the "Language" section at the top). Write weakest/strongest explanations, coaching, the "Suggested rewrite", and "Why this is better" in that language. Dimension names, the bar chart, and proficiency scale labels stay in English.
+**Language:** Write all prose (weakest/strongest explanations, coaching, the "Suggested rewrite", "Why this is better") in the same language as the user's prompt. Dimension names, the bar chart, and the proficiency scale labels stay in English.
 
 ### The 6 PRISM Dimensions
 

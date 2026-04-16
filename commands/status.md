@@ -18,8 +18,6 @@ Show the Prism plugin configuration, connection health, and allow gateway toggli
 
 3b. **Status line:** Read `showStatusLine` from config (default: true). Show current state: **On** or **Off**. If the user says "toggle status line", "hide status line", or "show status line": update `showStatusLine` in `~/.prism/config.json`. Confirm and remind to restart Claude Code.
 
-3c. **Language:** Read `language` from config (default: `"en"`). Show the current language code (e.g., **en** / **ko** / **ja**). This controls the language of realtime advisor output (`/prism:advisor` Mode 1 and Mode 2) — it does not affect the language of prompts sent to Claude. If the user says "set language to ko", "change language to en", etc., update `language` in `~/.prism/config.json` (read-modify-write, preserve other fields). Supported values: `en`, `ko`, `ja`, `zh`, `es`, `fr`, `de` (or any ISO 639-1 code). Confirm and note the change takes effect on the next advisor evaluation.
-
 4. **Endpoints:** Read all URLs from `~/.prism/config-cache.json` (source of truth). Do NOT use env vars like `$PRISM_INGEST_URL` or `$ANTHROPIC_BASE_URL` — they may be stale from a previous hook. Show:
    - **Ingest URL:** `ingest_url` field (fallback: `https://ingest.prism.optra-ai.com`)
    - **Gateway URL:** `gateway_url` field (if gateway enabled)
