@@ -1,7 +1,7 @@
 {
   "name": "@optra-ai/prism-plugin",
-  "version": "0.3.0",
-  "description": "AI vibe coding intelligence plugin for Claude Code — prompt quality scoring, cost tracking, and real-time optimization",
+  "version": "0.4.0",
+  "description": "PRISM intelligence plugin for Claude Code — prompt review, cost tracking, and real-time optimization",
   "license": "MIT",
   "author": {
     "name": "Optra",

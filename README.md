@@ -1,6 +1,6 @@
 # Optra Prism — Claude Code Plugin
 
-AI vibe coding intelligence plugin for Claude Code. Scores prompt quality in real-time, captures telemetry for dashboard analytics, tracks session costs, and optionally routes requests through the Optra gateway for budget enforcement and guardrails.
+PRISM intelligence plugin for Claude Code. Reviews prompts in real-time, captures telemetry for dashboard analytics, tracks session costs, and optionally routes requests through the Optra gateway for budget enforcement and guardrails.
 
 ## Requirements
 
@@ -45,7 +45,7 @@ Three hooks run automatically:
 | Hook | Purpose |
 |------|---------|
 | **SessionStart** | Validates API key, configures OTEL telemetry, optionally sets gateway routing |
-| **UserPromptSubmit** | Scores prompt quality (blocks low-quality prompts with coaching tips), captures to ingest |
+| **UserPromptSubmit** | Reviews prompts for specificity/scope and captures them to ingest for scoring |
 | **Stop** | Captures prompt/response pairs for analytics, tracks turns, warns on context bloat |
 
 ## Commands
@@ -55,8 +55,8 @@ Three hooks run automatically:
 | `/prism:setup` | Configure API key, enable telemetry + gateway |
 | `/prism:status` | Connection health, gateway toggle, session info |
 | `/prism:cost` | Session cost, token usage |
-| `/prism:score` | Weakest dimension, coaching tips, optimization advice |
-| `/prism:report` | Full review — trends, habits, waste, worst prompts |
+| `/prism:score` | Weakest area, coaching tips, optimization advice |
+| `/prism:report` | Full review — profile, habits, worst prompts, cost optimization |
 | `/prism:uninstall` | Remove plugin config and OTEL settings |
 
 ## Configuration
@@ -82,7 +82,7 @@ Claude Code starts
     ├─→ SessionStart hook → validates key, optionally sets gateway URL
     │
     ├─→ User types prompt
-    │   └─→ UserPromptSubmit hook → scores PQ, captures to ingest
+    │   └─→ UserPromptSubmit hook → captures prompt to ingest
     │
     ├─→ Claude responds (OTel auto-exports: api_request, tool_result, etc.)
     │   └─→ Stop hook → captures response + turn counter

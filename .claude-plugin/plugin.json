@@ -1,7 +1,7 @@
 {
   "name": "prism",
-  "description": "AI vibe coding intelligence — prompt scoring, cost tracking, waste detection, and real-time optimization for Claude Code",
-  "version": "0.3.4",
+  "description": "PRISM intelligence for Claude Code — prompt review, cost tracking, and real-time optimization",
+  "version": "0.4.0",
   "author": {
     "name": "Optra",
     "url": "https://prism.optra-ai.com"
@@ -33,7 +33,7 @@
     "prismThreshold": {
       "title": "PRISM Threshold",
       "type": "number",
-      "description": "Minimum prompt quality score 0-10 (prompts below this are blocked)",
+      "description": "Minimum prompt efficiency score 0-10 (prompts below this are blocked)",
       "sensitive": false
     },
     "showStatusLine": {

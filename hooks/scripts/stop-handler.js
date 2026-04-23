@@ -4,7 +4,7 @@
  *
  * Runs when Claude stops. Builds a compact status line and saves it to
  * session state for the submit handler to display on the next turn:
- *   [Prism] 5.2s · 12K in / 2K out · $0.23 ($1.45) · PQ 7.5 · turn 5
+ *   [Prism] 5.2s · 12K in / 2K out · $0.23 ($1.45 total) · turn 5
  *
  * Stop hook stderr is not displayed by Claude Code, so the status line
  * and alerts are stored in state.pendingStatusLine / state.pendingAlerts
@@ -220,24 +220,14 @@ readStdin().then(async (data) => {
 
   debug(`STATE SAVED: turn=${state.turnCount} pendingStatusLine=${state.pendingStatusLine ? 'yes' : 'no'} pendingAlerts=${state.pendingAlerts ? state.pendingAlerts.length : 0}`);
 
-  // --- Extract advisor feedback from Claude's response ---
-  const advisorFeedback = (data.last_assistant_message || '')
-    .split('\n')
-    .filter(l => l.trimStart().startsWith('> [Prism]'))
-    .map(l => l.replace(/^>\s*\[Prism\]\s*/, '').trim())
-    .join(' | ') || null;
-  debug(`ADVISOR FEEDBACK: ${advisorFeedback || 'none'}`);
-
   // --- Async: capture response + query OTEL cache data for next turn ---
   const asyncTasks = [];
 
   if (GCK_KEY) {
-    // Capture response + advisor feedback + elapsed time
     asyncTasks.push(
       sendResponse({
         tool_session_id: data.session_id,
         response_text: (data.last_assistant_message || '').slice(0, 2000),
-        advisor_feedback: advisorFeedback,
         elapsed_ms: elapsedMs || 0,
         input_tokens: data.input_tokens || undefined,
         output_tokens: data.output_tokens || undefined,

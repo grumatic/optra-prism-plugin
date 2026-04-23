@@ -1,52 +1,91 @@
 ---
 name: prism:score
-description: PRISM score — weakest dimension, coaching, and optimization tips
+description: PRISM Skill score — weakest component, coaching tips, and optimization advice
 user-invocable: true
 ---
 
-Show the user's PRISM profile: weakest dimension with coaching, dimension bar chart, and optimization tips. If the user passes a prompt to score, score it instead.
+Show the user's **Skill** score (the coachable one), break down its 5 components, and coach the weakest.
 
 ## If the user wants to score a specific prompt
 
-Offer to score their most recent prompt or any prompt they paste in using the PRISM criteria below. Provide specific, actionable feedback on how to improve each dimension.
+Delegate to `/prism:advisor` — it does conceptual, in-session prompt review. This command is the server-side profile across recent sessions.
 
-## Otherwise: show PRISM profile + coaching
+## Otherwise: show Skill profile + coaching
 
-**API:** `GET /v1/intelligence/prism?from={7d_ago_ISO}&limit=200`
-- Auth: `Authorization: Bearer {apiKey}` — read `apiKey` from `~/.prism/config.json`
-- URL: use `$PRISM_INGEST_URL` if set, otherwise `https://ingest.prism.optra-ai.com`
+**API:** `GET /v1/insights/report` (via the ingest proxy — resolved from config).
+- Auth header: `x-api-key: <gck_* key>` (read from `~/.prism/config.json`).
+- URL: use `$PRISM_INGEST_URL` if set, otherwise the cached ingest URL, otherwise `https://ingest.prism.optra-ai.com`.
+- Use the helper in `lib/engine.js` (`fetchReport()`); it handles auth and error reasons.
 
-**Compute:** Average each dimension across all turns:
-- PQ=(pqSpecificity+pqDecomposition)/2, IE=(ieConvergence+ieRecovery)/2, VD=(vdReview+vdValidation)/2
-- CQ=(cqJudgment+cqSafety)/2, TU=(tuSelection+tuContext)/2, AF=(afDelegation+afConfiguration)/2
+### Payload fields we read
 
-**Display (4 sections):**
+Everything comes from the top-level `skillSnapshot` (primary) with `prismProfile.coaching[]` and `pesRubricSnapshot` as supporting context.
 
-### 1. Weakest dimension
-Show the weakest dimension with its two sub-scores, 3 coaching tips specific to that dimension (with good/bad examples), and highlight the strongest dimension.
+```
+{
+  "skillSnapshot": {
+    "skill": 62.4,              // 0–100 composite
+    "skillTier": "proficient",  // novice | practitioner | proficient | expert | elite
+    "speedHours": 4.8,          // focused CLI hours in the period
+    "efficiencyTokensPerHour": 82000,
+    "sse": 6.1,                 // Sub-Session Efficiency (0–10)
+    "pes": 5.2,                 // Prompt Efficiency (0–10)
+    "ie":  6.7,                 // Iteration Efficiency (0–10)
+    "crr": 7.0,                 // Context Reset Rate (0–10)
+    "fc":  5.9                  // Flow Continuity (0–10)
+  },
+  "pesRubricSnapshot": { "clAvg": ..., "idAvg": ..., "teAvg": ..., "acAvg": ... },
+  "prismProfile": {
+    "coaching": [ { "dimension": "id", "label": "Information Density", "coaching": [ { "tip": "...", "exampleBefore": "...", "exampleAfter": "..." } ] } ]
+  }
+}
+```
 
-### 2. Bar chart
-Horizontal bar chart (█/░) of all 6 dimensions sorted low→high, marking weakest and strongest.
+Skill is a fixed, weighted composite: `100 × (0.45·SSE + 0.20·PES + 0.15·IE + 0.10·CRR + 0.10·FC)`, all five inputs on a 0–10 scale.
 
-### 3. Optimization tips
-Include 2-3 actionable tips based on the user's profile:
-- If PQ < 5: "Reference exact file paths, function names, or line numbers in every prompt"
-- If VD < 5: "Read target files before editing — Read tool, not cat via Bash"
-- If TU < 5: "Run `/compact` every 2-3 tasks, `/clear` when switching work"
-- If IE < 5: "Add constraints upfront to avoid correction turns"
-- General: model selection (`/model sonnet` for simple tasks), context management (`.claudeignore`), LSP plugins for fewer file reads
+## Display (4 sections)
 
-### 4. Dimension reference
-Briefly list all 6 dimensions with weights:
-1. **Prompt Quality (PQ) — 25%** — Specificity + Decomposition
-2. **Iteration Efficiency (IE) — 20%** — Convergence + Recovery
-3. **Verification Discipline (VD) — 20%** — Review + Validation
-4. **Code Quality (CQ) — 15%** — Judgment + Safety
-5. **Tool Use (TU) — 10%** — Selection + Context
-6. **Advanced Features (AF) — 10%** — Delegation + Configuration
+### 1. Headline
+`Skill {skill}/100 — {skillTier}`. One short line. Include the tier word as-is.
 
-Scale: 9.0+=Elite, 7.0-8.9=Expert, 5.0-6.9=Proficient, 3.0-4.9=Practitioner, <3.0=Novice
+### 2. Component breakdown
+List the 5 Skill components sorted low→high with a tiny bar (█/░, scale 0–10) and the weight in parentheses so the user sees which ones move the composite most:
 
-End with: "Detailed trends and history: https://dashboard.prism.optra-ai.com/prism"
+```
+SSE 6.1/10 (45%)  ██████░░░░
+PES 5.2/10 (20%)  █████░░░░░
+IE  6.7/10 (15%)  ███████░░░
+CRR 7.0/10 (10%)  ███████░░░
+FC  5.9/10 (10%)  ██████░░░░
+```
 
-If no scores or API fails: "No PRISM scores yet. Start coding to build your profile, or check `/prism:status`."
+Use the full labels once in a legend line above the bars:
+`SSE = Sub-Session Efficiency · PES = Prompt Efficiency · IE = Iteration Efficiency · CRR = Context Reset Rate · FC = Flow Continuity`
+
+Mark the **weakest** (lowest score) and the **biggest drag on your Skill score** (the component whose `(10 − score) × weight` is largest — it's pulling the composite down the most). They're often the same; if not, call out both.
+
+### 3. Weakest-component coaching
+Pick the component with the lowest score. Give 2–3 concrete coaching tips:
+
+- **PES low** — prefer tips from `prismProfile.coaching[]` entries whose `dimension` is one of `cl`, `id`, `te`, `ac` (the 4 PromptIQ rubric dims — they roll up into PES). If `pesRubricSnapshot` is present, call out the weakest rubric dim (lowest of `clAvg/idAvg/teAvg/acAvg`) by name. Include `exampleBefore` / `exampleAfter` when available.
+- **SSE low** — sub-session outcomes are poor. Suggest: break work into smaller sub-sessions, state the done-criteria upfront, close the loop (commit / test) before switching goals.
+- **IE low** — too many correction turns. Suggest: give constraints upfront (paths, function names, expected output format), avoid "now also do X" turns that reopen scope.
+- **CRR low** — too many `/clear` or fresh sessions mid-task. Suggest: use `/compact` to keep context, only `/clear` when switching work domains.
+- **FC low** — flow broken by long gaps or context churn. Suggest: batch related tasks, keep sessions under ~90 min of active work, avoid interleaving unrelated projects.
+
+Also call out the strongest component (highest score) as a keep-doing.
+
+### 4. Optimization advice
+2–3 concrete tips keyed off the numbers:
+
+- `efficiencyTokensPerHour` high (> ~150k) → tokens are growing fast. "Run `/compact` every 2–3 tasks; use `.claudeignore` to keep the file tree lean; try `/model sonnet` for simple edits."
+- `speedHours` < 2 for a weekly report → not enough active time for stable scoring; mention "scores tighten as you cross ~100 completed sub-sessions."
+- Any component < 4 → flag it as the top coaching target; everything else waits.
+
+End with: `Detailed trends and history: https://dashboard.prism.optra-ai.com/my/report`
+
+## Fallbacks
+
+- `skillSnapshot` missing from the payload (older report, or cold-start period with no Layer 2/3 rows yet): fall back to `prismProfile.dimensions[]` — these are the 4 PromptIQ rubric dims (CL/ID/TE/AC). Show them as a PES-only view with the caveat "Skill composite not available for this period — showing Prompt Efficiency rubric only."
+- `reason: "http_error"` with `status: 404` → "No report yet. Generate one on the dashboard (https://dashboard.prism.optra-ai.com/my/report) or ask me to run `/prism:report` — it will trigger generation."
+- Any other error → "Couldn't fetch your profile. Check `/prism:status`."

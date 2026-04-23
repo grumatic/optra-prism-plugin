@@ -18,17 +18,16 @@ Setup & Config
 
 During a Session
   /prism:cost              Session cost, token usage, compact tip
-  /prism:score             Weakest dimension, coaching tips, optimization advice
-  /prism:advisor [prompt]  Optimize a prompt — PQ score, rewrite, and tips
+  /prism:score             Weakest area, coaching tips, optimization advice
+  /prism:advisor [prompt]  Optimize a prompt — efficiency score, rewrite, and tips
 
 After a Session
-  /prism:report            Full review — trends, habits, waste, worst prompts
+  /prism:report            Full review — profile, habits, worst prompts, cost optimization
 
 Automatic (hooks — no command needed)
-  Prompt advisor   Scores prompts in realtime, blocks low PQ with rewrite advice
+  Prompt advisor   Reviews prompts in realtime with rewrite advice when helpful
   Response timer   Shows elapsed time and token count after each response
   Context nudge    Smart /compact and /clear advice based on context growth
-  Waste alerts     Model overkill warnings every 10 turns
 
 Getting started:
   1. /prism:setup gck_YOUR_KEY    Set up your API key

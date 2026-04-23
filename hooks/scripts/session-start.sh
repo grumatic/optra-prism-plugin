@@ -5,9 +5,12 @@
 # Shows error on every session until a valid gck_* key is configured.
 #
 # OTEL env vars are NOT set here — they must exist before Claude Code starts.
-# They live in ~/.claude/settings.json "env" section, written by install.sh
-# or /prism:setup. This hook checks they're correct and fixes them for the
-# next session if they've drifted.
+# They live in one of:
+#   ~/.claude/settings.json                         (user scope)
+#   $CLAUDE_PROJECT_DIR/.claude/settings.local.json (project scope)
+# written by install.sh or /prism:setup. This hook detects the active scope
+# and verifies the vars are correct; if they've drifted it re-syncs them for
+# the next session.
 
 set -euo pipefail
 
@@ -86,18 +89,18 @@ esac
 # permanently locking to localhost even after setup.
 
 RESOLVED_URLS=$(node -e "
-  const { getConfig, fetchConfig } = require('${PLUGIN_ROOT}/lib/config');
+  const { getCachedConfig, getConfig, fetchConfig } = require('${PLUGIN_ROOT}/lib/config');
   const apiKey = '${API_KEY}';
 
   async function resolve() {
-    // Try synchronous cache first (no network call)
-    const config = getConfig(apiKey);
-    if (config.ingest_url) {
-      return config;
-    }
-    // Cache miss — fetch from config endpoint
+    // Use the cache only if it actually exists and is valid (getCachedConfig
+    // returns null on miss/expiry/key change). getConfig() can't be used to
+    // detect a miss because it falls back to production URLs unconditionally.
+    const cached = getCachedConfig(apiKey);
+    if (cached) return cached;
+    // Cache miss — fetch from config endpoint, then fall back to prod URLs.
     const fetched = await fetchConfig(apiKey);
-    return fetched || {};
+    return fetched || getConfig(apiKey);
   }
 
   resolve()
@@ -124,15 +127,40 @@ ANTHROPIC_BASE_URL=$(echo "$RESOLVED_URLS" | node -e "
 # Default to production if config endpoint and cache are both unavailable.
 INGEST_URL="${PRISM_INGEST_URL:-${INGEST_URL:-https://ingest.prism.optra-ai.com}}"
 
-# ─── Check & sync OTEL settings in ~/.claude/settings.json ───
+# ─── Detect active scope and check/sync OTEL settings ───
+#
+# The plugin stores OTEL vars in exactly one scope (user or project-local).
+# Detect which scope owns them. If neither does, fall back to user scope on
+# first run so the user doesn't have to re-run /prism:setup after install.
 
-OTEL_STATUS=$(node "${PLUGIN_ROOT}/lib/settings.js" check 2>/dev/null) || true
+PROJECT_DIR_ARG=""
+if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
+  PROJECT_DIR_ARG="--project-dir ${CLAUDE_PROJECT_DIR}"
+fi
+
+ACTIVE_SCOPE=$(node "${PLUGIN_ROOT}/lib/settings.js" detect ${PROJECT_DIR_ARG} 2>/dev/null || echo 'none')
+
+case "$ACTIVE_SCOPE" in
+  user|project)
+    TARGET_SCOPE="$ACTIVE_SCOPE"
+    ;;
+  both)
+    echo "[Prism] WARNING: OTEL vars present in both user and project scopes. Run /prism:setup to pick one." >&2
+    # Prefer project (more specific) when both are set — Claude Code merge order agrees.
+    TARGET_SCOPE="project"
+    ;;
+  *)
+    TARGET_SCOPE="user"
+    ;;
+esac
+
+OTEL_STATUS=$(node "${PLUGIN_ROOT}/lib/settings.js" check --scope "$TARGET_SCOPE" ${PROJECT_DIR_ARG} 2>/dev/null) || true
 
 if [ "$OTEL_STATUS" != "ok" ]; then
-  if node "${PLUGIN_ROOT}/lib/settings.js" sync 2>/dev/null; then
-    echo "[Prism] OTEL settings updated in ~/.claude/settings.json — restart Claude Code to apply." >&2
+  if node "${PLUGIN_ROOT}/lib/settings.js" sync --scope "$TARGET_SCOPE" ${PROJECT_DIR_ARG} 2>/dev/null; then
+    echo "[Prism] OTEL settings updated (scope=${TARGET_SCOPE}) — restart Claude Code to apply." >&2
   else
-    echo "[Prism] WARNING: Could not write OTEL settings to ~/.claude/settings.json" >&2
+    echo "[Prism] WARNING: Could not write OTEL settings (scope=${TARGET_SCOPE})" >&2
   fi
 fi
 

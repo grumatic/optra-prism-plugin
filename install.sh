@@ -43,13 +43,38 @@ check_node
 # Prefer marketplace install if Claude Code CLI is available
 if command -v claude &>/dev/null; then
   info "Installing via Claude Code marketplace..."
-  # Clear stale plugin cache to force fresh download
+
+  # Force a clean reinstall: wipe ALL cached plugin source (every version),
+  # wipe the plugin data dir, and drop the installed_plugins.json entry so
+  # Claude Code doesn't short-circuit on a stale "already installed" marker.
   rm -rf "${HOME}/.claude/plugins/cache/optra-prism" 2>/dev/null || true
+  rm -rf "${HOME}/.claude/plugins/data/prism-optra-prism" 2>/dev/null || true
+  INSTALLED_JSON="${HOME}/.claude/plugins/installed_plugins.json"
+  if [ -f "$INSTALLED_JSON" ] && command -v node &>/dev/null; then
+    node - "$INSTALLED_JSON" <<'NODE' 2>/dev/null || true
+const fs = require('fs');
+const path = process.argv[2];
+const data = JSON.parse(fs.readFileSync(path, 'utf8'));
+if (data && data.plugins && data.plugins['prism@optra-prism']) {
+  delete data.plugins['prism@optra-prism'];
+  fs.writeFileSync(path, JSON.stringify(data, null, 2) + '\n');
+  console.log('[prism] cleared stale installed_plugins.json entry');
+}
+NODE
+  fi
+
   if claude plugin marketplace add "$MARKETPLACE_REPO" 2>/dev/null; then
     info "Marketplace registered: ${MARKETPLACE_REPO}"
-    info "Plugin will be installed automatically on next Claude Code session."
   else
     info "Marketplace registration returned non-zero — may already be added."
+  fi
+
+  # Force install now (don't wait for next session) so the cache gets
+  # overwritten with fresh source instead of being lazily reused.
+  if claude plugin install "prism@optra-prism" 2>/dev/null; then
+    info "Plugin installed (cache overwritten with fresh source)."
+  else
+    info "Plugin install deferred — will install on next Claude Code session."
   fi
 else
   # Fallback: clone and register manually
@@ -89,7 +114,7 @@ if [ -n "$API_KEY" ]; then
 {
   "apiKey": "${API_KEY}",
   "prismThreshold": 4,
-  "enableGateway": "false"
+  "enableGateway": true
 }
 EOF
       chmod 600 "$CONFIG_FILE"

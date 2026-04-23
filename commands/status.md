@@ -8,11 +8,22 @@ Show the Prism plugin configuration, connection health, and allow gateway toggli
 
 1. **API key:** Read `~/.prism/config.json`. Show key prefix (e.g., `gck_abc12...`). If missing: "Run `/prism:setup gck_YOUR_KEY`. Get your key at https://dashboard.prism.optra-ai.com/setup"
 
+1b. **Install scope:** Detect which scope currently holds the OTEL env vars:
+   ```bash
+   node "$PLUGIN_DIR/lib/settings.js" detect --project-dir "$CLAUDE_PROJECT_DIR"
+   ```
+   Output is one of `user` | `project` | `both` | `none`. Display it:
+   - `user` → **Scope: user** (`~/.claude/settings.json`) — active in every project.
+   - `project` → **Scope: project** (`$CLAUDE_PROJECT_DIR/.claude/settings.local.json`) — active only in this project.
+   - `both` → **Scope: both** — warn: "OTEL vars exist in both user and project scopes. Run `/prism:setup` to pick one."
+   - `none` → "Prism is not activated yet. Run `/prism:setup gck_YOUR_KEY`."
+   If `detect` printed a WARNING to stderr (e.g. OTEL vars found in the shared `.claude/settings.json`), surface it here prominently — that warning means a gck_* key may have been committed to git.
+
 2. **Gateway routing:** Read `enableGateway` from config. Show current mode:
    - **Gateway (default)** — budget limits, guardrails, usage logging
    - **Direct** — bypass gateway, call Anthropic directly
    Show the gateway URL from `~/.prism/config-cache.json` field `gateway_url` (NOT from `$ANTHROPIC_BASE_URL` env var — it may be stale). If cache is missing, show "not resolved".
-   Note: Telemetry, PRISM scoring, and waste detection work in both modes.
+   Note: Telemetry and PRISM scoring work in both modes.
 
 3. **Toggle gateway:** If the user says "toggle", "switch", or "change" routing: update `enableGateway` in `~/.prism/config.json` (read-modify-write to preserve other fields). Confirm the change and remind to restart Claude Code.
 
