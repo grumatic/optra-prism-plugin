@@ -4,15 +4,16 @@ description: Comprehensive review — Skill profile, habits, worst prompts, cost
 user-invocable: true
 ---
 
-Generate a fresh PRISM insights report and display it. This is the full report (profile + habits + friction + wins + cost + worst prompts). For a focused Skill-only coaching view, use `/prism:score`.
+Generate a fresh **quick** PRISM report and display it in the terminal. This is a structured, LLM-free snapshot sized for CLI viewing — it is NOT the same as the full narrative dashboard report at `https://dashboard.prism.optra-ai.com/my/report`.
 
 **Flow:**
-1. Tell the user generation is running (up to ~120s).
-2. Call `generateReport()` from `lib/engine.js` (POST `/v1/insights/report/generate`).
-3. On success, call `fetchReport()` (GET `/v1/insights/report`) to load the fresh payload and render the sections below.
-4. On failure, point them at https://dashboard.prism.optra-ai.com/my/report.
+1. Call `quickReport()` from `lib/engine.js` (POST `/v1/insights/report/quick`). Synchronous, typical latency 1–5s. Tell the user it's computing.
+2. Render the sections below directly from the returned payload.
+3. On failure, point them at the dashboard link for the full narrative version.
 
-**Auth / URL:** `x-api-key: <gck_* key>` from `~/.prism/config.json`; URL from `$PRISM_INGEST_URL`, the cached ingest URL, or `https://ingest.prism.optra-ai.com`. Both helpers in `lib/engine.js` handle this.
+**Auth / URL:** `x-api-key: <gck_* key>` from `~/.prism/config.json`; URL from `$PRISM_INGEST_URL`, the cached ingest URL, or `https://ingest.prism.optra-ai.com`. `quickReport()` handles this.
+
+> For the full LLM-narrated report (chapters, coaching prose, up to ~120s), open the dashboard — the plugin does not trigger that path.
 
 **Payload shape:** see `apps/prism-engine/src/insights/types.rs`. Top-level keys we read:
 `meta`, `skillSnapshot`, `skillTrend`, `sseSeries`, `metricSparklines`, `pesRubricSnapshot`, `prismProfile`, `atAGlance`, `activity`, `howYouUseCc`, `impressiveThings`, `whereThingsGoWrong`, `costOptimization`, `worstPrompts`, `trends`, `charts`.
@@ -74,6 +75,5 @@ From `costOptimization`: `totalCostUsd`, `wastedCostUsd` (and `wasteRatio` as %)
 
 - `skillSnapshot` missing (report generated before the v2.14 payload extension, or a cold-start period): headline falls back to `prismProfile.compositeScore / proficiencyLevel` on a 0–10 scale with a caveat line "Skill composite not available for this period — showing the Prompt Efficiency rubric average instead." The Skill breakdown section becomes a PromptIQ rubric view using `prismProfile.dimensions[]` (CL/ID/TE/AC).
 - `atAGlance.quickWins[]` empty → skip the "Focus area" quickWin lookup and go straight to the Skill-component mapping.
-- `generateReport()` fails → "Couldn't generate a report right now. Try the dashboard: https://dashboard.prism.optra-ai.com/my/report."
-- `fetchReport()` after a successful generate returns `reason: "http_error"` with `status: 404` → rare race; retry once, then fall back to the dashboard link.
+- `quickReport()` fails → "Couldn't generate a quick report. Try the full dashboard report: https://dashboard.prism.optra-ai.com/my/report."
 - Any other error → "Couldn't load your report. Check `/prism:status`."
