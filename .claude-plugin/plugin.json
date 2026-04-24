@@ -1,7 +1,7 @@
 {
   "name": "prism",
   "description": "PRISM intelligence for Claude Code — prompt review, cost tracking, and real-time optimization",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "author": {
     "name": "Optra",
     "url": "https://prism.optra-ai.com"

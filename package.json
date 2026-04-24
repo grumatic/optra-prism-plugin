@@ -1,6 +1,6 @@
 {
   "name": "@optra-ai/prism-plugin",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "PRISM intelligence plugin for Claude Code — prompt review, cost tracking, and real-time optimization",
   "license": "MIT",
   "author": {
