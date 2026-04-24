@@ -19,7 +19,6 @@ Setup & Config
 During a Session
   /prism:cost              Session cost, token usage, compact tip
   /prism:score             Weakest area, coaching tips, optimization advice
-  /prism:advisor [prompt]  Optimize a prompt — efficiency score, rewrite, and tips
 
 After a Session
   /prism:report            Full review — profile, habits, worst prompts, cost optimization

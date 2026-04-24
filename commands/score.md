@@ -6,11 +6,7 @@ user-invocable: true
 
 Show the user's **Skill** score (the coachable one), break down its 5 components, and coach the weakest.
 
-## If the user wants to score a specific prompt
-
-Delegate to `/prism:advisor` — it does conceptual, in-session prompt review. This command is the server-side profile across recent sessions.
-
-## Otherwise: show Skill profile + coaching
+## Show Skill profile + coaching
 
 **API:** `GET /v1/insights/report` (via the ingest proxy — resolved from config).
 - Auth header: `x-api-key: <gck_* key>` (read from `~/.prism/config.json`).
