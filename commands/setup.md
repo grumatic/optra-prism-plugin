@@ -24,9 +24,10 @@ No API key? Get one at: https://dashboard.prism.optra-ai.com/setup
 
 2. Validate the key starts with `gck_`. If not: "Usage: `/prism:setup gck_YOUR_KEY [--user|--project]`"
 
-3. Write the plugin config (preserve existing `prismThreshold`, default to 4):
+3. Write the plugin config (preserve existing `prismThreshold`, default to 4). Wipe the stale config cache so step 4 fetches fresh URLs for the (possibly new) key:
    ```bash
    mkdir -p ~/.prism && chmod 700 ~/.prism
+   rm -f ~/.prism/config-cache.json
    ```
    Write JSON to `~/.prism/config.json` with: `apiKey`, `prismThreshold` (preserved or 4), `enableGateway: true`. Then `chmod 600 ~/.prism/config.json`.
 

@@ -110,6 +110,8 @@ if [ -n "$API_KEY" ]; then
     gck_*)
       mkdir -p "$CONFIG_DIR"
       chmod 700 "$CONFIG_DIR"
+      # Wipe stale config cache so the new key fetches fresh URLs.
+      rm -f "${CONFIG_DIR}/config-cache.json"
       cat > "$CONFIG_FILE" <<EOF
 {
   "apiKey": "${API_KEY}",
@@ -120,17 +122,32 @@ EOF
       chmod 600 "$CONFIG_FILE"
       info "API key saved: ${API_KEY:0:12}..."
 
-      # Try to sync OTEL settings
+      # Sync OTEL settings — respect the existing scope if Prism was already
+      # set up via /prism:setup --project, so we don't duplicate vars.
       PLUGIN_ROOT="${INSTALL_DIR}"
+      # Marketplace install lands in the cache, not INSTALL_DIR — fall back to it.
+      if [ ! -f "$PLUGIN_ROOT/lib/settings.js" ]; then
+        for p in "${HOME}/.claude/plugins/cache/optra-prism/prism"/*/; do
+          if [ -f "$p/lib/settings.js" ]; then PLUGIN_ROOT="${p%/}"; break; fi
+        done
+      fi
       if [ -f "$PLUGIN_ROOT/lib/settings.js" ]; then
-        node "${PLUGIN_ROOT}/lib/settings.js" sync 2>/dev/null && \
-          info "OTEL telemetry configured in ~/.claude/settings.json" || \
+        CURRENT_SCOPE=$(node "$PLUGIN_ROOT/lib/settings.js" detect 2>/dev/null || echo "none")
+        TARGET_SCOPE="user"
+        case "$CURRENT_SCOPE" in
+          project|both)
+            info "Existing project-scope setup detected — keeping it (run /prism:setup --user to switch)."
+            TARGET_SCOPE="project"
+            ;;
+        esac
+        node "$PLUGIN_ROOT/lib/settings.js" sync --scope "$TARGET_SCOPE" 2>/dev/null && \
+          info "OTEL telemetry configured (scope=${TARGET_SCOPE})" || \
           info "WARNING: Could not write OTEL settings — restart Claude Code after starting"
       fi
 
       echo ""
       echo "Start Claude Code — the plugin activates automatically."
-      echo "Gateway routing is disabled by default. Run /prism:status to toggle it."
+      echo "Gateway routing is enabled by default. Run /prism:status to toggle it."
       ;;
     *)
       echo ""

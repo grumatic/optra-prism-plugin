@@ -22,6 +22,9 @@ Uninstall the Prism plugin and clean up all configuration.
        if [ -f "$p/lib/settings.js" ]; then PLUGIN_ROOT="${p%/}"; break; fi
      done
    fi
+   if [ -z "$PLUGIN_ROOT" ] && [ -f "$HOME/.prism/claude-code-plugin/lib/settings.js" ]; then
+     PLUGIN_ROOT="$HOME/.prism/claude-code-plugin"
+   fi
    if [ -n "$PLUGIN_ROOT" ] && [ -f "$PLUGIN_ROOT/lib/settings.js" ]; then
      node "$PLUGIN_ROOT/lib/settings.js" remove --scope both --project-dir "$CLAUDE_PROJECT_DIR"
    else
@@ -65,3 +68,5 @@ Uninstall the Prism plugin and clean up all configuration.
    ```
 
 7. Confirm: "Prism plugin uninstalled (cleared from user + project-local scopes, all caches purged). **Restart Claude Code** to complete removal."
+
+   If project-scope was ever used in other repos, add: "Note: project-scope OTEL vars in *other* repos' `.claude/settings.local.json` were not touched — re-run `/prism:uninstall` from inside each repo (or delete the OTEL_* keys manually)."
