@@ -10,11 +10,11 @@ Uninstall the Prism plugin and clean up all configuration.
 
 **Steps:**
 
-1. Confirm with the user: "This will remove the Prism plugin, API key, and OTEL telemetry settings (from both user and project scopes). Continue? (yes/no)"
+1. Confirm with the user: "This will remove the Prism plugin, API key, and OTEL telemetry settings (from the detected install scope). Continue? (yes/no)"
 
 2. Only proceed if the user confirms. Then run cleanup using the Bash tool:
 
-3. Locate the plugin root and remove OTEL env vars from **both** scopes (user + project-local):
+3. Locate the plugin root, detect the active install scope, and remove OTEL env vars from **that scope only**:
    ```bash
    PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-}"
    if [ -z "$PLUGIN_ROOT" ] || [ ! -f "$PLUGIN_ROOT/lib/settings.js" ]; then
@@ -26,7 +26,18 @@ Uninstall the Prism plugin and clean up all configuration.
      PLUGIN_ROOT="$HOME/.prism/claude-code-plugin"
    fi
    if [ -n "$PLUGIN_ROOT" ] && [ -f "$PLUGIN_ROOT/lib/settings.js" ]; then
-     node "$PLUGIN_ROOT/lib/settings.js" remove --scope both --project-dir "$CLAUDE_PROJECT_DIR"
+     INSTALL_SCOPE=$(node "$PLUGIN_ROOT/lib/settings.js" install-scope --project-dir "$CLAUDE_PROJECT_DIR" 2>/dev/null || echo 'unknown')
+     case "$INSTALL_SCOPE" in
+       user)
+         node "$PLUGIN_ROOT/lib/settings.js" remove --scope user
+         ;;
+       project|local)
+         node "$PLUGIN_ROOT/lib/settings.js" remove --scope project --project-dir "$CLAUDE_PROJECT_DIR"
+         ;;
+       *)
+         node "$PLUGIN_ROOT/lib/settings.js" remove --scope both --project-dir "$CLAUDE_PROJECT_DIR"
+         ;;
+     esac
    else
      echo "Plugin root not found — manually remove OTEL keys from ~/.claude/settings.json and <project>/.claude/settings.local.json"
    fi
@@ -67,6 +78,7 @@ Uninstall the Prism plugin and clean up all configuration.
    fi
    ```
 
-7. Confirm: "Prism plugin uninstalled (cleared from user + project-local scopes, all caches purged). **Restart Claude Code** to complete removal."
+7. Confirm: "Prism plugin uninstalled (OTEL settings removed from detected scope, all caches purged). **Restart Claude Code** to complete removal."
 
-   If project-scope was ever used in other repos, add: "Note: project-scope OTEL vars in *other* repos' `.claude/settings.local.json` were not touched — re-run `/prism:uninstall` from inside each repo (or delete the OTEL_* keys manually)."
+   If install scope was `project` or `local`, add: "Note: OTEL vars in other repos' `.claude/settings.local.json` were not touched — re-run `/prism:uninstall` from inside each repo if needed."
+   If install scope was `unknown` (legacy), add: "Note: OTEL vars were removed from both user and project-local scopes as a safety fallback."

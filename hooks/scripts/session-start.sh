@@ -150,7 +150,12 @@ case "$ACTIVE_SCOPE" in
     TARGET_SCOPE="project"
     ;;
   *)
-    TARGET_SCOPE="user"
+    INSTALL_SCOPE=$(node "${PLUGIN_ROOT}/lib/settings.js" install-scope ${PROJECT_DIR_ARG} 2>/dev/null || echo 'unknown')
+    case "$INSTALL_SCOPE" in
+      user)           TARGET_SCOPE="user" ;;
+      project|local)  TARGET_SCOPE="project" ;;
+      *)              TARGET_SCOPE="user" ;;
+    esac
     ;;
 esac
 
