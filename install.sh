@@ -133,13 +133,22 @@ EOF
       fi
       if [ -f "$PLUGIN_ROOT/lib/settings.js" ]; then
         CURRENT_SCOPE=$(node "$PLUGIN_ROOT/lib/settings.js" detect 2>/dev/null || echo "none")
-        TARGET_SCOPE="user"
-        case "$CURRENT_SCOPE" in
-          project|both)
-            info "Existing project-scope setup detected — keeping it (run /prism:setup --user to switch)."
-            TARGET_SCOPE="project"
-            ;;
-        esac
+        if [ "$CURRENT_SCOPE" = "none" ]; then
+          INSTALL_SCOPE=$(node "$PLUGIN_ROOT/lib/settings.js" install-scope 2>/dev/null || echo "unknown")
+          case "$INSTALL_SCOPE" in
+            user)           TARGET_SCOPE="user" ;;
+            project|local)  TARGET_SCOPE="project" ;;
+            *)              TARGET_SCOPE="user" ;;
+          esac
+        else
+          TARGET_SCOPE="$CURRENT_SCOPE"
+          case "$CURRENT_SCOPE" in
+            project|both)
+              info "Existing project-scope setup detected — keeping it (run /prism:setup --user to switch)."
+              TARGET_SCOPE="project"
+              ;;
+          esac
+        fi
         node "$PLUGIN_ROOT/lib/settings.js" sync --scope "$TARGET_SCOPE" 2>/dev/null && \
           info "OTEL telemetry configured (scope=${TARGET_SCOPE})" || \
           info "WARNING: Could not write OTEL settings — restart Claude Code after starting"

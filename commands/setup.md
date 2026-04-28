@@ -67,7 +67,7 @@ No API key? Get one at: https://dashboard.prism.optra-ai.com/setup
    | *(no flag)* | `user` | Target = `user`. |
    | *(no flag)* | `project` | Target = `project`. |
    | *(no flag)* | `both` | **Prompt:** "Prism is active in both user scope and this project. Pick one to keep: [user/project]" — remove the other. |
-   | *(no flag)* | `none` | Target = `user` (default). |
+   | *(no flag)* | `none` | Detect install scope via `enabledPlugins` lookup (user → project → local). user install → target `user`. project/local install → target `project` (`settings.local.json`). If install scope unknown → target `user` (legacy compat). |
 
 7. **Apply the decision:**
    ```bash
