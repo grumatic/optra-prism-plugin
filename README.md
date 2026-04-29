@@ -52,11 +52,10 @@ Three hooks run automatically:
 
 | Command | Description |
 |---------|-------------|
-| `/prism:setup` | Configure API key, enable telemetry + gateway |
+| `/prism:setup` | Configure API key, enable telemetry |
 | `/prism:status` | Connection health, gateway toggle, session info |
-| `/prism:cost` | Session cost, token usage |
-| `/prism:score` | Weakest area, coaching tips, optimization advice |
-| `/prism:report` | Full review — profile, habits, worst prompts, cost optimization |
+| `/prism:report` | Weekly review — this week vs last week, PRISM grade, habits, worst prompts |
+| `/prism:help` | List all available commands |
 | `/prism:uninstall` | Remove plugin config and OTEL settings |
 
 ## Configuration

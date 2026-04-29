@@ -5,14 +5,14 @@
     "email": "support@optra-ai.com"
   },
   "metadata": {
-    "description": "PRISM intelligence plugins by Optra"
+    "description": "AI vibe coding intelligence plugins by Optra"
   },
   "plugins": [
     {
       "name": "prism",
       "source": "./",
-      "description": "PRISM intelligence — prompt review, cost tracking, and real-time optimization for Claude Code",
-      "version": "0.4.3"
+      "description": "AI vibe coding intelligence for Claude Code — realtime coaching, PRISM scoring, insights, and gateway routing. Pairs with dashboard.prism.optra-ai.com",
+      "version": "0.4.5"
     }
   ]
 }

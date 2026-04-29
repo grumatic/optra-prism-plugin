@@ -10,11 +10,15 @@ Uninstall the Prism plugin and clean up all configuration.
 
 **Steps:**
 
-1. Confirm with the user: "This will remove the Prism plugin, API key, and OTEL telemetry settings (from the detected install scope). Continue? (yes/no)"
+1. Confirm with the user: "This will remove the Prism plugin, API key, and OTEL telemetry settings from **all scopes** (user, project, and project-local) in this repo. Continue? (yes/no)"
 
-2. Only proceed if the user confirms. Then run cleanup using the Bash tool:
+2. Only proceed if the user confirms. Then run cleanup using the Bash tool.
 
-3. Locate the plugin root, detect the active install scope, and remove OTEL env vars from **that scope only**:
+3. Locate the plugin root and remove OTEL env vars from **all three settings files** for the current project:
+   - `~/.claude/settings.json` (user scope)
+   - `$CLAUDE_PROJECT_DIR/.claude/settings.json` (project-shared, committed)
+   - `$CLAUDE_PROJECT_DIR/.claude/settings.local.json` (project-local, gitignored)
+
    ```bash
    PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-}"
    if [ -z "$PLUGIN_ROOT" ] || [ ! -f "$PLUGIN_ROOT/lib/settings.js" ]; then
@@ -26,24 +30,16 @@ Uninstall the Prism plugin and clean up all configuration.
      PLUGIN_ROOT="$HOME/.prism/claude-code-plugin"
    fi
    if [ -n "$PLUGIN_ROOT" ] && [ -f "$PLUGIN_ROOT/lib/settings.js" ]; then
-     INSTALL_SCOPE=$(node "$PLUGIN_ROOT/lib/settings.js" install-scope --project-dir "$CLAUDE_PROJECT_DIR" 2>/dev/null || echo 'unknown')
-     case "$INSTALL_SCOPE" in
-       user)
-         node "$PLUGIN_ROOT/lib/settings.js" remove --scope user
-         ;;
-       project|local)
-         node "$PLUGIN_ROOT/lib/settings.js" remove --scope project --project-dir "$CLAUDE_PROJECT_DIR"
-         ;;
-       *)
-         node "$PLUGIN_ROOT/lib/settings.js" remove --scope both --project-dir "$CLAUDE_PROJECT_DIR"
-         ;;
-     esac
+     node "$PLUGIN_ROOT/lib/settings.js" remove --scope all --project-dir "$CLAUDE_PROJECT_DIR"
    else
-     echo "Plugin root not found — manually remove OTEL keys from ~/.claude/settings.json and <project>/.claude/settings.local.json"
+     echo "Plugin root not found — manually remove OTEL keys from:"
+     echo "  ~/.claude/settings.json"
+     echo "  $CLAUDE_PROJECT_DIR/.claude/settings.json"
+     echo "  $CLAUDE_PROJECT_DIR/.claude/settings.local.json"
    fi
    ```
 
-4. Remove the Prism user config, plugin data dir, plugin cache (all versions), and any cloned marketplace dir. Globs catch every cached version and any owner-prefixed marketplace clone:
+4. Remove the Prism user config, plugin data dir, plugin cache (all versions), and any cloned marketplace dir:
    ```bash
    rm -rf ~/.prism
    rm -rf "${CLAUDE_PLUGIN_DATA:-$HOME/.claude/plugins/data/prism-optra-prism}"
@@ -51,7 +47,7 @@ Uninstall the Prism plugin and clean up all configuration.
    rm -rf ~/.claude/plugins/marketplaces/optra-prism ~/.claude/plugins/marketplaces/*/optra-prism-plugin 2>/dev/null || true
    ```
 
-5. Unregister the marketplace (this *should* update `installed_plugins.json` and `known_marketplaces.json`):
+5. Unregister the marketplace:
    ```bash
    claude plugin marketplace remove grumatic/optra-prism-plugin 2>/dev/null || true
    ```
@@ -78,7 +74,9 @@ Uninstall the Prism plugin and clean up all configuration.
    fi
    ```
 
-7. Confirm: "Prism plugin uninstalled (OTEL settings removed from detected scope, all caches purged). **Restart Claude Code** to complete removal."
+7. Confirm: "Prism plugin uninstalled. OTEL env vars cleaned from user, project, and project-local scopes; all caches purged; marketplace unregistered. **Restart Claude Code** to complete removal."
 
-   If install scope was `project` or `local`, add: "Note: OTEL vars in other repos' `.claude/settings.local.json` were not touched — re-run `/prism:uninstall` from inside each repo if needed."
-   If install scope was `unknown` (legacy), add: "Note: OTEL vars were removed from both user and project-local scopes as a safety fallback."
+   Add: "Note: OTEL vars in *other* repos' `.claude/settings.local.json` or `.claude/settings.json` were not touched — re-run `/prism:uninstall` from inside each repo if needed."
+
+8. End with this call-to-action (verbatim):
+   > 👋 Your data is still on the dashboard at https://dashboard.prism.optra-ai.com/ — sign in any time to review past PRISM scores, insights, and coaching history. Reinstall with `/plugin install prism` whenever you want realtime coaching back.

@@ -5,6 +5,31 @@ All notable changes to the Prism plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.5] - 2026-04-29
+
+### Changed
+- **`/prism:report` rewritten** — single weekly-review command that compares **this week vs last week** using **day-aligned** windows (Mon→same-day-of-week-as-now, equal elapsed days) so totals don't bias against the in-progress week.
+- **PRISM scoring is spec-canonical** (`prism-scoring-spec.md` §7): `0.50·Skill_10 + 0.30·Efficiency_10 + 0.20·Speed_10` computed from `skillSnapshot` when the engine has populated Layer 2/3. Falls back to `prismProfile.compositeScore` (rubric proxy) and labels it explicitly when Layer 3 isn't ready.
+- **One-metric headline** — drop the PromptIQ rubric (CL/ID/TE/AC) bars from user-facing output. The rubric is still used silently to pick a coaching tip.
+- **Grade rendering matches the dashboard** — 10-tier ladder from `apps/dashboard/src/lib/prism-colors.ts` `GRADE_BANDS` (B = 7.0–7.9 baseline), `[from, to)` half-open intervals.
+- **Token usage chart** — new section aggregates Input / Output / CacheR / CacheW from `/v1/telemetry/logs` (`event_name === 'api_request'`) with per-row Δ vs last week and tokens/turn signal.
+- **Gateway routing default flipped to OFF** — Claude Code calls Anthropic directly out of the box. Telemetry and PRISM scoring still work. Run `/prism:status` to enable budget enforcement, guardrails, and usage logging.
+- **Marketplace description rewritten** — "AI vibe coding intelligence for Claude Code — realtime coaching, PRISM scoring, insights, and gateway routing. Pairs with dashboard.prism.optra-ai.com". Keywords updated to reflect the broader feature set (vibe-coding, realtime-coach, prism-score, insights).
+- **`/prism:uninstall` now sweeps all three scopes** — user (`~/.claude/settings.json`), project-shared (`<project>/.claude/settings.json`), and project-local (`<project>/.claude/settings.local.json`). New `--scope all` value in `lib/settings.js` (`both` kept as legacy alias).
+- **Empty-section behavior** — `/prism:report` skips Coaching and Cost optimization sections entirely when there's no data, rather than rendering "No data this period" placeholders.
+- All commands end with a CTA pointing users at the dashboard.
+
+### Removed
+- `/prism:score` command (merged into `/prism:report`).
+- `/prism:cost` command (replaced by the Token usage section in `/prism:report`).
+- Unused engine helpers `fetchReport()` and `generateReport()` from `lib/engine.js` — only `quickReport()` and `fetchTelemetryLogs()` are exported now.
+- Generic fallback coaching block ("cut filler / be concrete / one ask per turn") that surfaced when `prismProfile.coaching[]` was empty.
+- `firstTryRate` and `frictionRate` rows from `/prism:report` — no longer tracked here.
+
+### Fixed
+- `lib/engine.js` — `quickReport({ from, to })` now accepts ISO date-range params and forwards them to the engine via the `post()` helper's new `query` argument. Required for the day-aligned weekly comparison.
+- `commands/uninstall.md` reinstall hint corrected from `/plugin install prism@optra-prism` to `/plugin install prism`.
+
 ## [0.4.3] - 2026-04-23
 
 ### Fixed

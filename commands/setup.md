@@ -29,7 +29,7 @@ No API key? Get one at: https://dashboard.prism.optra-ai.com/setup
    mkdir -p ~/.prism && chmod 700 ~/.prism
    rm -f ~/.prism/config-cache.json
    ```
-   Write JSON to `~/.prism/config.json` with: `apiKey`, `prismThreshold` (preserved or 4), `enableGateway: true`. Then `chmod 600 ~/.prism/config.json`.
+   Write JSON to `~/.prism/config.json` with: `apiKey`, `prismThreshold` (preserved or 4), `enableGateway: false`. Then `chmod 600 ~/.prism/config.json`.
 
 4. Fetch the latest service URLs and guarantee `~/.prism/config-cache.json` exists (writes production fallback URLs if the endpoint is unreachable):
    ```bash
@@ -79,8 +79,11 @@ No API key? Get one at: https://dashboard.prism.optra-ai.com/setup
    ```
    Show the resolved ingest URL so the user can confirm it's correct.
 
-8. Gateway routing is ON by default. Inform the user:
-   > Gateway routing **enabled**. Budget enforcement, guardrails, and usage logging active.
-   > To toggle routing mode: `/prism:status`
+8. Gateway routing is OFF by default. Inform the user:
+   > Gateway routing **disabled** — Claude Code calls Anthropic directly. Telemetry and PRISM scoring still work.
+   > To enable budget enforcement, guardrails, and usage logging: `/prism:status` then ask to toggle gateway routing.
 
 9. Confirm what was done and remind: "Scope: **<target>** (`<file-path>`). **Restart Claude Code to activate telemetry.**"
+
+10. End with this call-to-action (verbatim):
+    > 🚀 **Next:** open https://dashboard.prism.optra-ai.com/ for realtime coaching, PRISM scores, and insights.

@@ -20,8 +20,8 @@ Show the Prism plugin configuration, connection health, and allow gateway toggli
    If `detect` printed a WARNING to stderr (e.g. OTEL vars found in the shared `.claude/settings.json`), surface it here prominently — that warning means a gck_* key may have been committed to git.
 
 2. **Gateway routing:** Read `enableGateway` from config. Show current mode:
-   - **Gateway (default)** — budget limits, guardrails, usage logging
-   - **Direct** — bypass gateway, call Anthropic directly
+   - **Direct (default)** — bypass gateway, call Anthropic directly
+   - **Gateway** — budget limits, guardrails, usage logging
    Show the gateway URL from `~/.prism/config-cache.json` field `gateway_url` (NOT from `$ANTHROPIC_BASE_URL` env var — it may be stale). If cache is missing, show "not resolved".
    Note: Telemetry and PRISM scoring work in both modes.
 
@@ -39,4 +39,6 @@ Show the Prism plugin configuration, connection health, and allow gateway toggli
 
 6. **Session:** Read `${CLAUDE_PLUGIN_DATA}/session-state.json` for turn count and duration.
 
-End with: "Run `/prism:help` for all commands."
+End with two lines:
+1. "Run `/prism:help` for all commands."
+2. "🚀 **Next:** open https://dashboard.prism.optra-ai.com/ for realtime coaching, PRISM scores, and insights."

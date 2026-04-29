@@ -1,7 +1,7 @@
 {
   "name": "prism",
-  "description": "PRISM intelligence for Claude Code — prompt review, cost tracking, and real-time optimization",
-  "version": "0.4.4",
+  "description": "AI vibe coding intelligence for Claude Code — realtime coaching, PRISM scoring, insights, and gateway routing. Pairs with dashboard.prism.optra-ai.com",
+  "version": "0.4.5",
   "author": {
     "name": "Optra",
     "url": "https://prism.optra-ai.com"
@@ -10,12 +10,14 @@
   "repository": "https://github.com/grumatic/optra-prism-plugin",
   "license": "MIT",
   "keywords": [
+    "vibe-coding",
     "intelligence",
-    "cost-optimization",
-    "prompt-quality",
-    "token-tracking",
+    "realtime-coach",
+    "prism-score",
+    "insights",
     "telemetry",
-    "budgets"
+    "gateway",
+    "cost-optimization"
   ],
   "userConfig": {
     "apiKey": {
@@ -27,7 +29,7 @@
     "enableGateway": {
       "title": "Enable Gateway",
       "type": "boolean",
-      "description": "Route Claude Code API calls through Optra gateway for intelligence (default: true). Use /prism:status to toggle.",
+      "description": "Route Claude Code API calls through Optra gateway for budget limits, guardrails, and usage logging (default: false). Use /prism:status to toggle.",
       "sensitive": false
     },
     "prismThreshold": {

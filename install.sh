@@ -116,7 +116,7 @@ if [ -n "$API_KEY" ]; then
 {
   "apiKey": "${API_KEY}",
   "prismThreshold": 4,
-  "enableGateway": true
+  "enableGateway": false
 }
 EOF
       chmod 600 "$CONFIG_FILE"
@@ -156,7 +156,7 @@ EOF
 
       echo ""
       echo "Start Claude Code — the plugin activates automatically."
-      echo "Gateway routing is enabled by default. Run /prism:status to toggle it."
+      echo "Gateway routing is disabled by default. Run /prism:status to enable budget limits, guardrails, and usage logging."
       ;;
     *)
       echo ""

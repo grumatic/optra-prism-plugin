@@ -16,12 +16,8 @@ Setup & Config
   /prism:status            Connection health, gateway toggle, session info
   /prism:uninstall         Remove plugin, clear all settings
 
-During a Session
-  /prism:cost              Session cost, token usage, compact tip
-  /prism:score             Weakest area, coaching tips, optimization advice
-
-After a Session
-  /prism:report            Full review — profile, habits, worst prompts, cost optimization
+Review
+  /prism:report            Weekly review — this week vs last week, PRISM grade, habits, worst prompts
 
 Automatic (hooks — no command needed)
   Prompt advisor   Reviews prompts in realtime with rewrite advice when helpful
@@ -30,10 +26,10 @@ Automatic (hooks — no command needed)
 
 Getting started:
   1. /prism:setup gck_YOUR_KEY    Set up your API key
-  2. Start coding                 Telemetry and scoring activate automatically
-  3. /prism:score                 See where to improve
-  4. /prism:report                Review your session
+  2. Start coding                 Telemetry activates automatically
+  3. /prism:report                Compare this week vs last week
 
+Dashboard:         https://dashboard.prism.optra-ai.com/
 Get your API key:  https://dashboard.prism.optra-ai.com/setup
 Documentation:     https://prism.optra-ai.com/docs
 ```
