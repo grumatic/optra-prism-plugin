@@ -5,6 +5,11 @@ All notable changes to the Prism plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.6] - 2026-05-01
+
+### Fixed
+- **Install-scope detection on first session** — `lib/settings.js` `detectInstallScope()` now reads `~/.claude/plugins/installed_plugins.json` instead of `enabledPlugins` in settings files. Claude Code writes `enabledPlugins` *after* the session-start hook fires, so the previous lookup always returned `null` on the very first session and OTEL env vars were written to user scope even for project/local installs. The new logic returns `user` when any entry has `scope=user`, otherwise matches the current project path.
+
 ## [0.4.5] - 2026-04-29
 
 ### Changed
