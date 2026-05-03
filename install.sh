@@ -132,26 +132,33 @@ EOF
         done
       fi
       if [ -f "$PLUGIN_ROOT/lib/settings.js" ]; then
-        CURRENT_SCOPE=$(node "$PLUGIN_ROOT/lib/settings.js" detect 2>/dev/null || echo "none")
-        if [ "$CURRENT_SCOPE" = "none" ]; then
-          INSTALL_SCOPE=$(node "$PLUGIN_ROOT/lib/settings.js" install-scope 2>/dev/null || echo "unknown")
-          case "$INSTALL_SCOPE" in
-            user)           TARGET_SCOPE="user" ;;
-            project|local)  TARGET_SCOPE="project" ;;
-            *)              TARGET_SCOPE="user" ;;
-          esac
+        # resolve-scope output: action:targetScope:removeScopes (colon-delimited)
+        RESOLVE_RAW=$(node "$PLUGIN_ROOT/lib/settings.js" resolve-scope 2>/dev/null) || true
+        if [ -z "$RESOLVE_RAW" ]; then
+          info "WARNING: scope detection failed — OTEL will be configured on next Claude Code session start."
         else
-          TARGET_SCOPE="$CURRENT_SCOPE"
-          case "$CURRENT_SCOPE" in
-            project|both)
-              info "Existing project-scope setup detected — keeping it (run /prism:setup --user to switch)."
-              TARGET_SCOPE="project"
+          RESOLVE_ACTION="${RESOLVE_RAW%%:*}"
+          RESOLVE_REST="${RESOLVE_RAW#*:}"
+          TARGET_SCOPE="${RESOLVE_REST%%:*}"
+          REMOVE_SCOPES_CSV="${RESOLVE_REST#*:}"
+
+          case "$RESOLVE_ACTION" in
+            sync|repair)
+              if [ "$RESOLVE_ACTION" = "repair" ]; then
+                IFS=',' read -ra RSCOPES <<< "$REMOVE_SCOPES_CSV"
+                for RSCOPE in "${RSCOPES[@]}"; do
+                  [ -n "$RSCOPE" ] && node "$PLUGIN_ROOT/lib/settings.js" remove --scope "$RSCOPE" 2>/dev/null || true
+                done
+              fi
+              node "$PLUGIN_ROOT/lib/settings.js" sync --scope "$TARGET_SCOPE" 2>/dev/null && \
+                info "OTEL telemetry configured (scope=${TARGET_SCOPE})" || \
+                info "WARNING: Could not write OTEL settings — will be configured on next Claude Code session"
+              ;;
+            skip)
+              info "OTEL scope could not be determined — telemetry will be configured on next Claude Code session start."
               ;;
           esac
         fi
-        node "$PLUGIN_ROOT/lib/settings.js" sync --scope "$TARGET_SCOPE" 2>/dev/null && \
-          info "OTEL telemetry configured (scope=${TARGET_SCOPE})" || \
-          info "WARNING: Could not write OTEL settings — restart Claude Code after starting"
       fi
 
       echo ""

@@ -127,46 +127,53 @@ ANTHROPIC_BASE_URL=$(echo "$RESOLVED_URLS" | node -e "
 # Default to production if config endpoint and cache are both unavailable.
 INGEST_URL="${PRISM_INGEST_URL:-${INGEST_URL:-https://ingest.prism.optra-ai.com}}"
 
-# ─── Detect active scope and check/sync OTEL settings ───
+# ─── Resolve OTEL scope and sync ───
 #
 # The plugin stores OTEL vars in exactly one scope (user or project-local).
-# Detect which scope owns them. If neither does, fall back to user scope on
-# first run so the user doesn't have to re-run /prism:setup after install.
+# resolveOtelScope() determines the correct scope from install metadata and
+# existing OTEL state. It never defaults to user scope on unknown — it refuses
+# instead, and auto-repairs misplaced OTEL vars when the install scope is known.
 
 PROJECT_DIR_ARG=""
 if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
   PROJECT_DIR_ARG="--project-dir ${CLAUDE_PROJECT_DIR}"
 fi
 
-ACTIVE_SCOPE=$(node "${PLUGIN_ROOT}/lib/settings.js" detect ${PROJECT_DIR_ARG} 2>/dev/null || echo 'none')
+# resolve-scope output: action:targetScope:removeScopes (colon-delimited)
+RESOLVE_RAW=$(node "${PLUGIN_ROOT}/lib/settings.js" resolve-scope ${PROJECT_DIR_ARG} 2>/dev/null) || true
 
-case "$ACTIVE_SCOPE" in
-  user|project)
-    TARGET_SCOPE="$ACTIVE_SCOPE"
-    ;;
-  both)
-    echo "[Prism] WARNING: OTEL vars present in both user and project scopes. Run /prism:setup to pick one." >&2
-    # Prefer project (more specific) when both are set — Claude Code merge order agrees.
-    TARGET_SCOPE="project"
-    ;;
-  *)
-    INSTALL_SCOPE=$(node "${PLUGIN_ROOT}/lib/settings.js" install-scope ${PROJECT_DIR_ARG} 2>/dev/null || echo 'unknown')
-    case "$INSTALL_SCOPE" in
-      user)           TARGET_SCOPE="user" ;;
-      project|local)  TARGET_SCOPE="project" ;;
-      *)              TARGET_SCOPE="user" ;;
-    esac
-    ;;
-esac
+if [ -z "$RESOLVE_RAW" ]; then
+  echo "[Prism] WARNING: scope detection failed — OTEL not configured. Restart session." >&2
+else
+  RESOLVE_ACTION="${RESOLVE_RAW%%:*}"
+  RESOLVE_REST="${RESOLVE_RAW#*:}"
+  TARGET_SCOPE="${RESOLVE_REST%%:*}"
+  REMOVE_SCOPES_CSV="${RESOLVE_REST#*:}"
 
-OTEL_STATUS=$(node "${PLUGIN_ROOT}/lib/settings.js" check --scope "$TARGET_SCOPE" ${PROJECT_DIR_ARG} 2>/dev/null) || true
-
-if [ "$OTEL_STATUS" != "ok" ]; then
-  if node "${PLUGIN_ROOT}/lib/settings.js" sync --scope "$TARGET_SCOPE" ${PROJECT_DIR_ARG} 2>/dev/null; then
-    echo "[Prism] OTEL settings updated (scope=${TARGET_SCOPE}) — restart Claude Code to apply." >&2
-  else
-    echo "[Prism] WARNING: Could not write OTEL settings (scope=${TARGET_SCOPE})" >&2
-  fi
+  case "$RESOLVE_ACTION" in
+    repair)
+      IFS=',' read -ra RSCOPES <<< "$REMOVE_SCOPES_CSV"
+      for RSCOPE in "${RSCOPES[@]}"; do
+        [ -n "$RSCOPE" ] && node "${PLUGIN_ROOT}/lib/settings.js" remove --scope "$RSCOPE" ${PROJECT_DIR_ARG} 2>/dev/null || true
+      done
+      if node "${PLUGIN_ROOT}/lib/settings.js" sync --scope "$TARGET_SCOPE" ${PROJECT_DIR_ARG} 2>/dev/null; then
+        echo "[Prism] OTEL settings repaired (moved to scope=${TARGET_SCOPE}) — restart Claude Code to apply." >&2
+      fi
+      ;;
+    sync)
+      OTEL_STATUS=$(node "${PLUGIN_ROOT}/lib/settings.js" check --scope "$TARGET_SCOPE" ${PROJECT_DIR_ARG} 2>/dev/null) || true
+      if [ "$OTEL_STATUS" != "ok" ]; then
+        if node "${PLUGIN_ROOT}/lib/settings.js" sync --scope "$TARGET_SCOPE" ${PROJECT_DIR_ARG} 2>/dev/null; then
+          echo "[Prism] OTEL settings updated (scope=${TARGET_SCOPE}) — restart Claude Code to apply." >&2
+        else
+          echo "[Prism] WARNING: Could not write OTEL settings (scope=${TARGET_SCOPE})" >&2
+        fi
+      fi
+      ;;
+    skip)
+      echo "[Prism] WARNING: Could not determine OTEL scope — telemetry not configured. Restart session." >&2
+      ;;
+  esac
 fi
 
 # ─── Write env vars ───
