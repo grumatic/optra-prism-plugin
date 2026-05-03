@@ -48,26 +48,27 @@ No API key? Get one at: https://dashboard.prism.optra-ai.com/setup
    "
    ```
 
-5. **Detect the current scope** and decide where to write OTEL vars:
+5. **Resolve target scope** — determine where OTEL vars should live:
+
+   If the user provided `--user` or `--project`, use that as the explicit target scope. Otherwise, auto-detect:
    ```bash
-   CURRENT_SCOPE=$(node "$PLUGIN_DIR/lib/settings.js" detect --project-dir "$CLAUDE_PROJECT_DIR")
+   RESOLVE_RAW=$(node "$PLUGIN_DIR/lib/settings.js" resolve-scope --project-dir "$CLAUDE_PROJECT_DIR")
+   # Output format: action:targetScope:removeScopes (colon-delimited)
+   RESOLVE_ACTION="${RESOLVE_RAW%%:*}"
+   RESOLVE_REST="${RESOLVE_RAW#*:}"
+   TARGET_SCOPE="${RESOLVE_REST%%:*}"
+   REMOVE_SCOPES="${RESOLVE_REST#*:}"
    ```
-   - `user`, `project`, `both`, or `none`.
 
-6. **Resolve target scope** based on user args and `CURRENT_SCOPE`:
+   If user provided an explicit flag that differs from `TARGET_SCOPE`, prompt for migration confirmation:
+   - `--user` when current is `project`: **Prompt:** "Prism is currently active only in this project. Switching to user scope will enable telemetry in *every* project. Continue? [y/N]"
+   - `--project` when current is `user`: **Prompt:** "Prism is currently active globally. Switching to project scope will stop telemetry in other projects. Continue? [y/N]"
 
-   | User flag | `CURRENT_SCOPE` | Behavior |
-   |---|---|---|
-   | `--user` | `user` or `none` | Target = `user`. No migration prompt. |
-   | `--user` | `project` | **Prompt:** "Prism is currently active only in this project. Switching to user scope will enable telemetry in *every* project you open with Claude Code. Continue? [y/N]" — on yes: remove project, then sync user. |
-   | `--user` | `both` | Same prompt as above (we'll clean up the project side after confirm). |
-   | `--project` | `project` or `none` | Target = `project`. No migration prompt. |
-   | `--project` | `user` | **Prompt:** "Prism is currently active globally (user scope). Switching to project scope will stop telemetry in all your other projects. Continue? [y/N]" — on yes: remove user, then sync project. |
-   | `--project` | `both` | Same prompt as above. |
-   | *(no flag)* | `user` | Target = `user`. |
-   | *(no flag)* | `project` | Target = `project`. |
-   | *(no flag)* | `both` | **Prompt:** "Prism is active in both user scope and this project. Pick one to keep: [user/project]" — remove the other. |
-   | *(no flag)* | `none` | Detect install scope via `installed_plugins.json` (user entry → target `user`; projectPath match → use that entry's scope). Fallback → target `user`. |
+   If `RESOLVE_ACTION` is `skip` (scope unknown, no existing OTEL): Ask the user — "Install for this project only (`--project`) or all projects (`--user`)?" Use the answer as `TARGET_SCOPE`.
+
+   If `RESOLVE_ACTION` is `repair`: the resolver detected misplaced OTEL. Proceed to step 7 with `REMOVE_SCOPES` to clean up before syncing.
+
+6. (Merged into step 5)
 
 7. **Apply the decision:**
    ```bash
