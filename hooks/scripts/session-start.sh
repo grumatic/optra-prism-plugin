@@ -167,11 +167,13 @@ else
           echo "[Prism] OTEL settings updated (scope=${TARGET_SCOPE}) — restart Claude Code to apply." >&2
         else
           echo "[Prism] WARNING: Could not write OTEL settings (scope=${TARGET_SCOPE})" >&2
+          echo "[Prism] Run /prism:doctor for diagnostics" >&2
         fi
       fi
       ;;
     skip)
       echo "[Prism] WARNING: Could not determine OTEL scope — telemetry not configured. Restart session." >&2
+      echo "[Prism] Run /prism:doctor for diagnostics" >&2
       ;;
   esac
 fi
