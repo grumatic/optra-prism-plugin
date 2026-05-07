@@ -1,6 +1,6 @@
 {
   "name": "@optra-ai/prism-plugin",
-  "version": "0.4.6",
+  "version": "0.4.7",
   "description": "AI vibe coding intelligence for Claude Code — realtime coaching, PRISM scoring, insights, and gateway routing. Pairs with dashboard.prism.optra-ai.com",
   "license": "MIT",
   "author": {

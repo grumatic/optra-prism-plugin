@@ -79,11 +79,22 @@ No API key? Get one at: https://dashboard.prism.optra-ai.com/setup
    ```
    Show the resolved ingest URL so the user can confirm it's correct.
 
-8. Gateway routing is OFF by default. Inform the user:
+8. **Notify the dashboard** that setup is complete. Best-effort — never block on the result; the dashboard's Verify modal will fall back to the first-prompt signal if this ping doesn't land. Auth-resolved `developer_id` / `org_id` are written server-side; we only send a minimal body.
+
+   ```bash
+   node -e "
+     const { notifySetupComplete } = require('$PLUGIN_DIR/lib/notify');
+     notifySetupComplete('$API_KEY').then(ok => {
+       if (!ok) console.log('(setup-complete ping skipped — dashboard will fall back to first-prompt detection)');
+     });
+   "
+   ```
+
+9. Gateway routing is OFF by default. Inform the user:
    > Gateway routing **disabled** — Claude Code calls Anthropic directly. Telemetry and PRISM scoring still work.
    > To enable budget enforcement, guardrails, and usage logging: `/prism:status` then ask to toggle gateway routing.
 
-9. Confirm what was done and remind: "Scope: **<target>** (`<file-path>`). **Restart Claude Code to activate telemetry.**"
+10. Confirm what was done and remind: "Scope: **<target>** (`<file-path>`). **Restart Claude Code to activate telemetry.**"
 
-10. End with this call-to-action (verbatim):
+11. End with this call-to-action (verbatim):
     > 🚀 **Next:** open https://dashboard.prism.optra-ai.com/ for realtime coaching, PRISM scores, and insights.

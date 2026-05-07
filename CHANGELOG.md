@@ -5,6 +5,11 @@ All notable changes to the Prism plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.7] - 2026-05-07
+
+### Added
+- **Setup-completion ping** — `/prism:setup` now POSTs `/v1/setup-complete` to ingest at the tail of the command. Lets the dashboard's activation page transition from "Waiting for /prism:setup…" to "Key configured. Quit and restart Claude Code, then send a prompt." the moment the slash command finishes, instead of waiting for the first prompt to arrive. Best-effort: failures (no network, ingest unreachable) are swallowed so `/prism:setup` never breaks. New helper at `lib/notify.js`.
+
 ## [0.4.6] - 2026-05-01
 
 ### Fixed
