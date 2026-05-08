@@ -134,13 +134,13 @@ INGEST_URL="${PRISM_INGEST_URL:-${INGEST_URL:-https://ingest.prism.optra-ai.com}
 # existing OTEL state. It never defaults to user scope on unknown — it refuses
 # instead, and auto-repairs misplaced OTEL vars when the install scope is known.
 
-PROJECT_DIR_ARG=""
+PROJECT_DIR_ARG=()
 if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
-  PROJECT_DIR_ARG="--project-dir ${CLAUDE_PROJECT_DIR}"
+  PROJECT_DIR_ARG=(--project-dir "$CLAUDE_PROJECT_DIR")
 fi
 
 # resolve-scope output: action:targetScope:removeScopes (colon-delimited)
-RESOLVE_RAW=$(node "${PLUGIN_ROOT}/lib/settings.js" resolve-scope ${PROJECT_DIR_ARG} 2>/dev/null) || true
+RESOLVE_RAW=$(node "${PLUGIN_ROOT}/lib/settings.js" resolve-scope "${PROJECT_DIR_ARG[@]}" 2>/dev/null) || true
 
 if [ -z "$RESOLVE_RAW" ]; then
   echo "[Prism] WARNING: scope detection failed — OTEL not configured. Restart session." >&2
@@ -154,16 +154,16 @@ else
     repair)
       IFS=',' read -ra RSCOPES <<< "$REMOVE_SCOPES_CSV"
       for RSCOPE in "${RSCOPES[@]}"; do
-        [ -n "$RSCOPE" ] && node "${PLUGIN_ROOT}/lib/settings.js" remove --scope "$RSCOPE" ${PROJECT_DIR_ARG} 2>/dev/null || true
+        [ -n "$RSCOPE" ] && node "${PLUGIN_ROOT}/lib/settings.js" remove --scope "$RSCOPE" "${PROJECT_DIR_ARG[@]}" 2>/dev/null || true
       done
-      if node "${PLUGIN_ROOT}/lib/settings.js" sync --scope "$TARGET_SCOPE" ${PROJECT_DIR_ARG} 2>/dev/null; then
+      if node "${PLUGIN_ROOT}/lib/settings.js" sync --scope "$TARGET_SCOPE" "${PROJECT_DIR_ARG[@]}" 2>/dev/null; then
         echo "[Prism] OTEL settings repaired (moved to scope=${TARGET_SCOPE}) — restart Claude Code to apply." >&2
       fi
       ;;
     sync)
-      OTEL_STATUS=$(node "${PLUGIN_ROOT}/lib/settings.js" check --scope "$TARGET_SCOPE" ${PROJECT_DIR_ARG} 2>/dev/null) || true
+      OTEL_STATUS=$(node "${PLUGIN_ROOT}/lib/settings.js" check --scope "$TARGET_SCOPE" "${PROJECT_DIR_ARG[@]}" 2>/dev/null) || true
       if [ "$OTEL_STATUS" != "ok" ]; then
-        if node "${PLUGIN_ROOT}/lib/settings.js" sync --scope "$TARGET_SCOPE" ${PROJECT_DIR_ARG} 2>/dev/null; then
+        if node "${PLUGIN_ROOT}/lib/settings.js" sync --scope "$TARGET_SCOPE" "${PROJECT_DIR_ARG[@]}" 2>/dev/null; then
           echo "[Prism] OTEL settings updated (scope=${TARGET_SCOPE}) — restart Claude Code to apply." >&2
         else
           echo "[Prism] WARNING: Could not write OTEL settings (scope=${TARGET_SCOPE})" >&2
