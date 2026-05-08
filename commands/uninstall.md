@@ -31,6 +31,7 @@ Uninstall the Prism plugin and clean up all configuration.
    fi
    if [ -n "$PLUGIN_ROOT" ] && [ -f "$PLUGIN_ROOT/lib/settings.js" ]; then
      node "$PLUGIN_ROOT/lib/settings.js" remove --scope all --project-dir "$CLAUDE_PROJECT_DIR"
+     node "$PLUGIN_ROOT/lib/settings.js" cleanup-registries
    else
      echo "Plugin root not found — manually remove OTEL keys from:"
      echo "  ~/.claude/settings.json"
@@ -39,44 +40,31 @@ Uninstall the Prism plugin and clean up all configuration.
    fi
    ```
 
-4. Remove the Prism user config, plugin data dir, plugin cache (all versions), and any cloned marketplace dir:
+4. Remove plugin data and cache (`~/.prism` is handled by step 3's `cleanup-registries` — only deleted when no other scopes remain):
    ```bash
-   rm -rf ~/.prism
    rm -rf "${CLAUDE_PLUGIN_DATA:-$HOME/.claude/plugins/data/prism-optra-prism}"
    rm -rf ~/.claude/plugins/cache/optra-prism ~/.claude/plugins/cache/optra-prism-*
-   rm -rf ~/.claude/plugins/marketplaces/optra-prism ~/.claude/plugins/marketplaces/*/optra-prism-plugin 2>/dev/null || true
    ```
 
-5. Unregister the marketplace:
+5. Belt-and-braces: prune plugin entries from registries in case plugin root was not found in step 3:
    ```bash
-   claude plugin marketplace remove grumatic/optra-prism-plugin 2>/dev/null || true
+   node -e '
+   var fs=require("fs"),p=require("path"),h=require("os").homedir();
+   [p.join(h,".claude/plugins/installed_plugins.json"),
+    p.join(h,".claude/settings.json")].forEach(function(f){
+     try{var d=JSON.parse(fs.readFileSync(f,"utf8")),c=false;
+     if(d.plugins&&d.plugins["prism@optra-prism"]){delete d.plugins["prism@optra-prism"];c=true}
+     if(d.enabledPlugins&&d.enabledPlugins["prism@optra-prism"]){delete d.enabledPlugins["prism@optra-prism"];c=true}
+     if(c)fs.writeFileSync(f,JSON.stringify(d,null,2)+"\n")}catch{}})
+   ' 2>/dev/null || true
    ```
 
-6. Belt-and-braces: explicitly prune the plugin/marketplace entries from the JSON registries so a stale entry can't keep the plugin alive after restart:
-   ```bash
-   if command -v node &>/dev/null; then
-     for f in "$HOME/.claude/plugins/installed_plugins.json" "$HOME/.claude/plugins/known_marketplaces.json"; do
-       [ -f "$f" ] || continue
-       node - "$f" <<'NODE' 2>/dev/null || true
-   const fs = require('fs');
-   const path = process.argv[2];
-   const data = JSON.parse(fs.readFileSync(path, 'utf8'));
-   let changed = false;
-   if (data && data.plugins && data.plugins['prism@optra-prism']) {
-     delete data.plugins['prism@optra-prism']; changed = true;
-   }
-   if (data && data['optra-prism']) {
-     delete data['optra-prism']; changed = true;
-   }
-   if (changed) fs.writeFileSync(path, JSON.stringify(data, null, 2) + '\n');
-   NODE
-     done
-   fi
-   ```
+6. Confirm: "Prism plugin uninstalled for this scope. OTEL env vars and enabledPlugins cleaned; caches purged. **Restart Claude Code** to complete removal."
 
-7. Confirm: "Prism plugin uninstalled. OTEL env vars cleaned from user, project, and project-local scopes; all caches purged; marketplace unregistered. **Restart Claude Code** to complete removal."
+   If step 3's `cleanup-registries` reported remaining installs in other scopes, add:
+   "Note: The plugin is still installed in other projects/scopes: [list from cleanup-registries output]. Run `/prism:uninstall` from those projects to remove."
 
-   Add: "Note: OTEL vars in *other* repos' `.claude/settings.local.json` or `.claude/settings.json` were not touched — re-run `/prism:uninstall` from inside each repo if needed."
+   Always add: "The marketplace registration (`optra-prism`) is preserved — remove it separately with `claude plugin marketplace remove optra-prism` if desired."
 
-8. End with this call-to-action (verbatim):
+7. End with this call-to-action (verbatim):
    > 👋 Your data is still on the dashboard at https://dashboard.prism.optra-ai.com/ — sign in any time to review past PRISM scores, insights, and coaching history. Reinstall with `/plugin install prism` whenever you want realtime coaching back.
