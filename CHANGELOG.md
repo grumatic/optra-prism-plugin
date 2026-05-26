@@ -5,6 +5,16 @@ All notable changes to the Prism plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.8] - 2026-05-26
+
+### Added
+- **`/prism:doctor` diagnostic command** — new slash command runs 5 deterministic checks (API key, OTEL scope, config cache health, ingest connectivity, process env sync) and prints a structured report. Auto-fixes stale/fallback config cache via `fetchConfig()`. New `lib/doctor.js`; `session-start.sh` now recommends `/prism:doctor` on scope-skip and sync-failure paths.
+
+### Fixed
+- **Uninstall no longer zombie-resurrects** — scope-aware cleanup so user-scope uninstall only removes user entries, local only removes current-project entries; other-scope installs are preserved independently. New `cleanupRegistries()` in `lib/settings.js` handles `installed_plugins.json`, `enabledPlugins`, and OTEL vars per scope. Marketplace registration is no longer removed by uninstall (it's a source registry). Hook HTTP timeout reduced 10s → 3s so unreachable ingest doesn't look like zombie behavior. Remaining installs in other scopes are reported after cleanup.
+- **OTEL scope resolution centralized** — replaced 3 independent scope-detection chains (each with a `user` wildcard fallback) with a single `resolveOtelScope()`. When install scope is unknown, OTEL writes are refused instead of defaulting to user scope. Auto-repairs misplaced OTEL vars when install scope is definitively known. Root cause: `install.sh` ran without `--project-dir` in curl-pipe contexts, so `process.cwd()` never matched any `projectPath`, falling back to user — then `session-start.sh` perpetuated it via a self-reinforcing loop.
+- **OTEL preserves project paths with spaces** — quoting fix in scope resolution / OTEL var writes.
+
 ## [0.4.7] - 2026-05-07
 
 ### Added
