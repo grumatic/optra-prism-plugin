@@ -29,9 +29,9 @@ Getting started:
   2. Start coding                 Telemetry activates automatically
   3. /prism:report                Compare this week vs last week
 
-Dashboard:         https://dashboard.prism.optra-ai.com/
-Get your API key:  https://dashboard.prism.optra-ai.com/setup
-Documentation:     https://prism.optra-ai.com/docs
+Dashboard:         https://dashboard.optra-prism.com/
+Get your API key:  https://dashboard.optra-prism.com/setup
+Documentation:     https://optra-prism.com/docs
 ```
 
 Do not add any extra commentary beyond what is shown above. Display it exactly as formatted.

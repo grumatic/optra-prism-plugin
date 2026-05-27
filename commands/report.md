@@ -4,7 +4,7 @@ description: Weekly review — this week vs last week, PRISM grade, habits, wors
 user-invocable: true
 ---
 
-CLI mirror of the dashboard at https://dashboard.prism.optra-ai.com/. Single command that compares **this week vs last week** for the user's Developer PRISM Score and surfaces habits, wins, worst prompts, and cost.
+CLI mirror of the dashboard at https://dashboard.optra-prism.com/. Single command that compares **this week vs last week** for the user's Developer PRISM Score and surfaces habits, wins, worst prompts, and cost.
 
 ## Engine endpoints (verified)
 
@@ -68,7 +68,7 @@ Efficiency_10 = (eff_log >= 0) ? min(7 + 3·eff_log, 10) : max(7 + 7·eff_log, 0
    - **Preferred:** when `skillSnapshot` is present → compute canonical PRISM per the formula above.
    - **Fallback:** when `skillSnapshot` is null (Layer 2/3 cadence hasn't run for the period) → use `prismProfile.compositeScore` (rubric average of CL/ID/TE/AC) and **explicitly label the row "PRISM (rubric proxy)"** so the user knows it's not the spec-canonical layered composite.
 4. Render the comparison and the rest of the sections from the **this-week** payload only.
-5. On any failure: "Couldn't load your report. Try the dashboard: https://dashboard.prism.optra-ai.com/."
+5. On any failure: "Couldn't load your report. Try the dashboard: https://dashboard.optra-prism.com/."
 
 ## Display
 
@@ -172,11 +172,11 @@ When data IS present: show `totalCostUsd`, `wastedCostUsd` + `wasteRatio`%, `pot
   - CL → "leverage what's already loaded — name files, reference prior turns instead of re-pasting"
   - TE → "bundle related changes; avoid 'also do X' follow-ups"
   - AC → "kill demonstratives — replace 'fix it' with file:line + error string"
-- 🚀 **Next:** "Open https://dashboard.prism.optra-ai.com/ for realtime coaching, full PRISM scores, deeper insights, and the LLM-narrated weekly review."
+- 🚀 **Next:** "Open https://dashboard.optra-prism.com/ for realtime coaching, full PRISM scores, deeper insights, and the LLM-narrated weekly review."
 
 ## Fallbacks
 
-- **Either weekly call fails (HTTP 500 or network):** "Couldn't load this week's data — try the dashboard: https://dashboard.prism.optra-ai.com/."
+- **Either weekly call fails (HTTP 500 or network):** "Couldn't load this week's data — try the dashboard: https://dashboard.optra-prism.com/."
 - **`skillSnapshot` null both weeks:** Render comparison using `prismProfile.compositeScore` labeled "PRISM (rubric proxy)" and add a one-line note: "Layer 2/3 not yet computed for these weeks — showing the rubric-average proxy. Canonical PRISM (per spec §7) will appear once cadence workers populate Skill / Speed / Efficiency."
 - **`skillSnapshot` null one week only:** Use rubric proxy on both sides for an apples-to-apples comparison; note the asymmetry in a one-liner.
 - **Last-week call returns zero sessions:** Render the table with `—` for last-week values and "no comparison — first week of activity."

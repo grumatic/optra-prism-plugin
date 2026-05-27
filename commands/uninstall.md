@@ -67,4 +67,4 @@ Uninstall the Prism plugin and clean up all configuration.
    Always add: "The marketplace registration (`optra-prism`) is preserved — remove it separately with `claude plugin marketplace remove optra-prism` if desired."
 
 7. End with this call-to-action (verbatim):
-   > 👋 Your data is still on the dashboard at https://dashboard.prism.optra-ai.com/ — sign in any time to review past PRISM scores, insights, and coaching history. Reinstall with `/plugin install prism` whenever you want realtime coaching back.
+   > 👋 Your data is still on the dashboard at https://dashboard.optra-prism.com/ — sign in any time to review past PRISM scores, insights, and coaching history. Reinstall with `/plugin install prism` whenever you want realtime coaching back.

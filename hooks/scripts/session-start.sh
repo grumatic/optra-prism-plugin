@@ -125,7 +125,7 @@ ANTHROPIC_BASE_URL=$(echo "$RESOLVED_URLS" | node -e "
 
 # Only PRISM_INGEST_URL can be overridden (for local dev).
 # Default to production if config endpoint and cache are both unavailable.
-INGEST_URL="${PRISM_INGEST_URL:-${INGEST_URL:-https://ingest.prism.optra-ai.com}}"
+INGEST_URL="${PRISM_INGEST_URL:-${INGEST_URL:-https://ingest.optra-prism.com}}"
 
 # ─── Resolve OTEL scope and sync ───
 #

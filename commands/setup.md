@@ -11,7 +11,7 @@ Configure the Prism plugin with a `gck_*` API key.
 - `/prism:setup gck_YOUR_KEY --user` — activate for every project (writes to `~/.claude/settings.json`).
 - `/prism:setup gck_YOUR_KEY --project` — activate only in this project (writes to `$CLAUDE_PROJECT_DIR/.claude/settings.local.json`, auto-gitignored).
 
-No API key? Get one at: https://dashboard.prism.optra-ai.com/setup
+No API key? Get one at: https://dashboard.optra-prism.com/setup
 
 **Scope rules:**
 - OTEL env vars (including the gck_* secret) live in exactly one scope at a time.
@@ -98,4 +98,4 @@ No API key? Get one at: https://dashboard.prism.optra-ai.com/setup
 10. Confirm what was done and remind: "Scope: **<target>** (`<file-path>`). **Restart Claude Code to activate telemetry.**"
 
 11. End with this call-to-action (verbatim):
-    > 🚀 **Next:** open https://dashboard.prism.optra-ai.com/ for realtime coaching, PRISM scores, and insights.
+    > 🚀 **Next:** open https://dashboard.optra-prism.com/ for realtime coaching, PRISM scores, and insights.

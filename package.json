@@ -1,7 +1,7 @@
 {
   "name": "@optra-ai/prism-plugin",
   "version": "0.4.8",
-  "description": "AI vibe coding intelligence for Claude Code — realtime coaching, PRISM scoring, insights, and gateway routing. Pairs with dashboard.prism.optra-ai.com",
+  "description": "AI vibe coding intelligence for Claude Code — realtime coaching, PRISM scoring, insights, and gateway routing. Pairs with dashboard.optra-prism.com",
   "license": "MIT",
   "author": {
     "name": "Optra",
@@ -11,7 +11,7 @@
     "type": "git",
     "url": "https://github.com/grumatic/optra-prism-plugin"
   },
-  "homepage": "https://prism.optra-ai.com",
+  "homepage": "https://optra-prism.com",
   "files": [
     "lib/",
     "commands/",
