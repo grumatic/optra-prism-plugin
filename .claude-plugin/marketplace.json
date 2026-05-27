@@ -12,7 +12,7 @@
       "name": "prism",
       "source": "./",
       "description": "AI vibe coding intelligence for Claude Code — realtime coaching, PRISM scoring, insights, and gateway routing. Pairs with dashboard.optra-prism.com",
-      "version": "0.4.8"
+      "version": "0.4.9"
     }
   ]
 }
