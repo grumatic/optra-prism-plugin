@@ -1,6 +1,6 @@
 {
   "name": "prism",
-  "description": "AI vibe coding intelligence for Claude Code — realtime coaching, PRISM scoring, insights, and gateway routing. Pairs with dashboard.optra-prism.com",
+  "description": "AI vibe coding intelligence for Claude Code — realtime coaching, PRISM scoring, and insights. Pairs with dashboard.optra-prism.com",
   "version": "0.4.9",
   "author": {
     "name": "Optra",
@@ -16,7 +16,6 @@
     "prism-score",
     "insights",
     "telemetry",
-    "gateway",
     "cost-optimization"
   ],
   "userConfig": {
@@ -25,12 +24,6 @@
       "type": "string",
       "description": "Your Optra API key (starts with gck_)",
       "sensitive": true
-    },
-    "enableGateway": {
-      "title": "Enable Gateway",
-      "type": "boolean",
-      "description": "Route Claude Code API calls through Optra gateway for budget limits, guardrails, and usage logging (default: false). Use /prism:status to toggle.",
-      "sensitive": false
     },
     "prismThreshold": {
       "title": "PRISM Threshold",

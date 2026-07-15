@@ -1,6 +1,6 @@
 # Optra Prism — Claude Code Plugin
 
-PRISM intelligence plugin for Claude Code. Reviews prompts in real-time, captures telemetry for dashboard analytics, tracks session costs, and optionally routes requests through the Optra gateway for budget enforcement and guardrails.
+PRISM intelligence plugin for Claude Code. Reviews prompts in real-time, captures telemetry for dashboard analytics, and tracks session costs.
 
 ## Requirements
 
@@ -29,22 +29,13 @@ PRISM intelligence plugin for Claude Code. Reviews prompts in real-time, capture
 curl -sL https://optra-ai.com/install-plugin.sh | bash -s -- gck_YOUR_KEY
 ```
 
-## Modes
-
-| Mode | What happens | Latency impact |
-|------|-------------|----------------|
-| **Telemetry only** (default) | OTEL export + prompt scoring + cost tracking. API calls go directly to Anthropic. | None |
-| **Full intelligence** | All of the above, plus API calls route through Optra gateway for budget enforcement, guardrails, and full request/response logging. | Small hop |
-
-Choose your mode during `/prism:setup`. You can change it anytime.
-
 ## What It Does
 
 Three hooks run automatically:
 
 | Hook | Purpose |
 |------|---------|
-| **SessionStart** | Validates API key, configures OTEL telemetry, optionally sets gateway routing |
+| **SessionStart** | Validates API key and configures OTEL telemetry |
 | **UserPromptSubmit** | Reviews prompts for specificity/scope and captures them to ingest for scoring |
 | **Stop** | Captures prompt/response pairs for analytics, tracks turns, warns on context bloat |
 
@@ -53,14 +44,14 @@ Three hooks run automatically:
 | Command | Description |
 |---------|-------------|
 | `/prism:setup` | Configure API key, enable telemetry |
-| `/prism:status` | Connection health, gateway toggle, session info |
+| `/prism:status` | Connection health, status line, session info |
 | `/prism:report` | Weekly review — this week vs last week, PRISM grade, habits, worst prompts |
 | `/prism:help` | List all available commands |
 | `/prism:uninstall` | Remove plugin config and OTEL settings |
 
 ## Configuration
 
-All service URLs (ingest, gateway, dashboard) are resolved automatically from your API key via the config endpoint (`https://ingest.optra-prism.com/v1/plugin/config`). Only `PRISM_INGEST_URL` can be overridden for local dev:
+Service URLs are resolved automatically from your API key via the config endpoint (`https://ingest.optra-prism.com/v1/plugin/config`). For local development, the ingest URL can be overridden with `PRISM_INGEST_URL`:
 
 ```bash
 PRISM_INGEST_URL=http://localhost:9005 claude
@@ -78,7 +69,7 @@ PRISM_INGEST_URL=http://localhost:9005 claude
 Claude Code starts
     │
     ├─→ Reads ~/.claude/settings.json → OTEL env vars set at process init
-    ├─→ SessionStart hook → validates key, optionally sets gateway URL
+    ├─→ SessionStart hook → validates key and checks OTEL settings
     │
     ├─→ User types prompt
     │   └─→ UserPromptSubmit hook → captures prompt to ingest

@@ -1,10 +1,10 @@
 ---
 name: prism:status
-description: Show Prism connection status, toggle gateway routing
+description: Show Prism connection status and session information
 user-invocable: true
 ---
 
-Show the Prism plugin configuration, connection health, and allow gateway toggling.
+Show the Prism plugin configuration and connection health.
 
 1. **API key:** Read `~/.prism/config.json`. Show key prefix (e.g., `gck_abc12...`). If missing: "Run `/prism:setup gck_YOUR_KEY`. Get your key at https://dashboard.optra-prism.com/setup"
 
@@ -19,25 +19,16 @@ Show the Prism plugin configuration, connection health, and allow gateway toggli
    - `none` → "Prism is not activated yet. Run `/prism:setup gck_YOUR_KEY`."
    If `detect` printed a WARNING to stderr (e.g. OTEL vars found in the shared `.claude/settings.json`), surface it here prominently — that warning means a gck_* key may have been committed to git.
 
-2. **Gateway routing:** Read `enableGateway` from config. Show current mode:
-   - **Direct (default)** — bypass gateway, call Anthropic directly
-   - **Gateway** — budget limits, guardrails, usage logging
-   Show the gateway URL from `~/.prism/config-cache.json` field `gateway_url` (NOT from `$ANTHROPIC_BASE_URL` env var — it may be stale). If cache is missing, show "not resolved".
-   Note: Telemetry and PRISM scoring work in both modes.
+2. **Status line:** Read `showStatusLine` from config (default: true). Show current state: **On** or **Off**. If the user says "toggle status line", "hide status line", or "show status line": update `showStatusLine` in `~/.prism/config.json` with a read-modify-write that preserves all other fields. Confirm and remind to restart Claude Code.
 
-3. **Toggle gateway:** If the user says "toggle", "switch", or "change" routing: update `enableGateway` in `~/.prism/config.json` (read-modify-write to preserve other fields). Confirm the change and remind to restart Claude Code.
+3. **Endpoints:** Resolve the effective ingest URL with `$PLUGIN_DIR/lib/config.js` using this priority: `PRISM_INGEST_URL` → `~/.prism/config.json.ingest_url` → `~/.prism/config-cache.json.ingest_url` → production. Show:
+   - **Ingest URL:** effective resolved `ingest_url` (report an invalid explicit override instead of falling back)
+   - **OTEL Logs:** `$OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` (expected: `<effective-ingest-url>/v1/logs`)
+   - **OTEL Metrics:** `$OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` (expected: `<effective-ingest-url>/v1/metrics`)
 
-3b. **Status line:** Read `showStatusLine` from config (default: true). Show current state: **On** or **Off**. If the user says "toggle status line", "hide status line", or "show status line": update `showStatusLine` in `~/.prism/config.json`. Confirm and remind to restart Claude Code.
+4. **Active features:** OTel telemetry (always on), PRISM gate with threshold from config (always on), and prompt capture (always on).
 
-4. **Endpoints:** Read all URLs from `~/.prism/config-cache.json` (source of truth). Do NOT use env vars like `$PRISM_INGEST_URL` or `$ANTHROPIC_BASE_URL` — they may be stale from a previous hook. Show:
-   - **Ingest URL:** `ingest_url` field (fallback: `https://ingest.optra-prism.com`)
-   - **Gateway URL:** `gateway_url` field (if gateway enabled)
-   - **OTEL Logs:** `$OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` (fallback: `https://ingest.optra-prism.com/v1/logs`)
-   - **OTEL Metrics:** `$OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` (fallback: `https://ingest.optra-prism.com/v1/metrics`)
-
-5. **Active features:** OTel telemetry (always on), PRISM gate with threshold from config (always on), prompt capture (always on), gateway routing (if enabled).
-
-6. **Session:** Read `${CLAUDE_PLUGIN_DATA}/session-state.json` for turn count and duration.
+5. **Session:** Read `${CLAUDE_PLUGIN_DATA}/session-state.json` for turn count and duration.
 
 End with two lines:
 1. "Run `/prism:help` for all commands."

@@ -12,8 +12,8 @@ Display the following:
 Prism Plugin Commands
 
 Setup & Config
-  /prism:setup [gck_KEY]   Register API key, enable telemetry + gateway
-  /prism:status            Connection health, gateway toggle, session info
+  /prism:setup [gck_KEY]   Register API key and enable telemetry
+  /prism:status            Connection health, status line, session info
   /prism:uninstall         Remove plugin, clear all settings
 
 Review
