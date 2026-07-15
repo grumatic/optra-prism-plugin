@@ -156,6 +156,97 @@ test('session start accepts a legacy API key and exports the neutral variable', 
   assert.equal(result.stderr.includes(LEGACY_API_KEY), false);
 });
 
+test('session start safely transports opaque API keys with shell and JavaScript metacharacters', () => {
+  const home = makeTempDir('prism-session-opaque-');
+  const dataDir = path.join(home, 'plugin-data');
+  const envFile = path.join(home, 'claude-env');
+  const sentinel = path.join(home, 'injected');
+  const opaqueKey = `prism_'"\`;\nexport PRISM_INJECTED=1\n$(touch ${sentinel})`;
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.writeFileSync(envFile, '');
+  writeJson(path.join(home, '.prism', 'config-cache.json'), {
+    ingest_url: 'https://cached-ingest.example',
+    dashboard_url: 'https://cached-dashboard.example',
+    api_key_fingerprint: fingerprintApiKey(opaqueKey),
+    cached_at: new Date().toISOString(),
+  });
+
+  const result = spawnSync('bash', [path.join(ROOT, 'hooks', 'scripts', 'session-start.sh')], {
+    encoding: 'utf8',
+    env: withoutIngestOverride({
+      HOME: home,
+      CLAUDE_PLUGIN_ROOT: ROOT,
+      CLAUDE_PLUGIN_DATA: dataDir,
+      CLAUDE_ENV_FILE: envFile,
+      CLAUDE_PLUGIN_OPTION_apiKey: opaqueKey,
+    }),
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /Ingest:\s+https:\/\/cached-ingest\.example/);
+  assert.equal(result.stderr.includes(opaqueKey), false);
+  assert.equal(fs.existsSync(sentinel), false);
+
+  const sourceEnv = withoutIngestOverride({ HOME: home });
+  delete sourceEnv.PRISM_INJECTED;
+  const sourced = spawnSync('bash', [
+    '-c',
+    'source "$1"; node -e \'process.stdout.write(JSON.stringify({ apiKey: process.env.PRISM_API_KEY, injected: process.env.PRISM_INJECTED || null }))\'',
+    'bash',
+    envFile,
+  ], {
+    encoding: 'utf8',
+    env: sourceEnv,
+  });
+
+  assert.equal(sourced.status, 0, sourced.stderr);
+  assert.deepEqual(JSON.parse(sourced.stdout), { apiKey: opaqueKey, injected: null });
+  assert.equal(fs.existsSync(sentinel), false);
+});
+
+test('session start does not export a key rejected by the config endpoint', () => {
+  const home = makeTempDir('prism-session-rejected-');
+  const dataDir = path.join(home, 'plugin-data');
+  const envFile = path.join(home, 'claude-env');
+  const rejectedKey = 'prism_rejected';
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.writeFileSync(envFile, '');
+  writeJson(path.join(home, '.prism', 'config-cache.json'), {
+    ingest_url: 'https://ingest.optra-prism.com',
+    dashboard_url: 'https://dashboard.optra-prism.com',
+    environment: 'production',
+    source: 'auth-error',
+    auth_status: 401,
+    api_key_fingerprint: fingerprintApiKey(rejectedKey),
+    cached_at: new Date().toISOString(),
+  });
+
+  const result = spawnSync('bash', [path.join(ROOT, 'hooks', 'scripts', 'session-start.sh')], {
+    encoding: 'utf8',
+    env: withoutIngestOverride({
+      HOME: home,
+      CLAUDE_PLUGIN_ROOT: ROOT,
+      CLAUDE_PLUGIN_DATA: dataDir,
+      CLAUDE_ENV_FILE: envFile,
+      CLAUDE_PLUGIN_OPTION_apiKey: rejectedKey,
+    }),
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /API key was rejected/);
+  assert.doesNotMatch(result.stderr, /Session started/);
+  assert.equal(fs.readFileSync(envFile, 'utf8'), '');
+});
+
+test('setup command passes API keys through the process environment', () => {
+  const contents = fs.readFileSync(path.join(ROOT, 'commands', 'setup.md'), 'utf8');
+
+  assert.equal((contents.match(/PRISM_API_KEY="\$API_KEY"/g) || []).length, 2);
+  assert.match(contents, /lib\/setup\.js" cache/);
+  assert.match(contents, /lib\/setup\.js" notify/);
+  assert.doesNotMatch(contents, /(?:ensureCache|notifySetupComplete)\(['"]\$API_KEY/);
+});
+
 test('installer preserves local config fields without publishing a routing control', () => {
   const home = makeTempDir('prism-install-');
   const binDir = path.join(home, 'bin');

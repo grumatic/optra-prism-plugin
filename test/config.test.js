@@ -294,6 +294,7 @@ test('fallback cache contains only telemetry service fields and metadata', async
   const cached = JSON.parse(fs.readFileSync(prismPath('config-cache.json'), 'utf8'));
 
   assert.equal(resolved.source, 'fallback');
+  assert.equal(Object.hasOwn(resolved, 'auth_status'), false);
   assert.deepEqual(Object.keys(cached).sort(), [
     'api_key_fingerprint',
     'cached_at',
@@ -302,6 +303,23 @@ test('fallback cache contains only telemetry service fields and metadata', async
     'ingest_url',
     'source',
   ]);
+});
+
+test('credential rejection is distinct from an unreachable config endpoint', async () => {
+  const { ensureCache, getCachedConfig } = require('../lib/config');
+
+  for (const status of [401, 403]) {
+    global.fetch = async () => ({ ok: false, status });
+
+    const resolved = await ensureCache(API_KEY);
+    const cached = JSON.parse(fs.readFileSync(prismPath('config-cache.json'), 'utf8'));
+
+    assert.equal(resolved.source, 'auth-error');
+    assert.equal(resolved.auth_status, status);
+    assert.equal(cached.source, 'auth-error');
+    assert.equal(cached.auth_status, status);
+    assert.equal(getCachedConfig(API_KEY).source, 'auth-error');
+  }
 });
 
 test('config refresh retains the production bootstrap without an override', () => {

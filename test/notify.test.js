@@ -81,3 +81,15 @@ test('setup notification rejects unsupported API keys without a request', async 
   assert.equal(await notifySetupComplete('other_key'), false);
   assert.equal(requests, 0);
 });
+
+test('setup notification stops after config authentication is rejected', async () => {
+  let requests = 0;
+  global.fetch = async () => {
+    requests += 1;
+    return { ok: false, status: 401 };
+  };
+
+  const { notifySetupComplete } = require('../lib/notify');
+  assert.equal(await notifySetupComplete('prism_rejected'), false);
+  assert.equal(requests, 1);
+});
