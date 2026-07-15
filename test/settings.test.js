@@ -8,7 +8,8 @@ const {
   test,
 } = require('node:test');
 
-const API_KEY = 'gck_1234567890abcdef';
+const API_KEY = 'prism_1234567890abcdef';
+const LEGACY_API_KEY = 'gck_1234567890abcdef';
 const ENV_KEYS = [
   'HOME',
   'PRISM_INGEST_URL',
@@ -70,6 +71,21 @@ test('expected OTEL settings explicitly disable assistant response logging', () 
   assert.equal(
     expected.otelEnv.OTEL_EXPORTER_OTLP_HEADERS,
     `x-api-key=${API_KEY},x-prism-plugin-version=${readPluginVersion()}`,
+  );
+});
+
+test('expected OTEL settings preserve a legacy API key', () => {
+  process.env.CLAUDE_PLUGIN_OPTION_apiKey = LEGACY_API_KEY;
+  clearModule('../lib/config');
+  clearModule('../lib/settings');
+
+  const { buildExpectedOtelEnv } = require('../lib/settings');
+  const expected = buildExpectedOtelEnv();
+
+  assert.ok(expected);
+  assert.match(
+    expected.otelEnv.OTEL_EXPORTER_OTLP_HEADERS,
+    new RegExp(`^x-api-key=${LEGACY_API_KEY}(?:,|$)`),
   );
 });
 

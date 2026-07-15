@@ -14,7 +14,7 @@ The plugin only talks to the ingest gateway. These are the routes used here:
 |-------|--------|---------|--------|
 | `/v1/insights/report/quick?from=&to=` | POST | Quick (LLM-free) report scoped to an ISO date range | ✅ live |
 
-> No other ingest route is required. `/v1/prism/scores` (engine-side Layer 3) is **not** proxied through ingest, so per-period sub-scores must come from the quick-report payload's `skillSnapshot` field. Verify with: `curl -s -o /dev/null -w "%{http_code}\n" -X POST -H "x-api-key: $GCK_KEY" "$INGEST/v1/insights/report/quick?from=$FROM&to=$TO"` — expect `200`.
+> No other ingest route is required. `/v1/prism/scores` (engine-side Layer 3) is **not** proxied through ingest, so per-period sub-scores must come from the quick-report payload's `skillSnapshot` field. Verify with: `curl -s -o /dev/null -w "%{http_code}\n" -X POST -H "x-api-key: $PRISM_API_KEY" "$INGEST/v1/insights/report/quick?from=$FROM&to=$TO"` — expect `200`.
 
 ## Scoring (canonical — `prism-scoring-spec.md` §7)
 

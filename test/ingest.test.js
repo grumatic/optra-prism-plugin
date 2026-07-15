@@ -11,8 +11,9 @@ const {
 
 const { readPluginVersion } = require('../lib/plugin-version');
 
-const API_KEY = 'gck_ingest_test_key';
-const ENV_KEYS = ['HOME', 'PRISM_INGEST_URL', 'PRISM_GCK_KEY'];
+const API_KEY = 'prism_ingest_test_key';
+const LEGACY_API_KEY = 'gck_ingest_test_key';
+const ENV_KEYS = ['HOME', 'PRISM_INGEST_URL', 'PRISM_API_KEY', 'PRISM_GCK_KEY'];
 const MODULE_PATHS = [
   '../lib/config',
   '../lib/debug',
@@ -41,7 +42,7 @@ function closeServer() {
   });
 }
 
-async function loadIngestWithCapture() {
+async function loadIngestWithCapture(apiKey = API_KEY, envName = 'PRISM_API_KEY') {
   let resolveRequest;
   const requestReceived = new Promise((resolve) => { resolveRequest = resolve; });
 
@@ -68,7 +69,9 @@ async function loadIngestWithCapture() {
 
   const address = server.address();
   process.env.PRISM_INGEST_URL = `http://127.0.0.1:${address.port}`;
-  process.env.PRISM_GCK_KEY = API_KEY;
+  delete process.env.PRISM_API_KEY;
+  delete process.env.PRISM_GCK_KEY;
+  process.env[envName] = apiKey;
   clearTestModules();
 
   return {
@@ -77,13 +80,13 @@ async function loadIngestWithCapture() {
   };
 }
 
-function assertRequest(request, expectedPath, expectedBody) {
+function assertRequest(request, expectedPath, expectedBody, expectedApiKey = API_KEY) {
   const serializedBody = JSON.stringify(expectedBody);
 
   assert.equal(request.path, expectedPath);
   assert.equal(request.method, 'POST');
   assert.equal(request.headers['content-type'], 'application/json');
-  assert.equal(request.headers['x-api-key'], API_KEY);
+  assert.equal(request.headers['x-api-key'], expectedApiKey);
   assert.equal(request.headers['content-length'], String(Buffer.byteLength(serializedBody)));
   assert.equal(request.headers['x-prism-plugin-version'], readPluginVersion());
   assert.deepEqual(JSON.parse(request.body), expectedBody);
@@ -103,6 +106,7 @@ beforeEach(() => {
 
   process.env.HOME = homeDir;
   delete process.env.PRISM_INGEST_URL;
+  delete process.env.PRISM_API_KEY;
   delete process.env.PRISM_GCK_KEY;
   server = null;
 });
@@ -176,4 +180,26 @@ test('sendResponse preserves the Hook response request and adds plugin provenanc
 
   assert.deepEqual(result, { status: 202, body: 'accepted' });
   assertRequest(request, '/v1/prompts/response', expectedBody);
+});
+
+test('sendPrompt preserves a legacy API key in the request header', async () => {
+  const { ingest, requestReceived } = await loadIngestWithCapture(
+    LEGACY_API_KEY,
+    'PRISM_GCK_KEY',
+  );
+  const input = {
+    prompt_text: 'legacy key',
+    source: 'claude-code-test',
+    tool_session_id: 'session-legacy',
+    cwd: '/tmp/project',
+    metadata: {},
+  };
+
+  const [result, request] = await Promise.all([
+    ingest.sendPrompt(input),
+    requestReceived,
+  ]);
+
+  assert.deepEqual(result, { status: 202, body: 'accepted' });
+  assertRequest(request, '/v1/prompts', input, LEGACY_API_KEY);
 });

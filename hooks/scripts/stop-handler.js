@@ -23,7 +23,7 @@
  */
 
 const { createDebug } = require('../../lib/debug');
-const { GCK_KEY, SHOW_STATUS_LINE } = require('../../lib/env');
+const { API_KEY, SHOW_STATUS_LINE } = require('../../lib/env');
 const { readStdin } = require('../../lib/stdin');
 const { sendResponse } = require('../../lib/ingest');
 const { fetchTelemetryLogs } = require('../../lib/engine');
@@ -89,7 +89,7 @@ function formatCost(cost) {
 }
 
 readStdin().then(async (data) => {
-  debug(`HOOK FIRED session_id=${data.session_id || '(none)'} gck=${GCK_KEY ? 'set' : 'missing'}`);
+  debug(`HOOK FIRED session_id=${data.session_id || '(none)'} api_key=${API_KEY ? 'set' : 'missing'}`);
   debug(`STDIN DATA: input_tokens=${data.input_tokens} output_tokens=${data.output_tokens} model=${data.model} keys=[${Object.keys(data).join(',')}]`);
 
   const state = readState();
@@ -223,7 +223,7 @@ readStdin().then(async (data) => {
   // --- Async: capture response + query OTEL cache data for next turn ---
   const asyncTasks = [];
 
-  if (GCK_KEY) {
+  if (API_KEY) {
     asyncTasks.push(
       sendResponse({
         tool_session_id: data.session_id,

@@ -81,33 +81,40 @@ test('canonical read matches the normalized plugin manifest version', () => {
 });
 
 test('adds a valid plugin version to the same header object', () => {
-  const headers = { 'x-api-key': 'gck_test' };
+  const headers = { 'x-api-key': 'prism_test' };
   const result = addPluginVersionHeader(headers, '  v1.2.3  ');
 
   assert.equal(result, headers);
   assert.deepEqual(headers, {
-    'x-api-key': 'gck_test',
+    'x-api-key': 'prism_test',
     [HEADER_NAME]: 'v1.2.3',
   });
 });
 
 test('explicit null and invalid plugin versions leave headers unchanged', () => {
   for (const value of [null, '1.2/3']) {
-    const headers = { 'x-api-key': 'gck_test' };
+    const headers = { 'x-api-key': 'prism_test' };
     assert.equal(addPluginVersionHeader(headers, value), headers);
-    assert.deepEqual(headers, { 'x-api-key': 'gck_test' });
+    assert.deepEqual(headers, { 'x-api-key': 'prism_test' });
   }
 });
 
 test('builds the exact OTLP header string with a valid plugin version', () => {
   assert.equal(
-    buildOtelHeaders('gck_test', 'v1.2.3'),
-    'x-api-key=gck_test,x-prism-plugin-version=v1.2.3',
+    buildOtelHeaders('prism_test', 'v1.2.3'),
+    'x-api-key=prism_test,x-prism-plugin-version=v1.2.3',
   );
 });
 
 test('builds the API-key-only OTLP header for explicit missing or invalid versions', () => {
   for (const value of [null, '1.2/3']) {
-    assert.equal(buildOtelHeaders('gck_test', value), 'x-api-key=gck_test');
+    assert.equal(buildOtelHeaders('prism_test', value), 'x-api-key=prism_test');
   }
+});
+
+test('preserves a legacy API key in the OTLP header string', () => {
+  assert.equal(
+    buildOtelHeaders('gck_test', 'v1.2.3'),
+    'x-api-key=gck_test,x-prism-plugin-version=v1.2.3',
+  );
 });

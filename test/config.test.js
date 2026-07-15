@@ -7,8 +7,10 @@ const {
   beforeEach,
   test,
 } = require('node:test');
+const { fingerprintApiKey } = require('../lib/api-key');
 
-const API_KEY = 'gck_1234567890abcdef';
+const API_KEY = 'prism_1234567890abcdef';
+const LEGACY_API_KEY = 'gck_1234567890abcdef';
 const PROD_INGEST_URL = 'https://ingest.optra-prism.com';
 
 let homeDir;
@@ -18,6 +20,7 @@ let originalFetch;
 const ENV_KEYS = [
   'HOME',
   'PRISM_INGEST_URL',
+  'PRISM_API_KEY',
   'PRISM_GCK_KEY',
   'CLAUDE_PLUGIN_OPTION_apiKey',
 ];
@@ -36,7 +39,7 @@ function writeCache(overrides = {}) {
     ingest_url: 'https://cached-ingest.example',
     dashboard_url: 'https://cached-dashboard.example',
     environment: 'test',
-    key_prefix: API_KEY.substring(0, 12),
+    api_key_fingerprint: fingerprintApiKey(API_KEY),
     cached_at: new Date().toISOString(),
     ...overrides,
   });
@@ -55,6 +58,7 @@ beforeEach(() => {
   originalFetch = global.fetch;
   process.env.HOME = homeDir;
   delete process.env.PRISM_INGEST_URL;
+  delete process.env.PRISM_API_KEY;
   delete process.env.PRISM_GCK_KEY;
   delete process.env.CLAUDE_PLUGIN_OPTION_apiKey;
 });
@@ -105,6 +109,38 @@ test('local ingest override does not replace the cached dashboard URL', () => {
   assert.equal(resolved.ingest_url, 'https://local-ingest.example');
   assert.equal(resolved.dashboard_url, 'https://cached-dashboard.example');
   assert.deepEqual(Object.keys(resolved).sort(), ['dashboard_url', 'environment', 'ingest_url']);
+});
+
+test('cache is isolated by an API key fingerprint', () => {
+  const { getCachedConfig } = require('../lib/config');
+
+  writeCache();
+  assert.ok(getCachedConfig(API_KEY));
+  assert.equal(getCachedConfig('prism_different_key'), null);
+});
+
+test('legacy key-prefix cache metadata is not reused', () => {
+  const { getCachedConfig } = require('../lib/config');
+
+  writeJson(prismPath('config-cache.json'), {
+    ingest_url: 'https://legacy-cache.example',
+    dashboard_url: 'https://legacy-dashboard.example',
+    key_prefix: 'gck_12345678',
+    cached_at: new Date().toISOString(),
+  });
+
+  assert.equal(getCachedConfig(API_KEY), null);
+});
+
+test('runtime prefers the neutral environment variable and accepts the legacy fallback', () => {
+  process.env.PRISM_API_KEY = API_KEY;
+  process.env.PRISM_GCK_KEY = LEGACY_API_KEY;
+  clearModule('../lib/env');
+  assert.equal(require('../lib/env').API_KEY, API_KEY);
+
+  delete process.env.PRISM_API_KEY;
+  clearModule('../lib/env');
+  assert.equal(require('../lib/env').API_KEY, LEGACY_API_KEY);
 });
 
 test('runtime and native OTEL settings use the same local ingest override', () => {
@@ -218,11 +254,11 @@ test('config refresh uses the override and allowlists fields persisted from the 
   assert.equal(resolved.ingest_url, 'https://local-ingest.example/prism');
   assert.equal(cached.ingest_url, 'https://server-ingest.example');
   assert.deepEqual(Object.keys(cached).sort(), [
+    'api_key_fingerprint',
     'cached_at',
     'dashboard_url',
     'environment',
     'ingest_url',
-    'key_prefix',
   ]);
   assert.equal(config.getConfig(API_KEY).ingest_url, 'https://local-ingest.example/prism');
 });
@@ -237,11 +273,11 @@ test('legacy routing fields in an existing cache are ignored', () => {
 
   const cached = getCachedConfig(API_KEY);
   assert.deepEqual(Object.keys(cached).sort(), [
+    'api_key_fingerprint',
     'cached_at',
     'dashboard_url',
     'environment',
     'ingest_url',
-    'key_prefix',
   ]);
   assert.deepEqual(Object.keys(getConfig(API_KEY)).sort(), [
     'dashboard_url',
@@ -259,11 +295,11 @@ test('fallback cache contains only telemetry service fields and metadata', async
 
   assert.equal(resolved.source, 'fallback');
   assert.deepEqual(Object.keys(cached).sort(), [
+    'api_key_fingerprint',
     'cached_at',
     'dashboard_url',
     'environment',
     'ingest_url',
-    'key_prefix',
     'source',
   ]);
 });

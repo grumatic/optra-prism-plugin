@@ -4,9 +4,11 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { afterEach, test } = require('node:test');
+const { fingerprintApiKey } = require('../lib/api-key');
 
 const ROOT = path.resolve(__dirname, '..');
-const API_KEY = 'gck_1234567890abcdef';
+const API_KEY = 'prism_1234567890abcdef';
+const LEGACY_API_KEY = 'gck_1234567890abcdef';
 const tempDirs = [];
 
 function makeTempDir(prefix) {
@@ -43,7 +45,7 @@ test('legacy routing controls do not appear in runtime exports', () => {
     gateway_url: 'https://stale-gateway.example',
     anthropic_base_url: 'https://stale-anthropic.example',
     dashboard_url: 'https://cached-dashboard.example',
-    key_prefix: API_KEY.substring(0, 12),
+    api_key_fingerprint: fingerprintApiKey(API_KEY),
     cached_at: new Date().toISOString(),
   });
 
@@ -61,6 +63,8 @@ test('legacy routing controls do not appear in runtime exports', () => {
 
   assert.equal(result.status, 0, result.stderr);
   const runtime = JSON.parse(result.stdout);
+  assert.equal(runtime.API_KEY, API_KEY);
+  assert.equal(Object.hasOwn(runtime, 'GCK_KEY'), false);
   assert.equal(runtime.INGEST_URL, 'https://cached-ingest.example');
   assert.equal(Object.hasOwn(runtime, 'ENABLE_GATEWAY'), false);
   assert.equal(Object.hasOwn(runtime, 'GATEWAY_URL'), false);
@@ -88,7 +92,7 @@ test('session start preserves user Anthropic settings and emits telemetry settin
     gateway_url: 'https://stale-gateway.example',
     anthropic_base_url: 'https://stale-anthropic.example',
     dashboard_url: 'https://cached-dashboard.example',
-    key_prefix: API_KEY.substring(0, 12),
+    api_key_fingerprint: fingerprintApiKey(API_KEY),
     cached_at: new Date().toISOString(),
   });
   fs.writeFileSync(envFile, userEnv);
@@ -114,7 +118,42 @@ test('session start preserves user Anthropic settings and emits telemetry settin
   assert.equal((written.match(/ANTHROPIC_CUSTOM_HEADERS/g) || []).length, 1);
   assert.equal(written.includes('stale-gateway.example'), false);
   assert.equal(written.includes('X-Gateway-Api-Key'), false);
-  assert.match(written, /export PRISM_GCK_KEY=gck_1234567890abcdef/);
+  assert.match(written, /export PRISM_API_KEY=prism_1234567890abcdef/);
+  assert.doesNotMatch(written, /PRISM_GCK_KEY=/);
+});
+
+test('session start accepts a legacy API key and exports the neutral variable', () => {
+  const home = makeTempDir('prism-session-legacy-');
+  const dataDir = path.join(home, 'plugin-data');
+  const envFile = path.join(home, 'claude-env');
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.writeFileSync(envFile, '');
+  writeJson(path.join(home, '.prism', 'config.json'), {
+    apiKey: LEGACY_API_KEY,
+  });
+  writeJson(path.join(home, '.prism', 'config-cache.json'), {
+    ingest_url: 'https://cached-ingest.example',
+    dashboard_url: 'https://cached-dashboard.example',
+    api_key_fingerprint: fingerprintApiKey(LEGACY_API_KEY),
+    cached_at: new Date().toISOString(),
+  });
+
+  const result = spawnSync('bash', [path.join(ROOT, 'hooks', 'scripts', 'session-start.sh')], {
+    encoding: 'utf8',
+    env: withoutIngestOverride({
+      HOME: home,
+      CLAUDE_PLUGIN_ROOT: ROOT,
+      CLAUDE_PLUGIN_DATA: dataDir,
+      CLAUDE_ENV_FILE: envFile,
+      CLAUDE_PLUGIN_OPTION_apiKey: LEGACY_API_KEY,
+    }),
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const written = fs.readFileSync(envFile, 'utf8');
+  assert.match(written, /export PRISM_API_KEY=gck_1234567890abcdef/);
+  assert.doesNotMatch(written, /PRISM_GCK_KEY=/);
+  assert.equal(result.stderr.includes(LEGACY_API_KEY), false);
 });
 
 test('installer preserves local config fields without publishing a routing control', () => {
@@ -126,7 +165,7 @@ test('installer preserves local config fields without publishing a routing contr
   fs.writeFileSync(claude, '#!/bin/sh\nexit 0\n');
   fs.chmodSync(claude, 0o755);
   writeJson(configFile, {
-    apiKey: 'gck_old',
+    apiKey: 'prism_old',
     prismThreshold: 7,
     ingest_url: 'https://local-ingest.example/prism',
     enableGateway: true,
@@ -152,6 +191,40 @@ test('installer preserves local config fields without publishing a routing contr
   assert.equal(fs.statSync(configFile).mode & 0o777, 0o600);
 });
 
+test('installer preserves legacy API keys as opaque credentials', () => {
+  const home = makeTempDir('prism-install-legacy-');
+  const binDir = path.join(home, 'bin');
+  const configFile = path.join(home, '.prism', 'config.json');
+  fs.mkdirSync(binDir, { recursive: true });
+  const claude = path.join(binDir, 'claude');
+  fs.writeFileSync(claude, '#!/bin/sh\nexit 0\n');
+  fs.chmodSync(claude, 0o755);
+
+  const result = spawnSync('bash', [path.join(ROOT, 'install.sh'), LEGACY_API_KEY], {
+    encoding: 'utf8',
+    env: withoutIngestOverride({
+      HOME: home,
+      PATH: `${binDir}:${process.env.PATH}`,
+    }),
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(fs.readFileSync(configFile, 'utf8')).apiKey, LEGACY_API_KEY);
+});
+
+test('public setup guidance only presents Prism API keys', () => {
+  const publicGuidanceFiles = [
+    '.claude-plugin/plugin.json',
+    'README.md',
+    ...fs.readdirSync(path.join(ROOT, 'commands')).map((name) => `commands/${name}`),
+  ];
+
+  for (const relative of publicGuidanceFiles) {
+    const contents = fs.readFileSync(path.join(ROOT, relative), 'utf8');
+    assert.doesNotMatch(contents, /gck_/i, relative);
+  }
+});
+
 test('packaged and runtime surfaces contain no client routing controls', () => {
   const publicFiles = [
     '.claude-plugin/plugin.json',
@@ -165,7 +238,7 @@ test('packaged and runtime surfaces contain no client routing controls', () => {
     ...fs.readdirSync(path.join(ROOT, 'lib')).map((name) => `lib/${name}`),
     ...fs.readdirSync(path.join(ROOT, 'hooks', 'scripts')).map((name) => `hooks/scripts/${name}`),
   ];
-  const forbidden = /enableGateway|ANTHROPIC_BASE_URL|ANTHROPIC_CUSTOM_HEADERS|X-Gateway-Api-Key|gateway routing|gateway toggle|Optra gateway/i;
+  const forbidden = /enableGateway|ANTHROPIC_BASE_URL|ANTHROPIC_CUSTOM_HEADERS|X-Gateway-Api-Key|gateway routing|gateway toggle|Optra gateway|key_prefix/i;
 
   for (const relative of [...publicFiles, ...runtimeFiles]) {
     const contents = fs.readFileSync(path.join(ROOT, relative), 'utf8');

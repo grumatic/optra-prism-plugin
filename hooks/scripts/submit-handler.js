@@ -23,7 +23,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { GCK_KEY, INGEST_URL } = require('../../lib/env');
+const { API_KEY, INGEST_URL } = require('../../lib/env');
 const { createDebug } = require('../../lib/debug');
 const { readStdin } = require('../../lib/stdin');
 const { sendPrompt } = require('../../lib/ingest');
@@ -43,7 +43,7 @@ const SKIP_PATTERNS = [
 readStdin().then(async (data) => {
   const prompt = (data.prompt || '').trim();
 
-  debug(`HOOK FIRED session_id=${data.session_id || '(none)'} prompt_length=${prompt.length} gck=${GCK_KEY ? 'set' : 'missing'}`);
+  debug(`HOOK FIRED session_id=${data.session_id || '(none)'} prompt_length=${prompt.length} api_key=${API_KEY ? 'set' : 'missing'}`);
 
   // Let /prism: commands through
   if (prompt.startsWith('/prism:')) {
@@ -52,9 +52,9 @@ readStdin().then(async (data) => {
   }
 
   // If no key, warn but allow prompt through
-  if (!GCK_KEY || !INGEST_URL) {
+  if (!API_KEY || !INGEST_URL) {
     debug('WARN: no API key or ingest URL --- allowing prompt through');
-    process.stderr.write('[Prism] API key not configured. Run /prism:setup to set your gck_* key.\n');
+    process.stderr.write('[Prism] API key not configured. Run /prism:setup prism_YOUR_KEY.\n');
     process.exit(0);
   }
 
