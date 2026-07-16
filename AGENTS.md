@@ -18,6 +18,16 @@ Repository instructions for the Optra Prism Claude Code plugin.
 - Promote only the explicitly approved feature changes from `develop` to a release candidate based on `main`.
 - Do not rename, reset, rebase, or otherwise move candidate branches unless the user explicitly requests it.
 
+## Release Projection
+
+- Treat promotion from `develop` to a release branch or `main` as a file/hunk projection, not commit transport.
+- Never merge, rebase, or cherry-pick a `develop` commit into a release branch or `main`, even when its subject describes only a feature.
+- Create each release branch from the current `main`, copy only the approved distribution file/hunk changes, and create new signed conventional commits on the release branch.
+- Exclude development-only content from release branches and `main`, including `.github/`, `AGENTS.md`, `CLAUDE.md`, `test/`, and test/development scripts or tooling in `package.json`.
+- If a `develop` commit or file mixes distribution and development changes, select only the distribution hunks. Never copy the whole commit or file merely for convenience.
+- Apply release metadata (`CHANGELOG.md` and synchronized version fields) as the final, separate release commit after all approved feature projections.
+- Before handoff, compare the release candidate with both `main` and the corresponding `develop` release state. Every difference must be either an approved distribution change or an explicitly excluded development-only change.
+
 ## Implementation
 
 - Use conventional commits with subjects that state implementation facts only.
