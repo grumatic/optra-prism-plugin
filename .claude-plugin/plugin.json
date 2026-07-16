@@ -31,10 +31,16 @@
       "description": "Minimum prompt efficiency score 0-10 (prompts below this are blocked)",
       "sensitive": false
     },
-    "showStatusLine": {
-      "title": "Show Status Line",
+    "showRealtimeSummary": {
+      "title": "Show Realtime Summary",
       "type": "boolean",
-      "description": "Show the [Prism] status line after every turn (default: true). Use /prism:status to toggle.",
+      "description": "Show Prism realtime summaries (default: true).",
+      "sensitive": false
+    },
+    "showStatusLine": {
+      "title": "Show Status Line (Deprecated)",
+      "type": "boolean",
+      "description": "Deprecated. This setting has no effect; use Show Realtime Summary instead.",
       "sensitive": false
     }
   }

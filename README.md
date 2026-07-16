@@ -60,7 +60,7 @@ Three hooks run automatically:
 | Command | Description |
 |---------|-------------|
 | `/prism:setup` | Configure API key, enable telemetry |
-| `/prism:status` | Connection health, status line, session info |
+| `/prism:status` | Connection health, realtime summary setting, session info |
 | `/prism:report` | Weekly review — this week vs last week, PRISM grade, habits, worst prompts |
 | `/prism:help` | List all available commands |
 | `/prism:uninstall` | Remove plugin config and OTEL settings |
@@ -72,6 +72,16 @@ Service URLs are resolved automatically from your API key via the config endpoin
 ```bash
 PRISM_INGEST_URL=http://localhost:9005 claude
 ```
+### Realtime summary
+
+`showRealtimeSummary` is enabled by default. The effective value is resolved in this order:
+
+1. `CLAUDE_PLUGIN_OPTION_SHOWREALTIMESUMMARY`
+2. `CLAUDE_PLUGIN_OPTION_showRealtimeSummary` (compatibility name)
+3. Own-property `showRealtimeSummary` in `~/.prism/config.json`
+4. Default `true`
+
+Only boolean values and the exact strings `true` / `false` are accepted. An invalid selected source uses the safe default instead of falling through. A legacy config change is masked by either environment source and must not be treated as changing the active setting. `showStatusLine` is deprecated and has no effect on this setting.
 
 ## How It Works
 

@@ -23,15 +23,17 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { API_KEY, INGEST_URL } = require('../../lib/env');
-const { createDebug } = require('../../lib/debug');
 const { readStdin } = require('../../lib/stdin');
-const { sendPrompt } = require('../../lib/ingest');
-const { readState, writeState, getSessionName } = require('../../lib/session');
 
 const ADVISOR_CONTEXT_FILE = path.join(os.homedir(), '.prism', 'advisor-context.json');
 
-const debug = createDebug('submit-handler');
+let API_KEY;
+let INGEST_URL;
+let debug;
+let sendPrompt;
+let readState;
+let writeState;
+let getSessionName;
 
 // Short prompts that are navigational / meta --- skip processing
 const SKIP_PATTERNS = [
@@ -39,17 +41,22 @@ const SKIP_PATTERNS = [
   /^(y|n|yes|no|ok|done|thanks|exit|quit|help|continue|go ahead|looks good|lgtm|approve)$/i,
   /^\!/, // shell passthrough
 ];
+function isPrismControlPrompt(prompt) {
+  return prompt.startsWith('/prism:');
+}
 
 readStdin().then(async (data) => {
   const prompt = (data.prompt || '').trim();
 
-  debug(`HOOK FIRED session_id=${data.session_id || '(none)'} prompt_length=${prompt.length} api_key=${API_KEY ? 'set' : 'missing'}`);
-
-  // Let /prism: commands through
-  if (prompt.startsWith('/prism:')) {
-    debug('allowing /prism: command through');
+  if (isPrismControlPrompt(prompt)) {
     process.exit(0);
   }
+  ({ API_KEY, INGEST_URL } = require('../../lib/env'));
+  debug = require('../../lib/debug').createDebug('submit-handler');
+  ({ sendPrompt } = require('../../lib/ingest'));
+  ({ readState, writeState, getSessionName } = require('../../lib/session'));
+
+  debug(`HOOK FIRED session_id=${data.session_id || '(none)'} prompt_length=${prompt.length} api_key=${API_KEY ? 'set' : 'missing'}`);
 
   // If no key, warn but allow prompt through
   if (!API_KEY || !INGEST_URL) {
@@ -85,7 +92,7 @@ readStdin().then(async (data) => {
   recordAndCapture(data, prompt);
 
 }).catch((err) => {
-  debug(`FATAL: ${err.message || err}\n${err.stack || ''}`);
+  if (debug) debug(`FATAL: ${err.message || err}\n${err.stack || ''}`);
   process.exit(0); // fail open
 });
 
