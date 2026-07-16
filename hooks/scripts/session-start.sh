@@ -75,9 +75,13 @@ esac
 # PRISM_INGEST_URL is inherited only when explicitly supplied by the user; this
 # hook never writes it to CLAUDE_ENV_FILE.
 
-RESOLVED_URLS=$(node -e "
-  const { getCachedConfig, getConfig, fetchConfig, resolveIngestUrl } = require('${PLUGIN_ROOT}/lib/config');
-  const apiKey = '${API_KEY}';
+RESOLVED_URLS=$(
+  PRISM_SESSION_API_KEY="$API_KEY" PRISM_PLUGIN_ROOT="$PLUGIN_ROOT" node 2>/dev/null <<'NODE' || echo '{}'
+  const path = require("path");
+  const { getCachedConfig, getConfig, fetchConfig, resolveIngestUrl } = require(
+    path.join(process.env.PRISM_PLUGIN_ROOT, "lib", "config")
+  );
+  const apiKey = process.env.PRISM_SESSION_API_KEY;
 
   async function resolve() {
     // Use the cache only if it actually exists and is valid (getCachedConfig
@@ -94,13 +98,24 @@ RESOLVED_URLS=$(node -e "
 
   resolve()
     .then(c => process.stdout.write(JSON.stringify(c)))
-    .catch(() => process.stdout.write('{}'));
-" 2>/dev/null || echo '{}')
+    .catch(() => process.stdout.write("{}"));
+NODE
+)
 
 INGEST_URL=$(echo "$RESOLVED_URLS" | node -e "
   const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
   process.stdout.write(d.ingest_url || '');
 " 2>/dev/null || true)
+
+CONFIG_SOURCE=$(echo "$RESOLVED_URLS" | node -e "
+  const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+  process.stdout.write(d.source || '');
+" 2>/dev/null || true)
+
+if [ "$CONFIG_SOURCE" = "auth-error" ]; then
+  echo "[Prism] WARNING: Prism API key was rejected; telemetry is disabled." >&2
+  exit 0
+fi
 
 if [ -z "$INGEST_URL" ]; then
   echo "[Prism] WARNING: Explicit ingest URL override is invalid; ingest and OTEL sync are disabled." >&2
@@ -167,11 +182,9 @@ if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
   # self-reinforcing loop where the hook-set value persists across sessions,
   # making it impossible to distinguish user overrides from hook defaults.
   # Skills and lib/env.js still resolve local config → cache → production.
-  cat >> "$CLAUDE_ENV_FILE" <<EOF
-export PRISM_THRESHOLD=${PRISM_THRESHOLD}
-export PRISM_API_KEY=${API_KEY}
-export PRISM_DEBUG=${PRISM_DEBUG:-0}
-EOF
+  printf 'export PRISM_THRESHOLD=%q\n' "$PRISM_THRESHOLD" >> "$CLAUDE_ENV_FILE"
+  printf 'export PRISM_API_KEY=%q\n' "$API_KEY" >> "$CLAUDE_ENV_FILE"
+  printf 'export PRISM_DEBUG=%q\n' "${PRISM_DEBUG:-0}" >> "$CLAUDE_ENV_FILE"
 fi
 
 # ─── Version update notification ───

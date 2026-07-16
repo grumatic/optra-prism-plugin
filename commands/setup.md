@@ -33,19 +33,7 @@ No API key? Get one at: https://dashboard.optra-prism.com/setup
 
 4. Fetch the latest service URLs and guarantee `~/.prism/config-cache.json` exists (writes production fallback URLs if the endpoint is unreachable):
    ```bash
-   node -e "
-     const c = require('$PLUGIN_DIR/lib/config');
-     c.ensureCache('$API_KEY').then(r => {
-       console.log('Config cached (' + r.source + '): ' + r.ingest_url);
-       if (r._changed && r._changed.length > 0) {
-         console.log('URLs updated:');
-         r._changed.forEach(ch => console.log('  ' + ch.key + ': ' + ch.from + ' → ' + ch.to));
-       }
-       if (r.source === 'fallback') {
-         console.log('WARNING: config endpoint unreachable — using hardcoded prod URLs. If the key is for a non-prod environment, telemetry will go to the wrong place.');
-       }
-     });
-   "
+   PRISM_API_KEY="$API_KEY" node "$PLUGIN_DIR/lib/setup.js" cache
    ```
 
 5. **Resolve target scope** — determine where OTEL vars should live:
@@ -83,12 +71,7 @@ No API key? Get one at: https://dashboard.optra-prism.com/setup
 8. **Notify the dashboard** that setup is complete. Best-effort — never block on the result; the dashboard's Verify modal will fall back to the first-prompt signal if this ping doesn't land. Auth-resolved `developer_id` / `org_id` are written server-side; we only send a minimal body.
 
    ```bash
-   node -e "
-     const { notifySetupComplete } = require('$PLUGIN_DIR/lib/notify');
-     notifySetupComplete('$API_KEY').then(ok => {
-       if (!ok) console.log('(setup-complete ping skipped — dashboard will fall back to first-prompt detection)');
-     });
-   "
+   PRISM_API_KEY="$API_KEY" node "$PLUGIN_DIR/lib/setup.js" notify
    ```
 
 9. Confirm what was done and remind: "Scope: **<target>** (`<file-path>`). **Restart Claude Code to activate telemetry.**"
