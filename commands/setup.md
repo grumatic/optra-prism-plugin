@@ -1,28 +1,28 @@
 ---
 name: prism:setup
-description: Configure the Prism plugin with your gck_* API key
+description: Configure the Prism plugin with your Prism API key
 user-invocable: true
 ---
 
-Configure the Prism plugin with a `gck_*` API key.
+Configure the Prism plugin with a Prism API key.
 
 **Usage:**
-- `/prism:setup gck_YOUR_KEY` — default scope (keeps current scope if already set up; else user).
-- `/prism:setup gck_YOUR_KEY --user` — activate for every project (writes to `~/.claude/settings.json`).
-- `/prism:setup gck_YOUR_KEY --project` — activate only in this project (writes to `$CLAUDE_PROJECT_DIR/.claude/settings.local.json`, auto-gitignored).
+- `/prism:setup prism_YOUR_KEY` — default scope (keeps current scope if already set up; else user).
+- `/prism:setup prism_YOUR_KEY --user` — activate for every project (writes to `~/.claude/settings.json`).
+- `/prism:setup prism_YOUR_KEY --project` — activate only in this project (writes to `$CLAUDE_PROJECT_DIR/.claude/settings.local.json`, auto-gitignored).
 
 No API key? Get one at: https://dashboard.optra-prism.com/setup
 
 **Scope rules:**
-- OTEL env vars (including the gck_* secret) live in exactly one scope at a time.
-- We **never** write to `$CLAUDE_PROJECT_DIR/.claude/settings.json` (shared, committed) because the gck_* key embeds in `OTEL_EXPORTER_OTLP_HEADERS`.
+- OTEL env vars (including the Prism API key) live in exactly one scope at a time.
+- We **never** write to `$CLAUDE_PROJECT_DIR/.claude/settings.json` (shared, committed) because the API key embeds in `OTEL_EXPORTER_OTLP_HEADERS`.
 - Switching scopes moves the vars (does not duplicate).
 
 **Steps:**
 
-1. Read existing config from `~/.prism/config.json` (if it exists). If a key already exists and no new key was provided, show the prefix (e.g., `gck_abc12...`) and ask if they want to replace it.
+1. Read existing config from `~/.prism/config.json` (if it exists). If a key already exists and no new key was provided, state "Prism API key configured" without showing any part of the key and ask if they want to replace it.
 
-2. Validate the key starts with `gck_`. If not: "Usage: `/prism:setup gck_YOUR_KEY [--user|--project]`"
+2. Validate the key with `$PLUGIN_DIR/lib/api-key.js` `isSupportedApiKey()`. If invalid: "Usage: `/prism:setup prism_YOUR_KEY [--user|--project]`"
 
 3. Write the plugin config with a read-modify-write: preserve all existing fields (including `ingest_url`), update `apiKey`, and preserve `prismThreshold` (default to 4 when absent). Wipe the stale config cache so step 4 fetches fresh URLs for the (possibly new) key:
    ```bash

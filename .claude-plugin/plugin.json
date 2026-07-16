@@ -20,9 +20,9 @@
   ],
   "userConfig": {
     "apiKey": {
-      "title": "API Key",
+      "title": "Prism API Key",
       "type": "string",
-      "description": "Your Optra API key (starts with gck_)",
+      "description": "Your Prism API key",
       "sensitive": true
     },
     "prismThreshold": {

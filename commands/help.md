@@ -12,7 +12,7 @@ Display the following:
 Prism Plugin Commands
 
 Setup & Config
-  /prism:setup [gck_KEY]   Register API key and enable telemetry
+  /prism:setup [prism_KEY] Register Prism API key and enable telemetry
   /prism:status            Connection health, status line, session info
   /prism:uninstall         Remove plugin, clear all settings
 
@@ -25,7 +25,7 @@ Automatic (hooks — no command needed)
   Context nudge    Smart /compact and /clear advice based on context growth
 
 Getting started:
-  1. /prism:setup gck_YOUR_KEY    Set up your API key
+  1. /prism:setup prism_YOUR_KEY  Set up your Prism API key
   2. Start coding                 Telemetry activates automatically
   3. /prism:report                Compare this week vs last week
 
