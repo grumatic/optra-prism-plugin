@@ -12,6 +12,9 @@
     "url": "https://github.com/grumatic/optra-prism-plugin"
   },
   "homepage": "https://optra-prism.com",
+  "scripts": {
+    "test": "node --test"
+  },
   "files": [
     "lib/",
     "commands/",

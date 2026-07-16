@@ -34,6 +34,9 @@ jobs:
             node --check "$f"
           done
 
+      - name: Test
+        run: npm test
+
       - name: Validate hooks.json
         run: node -e "JSON.parse(require('fs').readFileSync('hooks/hooks.json', 'utf8'))"
 
