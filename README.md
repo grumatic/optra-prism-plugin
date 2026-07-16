@@ -8,6 +8,22 @@ PRISM intelligence plugin for Claude Code. Reviews prompts in real-time, capture
 - **Claude Code** with plugin support
 - A Prism API key — sign up at [optra-ai.com](https://optra-ai.com)
 
+### Claude Code compatibility
+
+Claude Code 2.1.161+ is required for core telemetry and Score v3 support.
+Claude Code 2.1.196+ supports full prompt correlation. Older versions remain
+best-effort and are not blocked from ingest.
+
+| Capability | Claude Code boundary | Fallback when unavailable |
+|------------|----------------------|---------------------------|
+| Stop response capture | 2.1.47+ | Skip Hook response capture |
+| Native Plugin `userConfig` | 2.1.83+ | Use environment or local config |
+| OTEL tool correlation | 2.1.119+ | Disable direct tool correlation |
+| Numeric OTEL attributes | Format changes in 2.1.122 | Accept both string and number values |
+| Core telemetry and Score v3 | 2.1.161+ | Continue raw ingest as best-effort |
+| Native assistant response | 2.1.193+ | Disable response-aware analysis |
+| Exact prompt correlation | 2.1.196+ | Use legacy session-order fallback |
+
 ## Quick Start
 
 ```bash
