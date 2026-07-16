@@ -32,7 +32,7 @@ Show the Prism plugin configuration and connection health.
 
 4. **Active features:** OTel telemetry (always on), PRISM gate with threshold from config (always on), and prompt capture (always on).
 
-5. **Session:** Read `${CLAUDE_PLUGIN_DATA}/session-state.json` for turn count and duration.
+5. **Session:** Realtime session totals are stored in isolated, hashed runtime records and are intentionally not read from global command state.
 
 End with two lines:
 1. "Run `/prism:help` for all commands."

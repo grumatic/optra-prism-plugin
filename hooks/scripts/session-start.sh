@@ -246,17 +246,6 @@ if [ -n "$DATA_DIR" ]; then
   fi
 fi
 
-# ─── Reset session state ───
-
-if [ -n "$DATA_DIR" ]; then
-  STATE_FILE="${DATA_DIR}/session-state.json"
-  node -e "
-    const fs = require('fs');
-    fs.mkdirSync('${DATA_DIR}', { recursive: true });
-    fs.writeFileSync('${STATE_FILE}', JSON.stringify({ turnCount: 0, sessionStart: Date.now(), sessionId: '' }));
-  " 2>/dev/null || true
-fi
-
 # ─── Confirmation ───
 
 echo "[Prism] Session started — Prism API key configured" >&2
