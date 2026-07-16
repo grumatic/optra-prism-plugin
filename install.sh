@@ -3,7 +3,7 @@
 # Installs via Claude Code marketplace (preferred) or manual clone (fallback).
 #
 # Usage:
-#   curl -sL https://optra-ai.com/install-plugin.sh | bash -s -- gck_YOUR_KEY
+#   curl -sL https://optra-ai.com/install-plugin.sh | bash -s -- prism_YOUR_KEY
 #   curl -sL https://optra-ai.com/install-plugin.sh | bash   # configure key later
 
 set -euo pipefail
@@ -107,7 +107,7 @@ fi
 
 if [ -n "$API_KEY" ]; then
   case "$API_KEY" in
-    gck_*)
+    prism_*|gck_*)
       mkdir -p "$CONFIG_DIR"
       chmod 700 "$CONFIG_DIR"
       # Wipe stale config cache so the new key fetches fresh URLs.
@@ -128,7 +128,7 @@ if (!Object.prototype.hasOwnProperty.call(config, 'prismThreshold')) {
 fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
 NODE
       chmod 600 "$CONFIG_FILE"
-      info "API key saved: ${API_KEY:0:12}..."
+      info "Prism API key saved"
 
       # Sync OTEL settings — respect the existing scope if Prism was already
       # set up via /prism:setup --project, so we don't duplicate vars.
@@ -174,7 +174,7 @@ NODE
       ;;
     *)
       echo ""
-      echo "[prism] WARNING: Invalid key format — expected gck_*. Key not saved."
+      echo "[prism] WARNING: Invalid Prism API key format. Key not saved."
       echo "Run /prism:setup inside Claude Code to configure."
       ;;
   esac
@@ -183,6 +183,6 @@ else
   echo "No API key provided. You'll be prompted for it when installing the plugin."
   echo ""
   echo "  Or reinstall with your key:"
-  echo "  curl -sL https://optra-ai.com/install-plugin.sh | bash -s -- gck_YOUR_KEY"
+  echo "  curl -sL https://optra-ai.com/install-plugin.sh | bash -s -- prism_YOUR_KEY"
 fi
 echo ""

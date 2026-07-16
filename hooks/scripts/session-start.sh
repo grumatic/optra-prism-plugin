@@ -2,7 +2,7 @@
 # ─── Session Start Hook ───
 # Reads API key from userConfig (CLAUDE_PLUGIN_OPTION_*) or ~/.prism/config.json.
 # Resolves service URLs and local ingest overrides through lib/config.js.
-# Shows error on every session until a valid gck_* key is configured.
+# Shows error on every session until a valid Prism API key is configured.
 #
 # OTEL env vars are NOT set here — they must exist before Claude Code starts.
 # They live in one of:
@@ -35,7 +35,7 @@ if [ -z "$API_KEY" ]; then
   echo "" >&2
   echo "[Prism] No API key configured." >&2
   echo "        Reinstall with: /plugin install prism  (you'll be prompted for your key)" >&2
-  echo "        Or run: /prism:setup gck_YOUR_KEY" >&2
+  echo "        Or run: /prism:setup prism_YOUR_KEY" >&2
   echo "" >&2
   exit 0
 fi
@@ -60,11 +60,10 @@ PRISM_THRESHOLD="${PRISM_THRESHOLD:-4}"
 # ─── Validate key ───
 
 case "$API_KEY" in
-  gck_*) ;;
+  prism_*|gck_*) ;;
   *)
     echo "" >&2
-    echo "[Prism] Invalid API key format: '${API_KEY:0:8}...'" >&2
-    echo "        Expected key starting with gck_*" >&2
+    echo "[Prism] Invalid Prism API key format." >&2
     echo "        Reinstall with: /plugin install prism  (you'll be prompted for your key)" >&2
     echo "" >&2
     exit 0
@@ -170,7 +169,7 @@ if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
   # Skills and lib/env.js still resolve local config → cache → production.
   cat >> "$CLAUDE_ENV_FILE" <<EOF
 export PRISM_THRESHOLD=${PRISM_THRESHOLD}
-export PRISM_GCK_KEY=${API_KEY}
+export PRISM_API_KEY=${API_KEY}
 export PRISM_DEBUG=${PRISM_DEBUG:-0}
 EOF
 fi
@@ -205,7 +204,7 @@ fi
 
 # ─── Confirmation ───
 
-echo "[Prism] Session started — key=${API_KEY:0:12}..." >&2
+echo "[Prism] Session started — Prism API key configured" >&2
 echo "[Prism] Endpoints:" >&2
 echo "        Ingest:    ${INGEST_URL:-unknown}" >&2
 

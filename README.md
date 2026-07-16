@@ -6,7 +6,7 @@ PRISM intelligence plugin for Claude Code. Reviews prompts in real-time, capture
 
 - **Node.js 18+** (required for native `fetch`)
 - **Claude Code** with plugin support
-- An Optra API key (`gck_*`) — sign up at [optra-ai.com](https://optra-ai.com)
+- A Prism API key — sign up at [optra-ai.com](https://optra-ai.com)
 
 ## Quick Start
 
@@ -18,7 +18,7 @@ PRISM intelligence plugin for Claude Code. Reviews prompts in real-time, capture
 /plugin install prism@optra-prism
 
 # 3. Configure your API key
-/prism:setup gck_YOUR_API_KEY
+/prism:setup prism_YOUR_API_KEY
 
 # 4. Restart Claude Code for OTEL telemetry to take effect
 ```
@@ -26,7 +26,7 @@ PRISM intelligence plugin for Claude Code. Reviews prompts in real-time, capture
 ### Alternative: Shell installer
 
 ```bash
-curl -sL https://optra-ai.com/install-plugin.sh | bash -s -- gck_YOUR_KEY
+curl -sL https://optra-ai.com/install-plugin.sh | bash -s -- prism_YOUR_KEY
 ```
 
 ## What It Does
@@ -60,7 +60,7 @@ PRISM_INGEST_URL=http://localhost:9005 claude
 ## How It Works
 
 ```
-/prism:setup gck_KEY
+/prism:setup prism_KEY
     │
     ├─→ Calls config endpoint → resolves URLs from API key
     ├─→ Caches config locally
