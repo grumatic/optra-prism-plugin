@@ -1,7 +1,7 @@
 #!/bin/bash
 # ─── Session Start Hook ───
 # Reads API key from userConfig (CLAUDE_PLUGIN_OPTION_*) or ~/.prism/config.json.
-# Resolves service URLs from config endpoint cache (lib/config.js).
+# Resolves service URLs and local ingest overrides through lib/config.js.
 # Shows error on every session until a valid gck_* key is configured.
 #
 # OTEL env vars are NOT set here — they must exist before Claude Code starts.
@@ -43,7 +43,6 @@ fi
 # ─── Read other config (userConfig → legacy config → defaults) ───
 
 PRISM_THRESHOLD="${CLAUDE_PLUGIN_OPTION_prismThreshold:-}"
-ENABLE_GATEWAY="${CLAUDE_PLUGIN_OPTION_enableGateway:-}"
 
 if [ -f "$CONFIG_FILE" ]; then
   if [ -z "$PRISM_THRESHOLD" ]; then
@@ -54,18 +53,9 @@ if [ -f "$CONFIG_FILE" ]; then
       } catch {}
     " 2>/dev/null || true)
   fi
-  if [ -z "$ENABLE_GATEWAY" ]; then
-    ENABLE_GATEWAY=$(CONFIG_PATH="$CONFIG_FILE" node -e "
-      try {
-        const c = JSON.parse(require('fs').readFileSync(process.env.CONFIG_PATH, 'utf8'));
-        process.stdout.write(String(c.enableGateway || ''));
-      } catch {}
-    " 2>/dev/null || true)
-  fi
 fi
 
 PRISM_THRESHOLD="${PRISM_THRESHOLD:-4}"
-ENABLE_GATEWAY="${ENABLE_GATEWAY:-true}"
 
 # ─── Validate key ───
 
@@ -81,15 +71,13 @@ case "$API_KEY" in
     ;;
 esac
 
-# ─── Resolve URLs from config endpoint (cache → fetch → production fallback) ───
+# ─── Resolve URLs (local override → cache → fetch → production fallback) ───
 #
-# getConfig() reads cache + production fallbacks only (no env var overrides).
-# This prevents a self-reinforcing loop where this hook writes PRISM_INGEST_URL
-# to CLAUDE_ENV_FILE → next session getConfig() reads it → writes it again,
-# permanently locking to localhost even after setup.
+# PRISM_INGEST_URL is inherited only when explicitly supplied by the user; this
+# hook never writes it to CLAUDE_ENV_FILE.
 
 RESOLVED_URLS=$(node -e "
-  const { getCachedConfig, getConfig, fetchConfig } = require('${PLUGIN_ROOT}/lib/config');
+  const { getCachedConfig, getConfig, fetchConfig, resolveIngestUrl } = require('${PLUGIN_ROOT}/lib/config');
   const apiKey = '${API_KEY}';
 
   async function resolve() {
@@ -97,10 +85,12 @@ RESOLVED_URLS=$(node -e "
     // returns null on miss/expiry/key change). getConfig() can't be used to
     // detect a miss because it falls back to production URLs unconditionally.
     const cached = getCachedConfig(apiKey);
-    if (cached) return cached;
+    if (cached) return { ...cached, ingest_url: resolveIngestUrl(cached) };
     // Cache miss — fetch from config endpoint, then fall back to prod URLs.
     const fetched = await fetchConfig(apiKey);
-    return fetched || getConfig(apiKey);
+    return fetched
+      ? { ...fetched, ingest_url: resolveIngestUrl(fetched) }
+      : getConfig(apiKey);
   }
 
   resolve()
@@ -113,19 +103,10 @@ INGEST_URL=$(echo "$RESOLVED_URLS" | node -e "
   process.stdout.write(d.ingest_url || '');
 " 2>/dev/null || true)
 
-GATEWAY_URL=$(echo "$RESOLVED_URLS" | node -e "
-  const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
-  process.stdout.write(d.gateway_url || '');
-" 2>/dev/null || true)
-
-ANTHROPIC_BASE_URL=$(echo "$RESOLVED_URLS" | node -e "
-  const d = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
-  process.stdout.write(d.anthropic_base_url || d.gateway_url || '');
-" 2>/dev/null || true)
-
-# Only PRISM_INGEST_URL can be overridden (for local dev).
-# Default to production if config endpoint and cache are both unavailable.
-INGEST_URL="${PRISM_INGEST_URL:-${INGEST_URL:-https://ingest.optra-prism.com}}"
+if [ -z "$INGEST_URL" ]; then
+  echo "[Prism] WARNING: Explicit ingest URL override is invalid; ingest and OTEL sync are disabled." >&2
+  echo "[Prism] Fix or remove PRISM_INGEST_URL or ~/.prism/config.json.ingest_url" >&2
+fi
 
 # ─── Resolve OTEL scope and sync ───
 #
@@ -181,20 +162,12 @@ fi
 # ─── Write env vars ───
 
 if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
-  # Gateway routing — only when opted in
-  if [ "$ENABLE_GATEWAY" = "true" ] && [ -n "$ANTHROPIC_BASE_URL" ]; then
-    cat >> "$CLAUDE_ENV_FILE" <<EOF
-export ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL}
-export ANTHROPIC_CUSTOM_HEADERS="X-Gateway-Api-Key: ${API_KEY}
-x-prism-source: claude-code"
-EOF
-  fi
-
-  # Always set these (telemetry + scoring work without gateway)
+  # Telemetry and scoring settings only. User-owned Anthropic routing settings
+  # are intentionally neither written nor removed by this plugin.
   # Note: PRISM_INGEST_URL is intentionally NOT exported here to avoid a
   # self-reinforcing loop where the hook-set value persists across sessions,
   # making it impossible to distinguish user overrides from hook defaults.
-  # Skills and lib/env.js fall back to config cache → production URL when unset.
+  # Skills and lib/env.js still resolve local config → cache → production.
   cat >> "$CLAUDE_ENV_FILE" <<EOF
 export PRISM_THRESHOLD=${PRISM_THRESHOLD}
 export PRISM_GCK_KEY=${API_KEY}
@@ -232,15 +205,8 @@ fi
 
 # ─── Confirmation ───
 
-GATEWAY_STATUS="disabled"
-if [ "$ENABLE_GATEWAY" = "true" ]; then
-  GATEWAY_STATUS="enabled"
-fi
-
-echo "[Prism] Session started — gateway=${GATEWAY_STATUS} key=${API_KEY:0:12}..." >&2
+echo "[Prism] Session started — key=${API_KEY:0:12}..." >&2
 echo "[Prism] Endpoints:" >&2
 echo "        Ingest:    ${INGEST_URL:-unknown}" >&2
-echo "        Gateway:   ${GATEWAY_URL:-unknown}" >&2
-echo "        Anthropic: ${ANTHROPIC_BASE_URL:-unknown}" >&2
 
 exit 0
