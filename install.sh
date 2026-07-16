@@ -112,13 +112,21 @@ if [ -n "$API_KEY" ]; then
       chmod 700 "$CONFIG_DIR"
       # Wipe stale config cache so the new key fetches fresh URLs.
       rm -f "${CONFIG_DIR}/config-cache.json"
-      cat > "$CONFIG_FILE" <<EOF
-{
-  "apiKey": "${API_KEY}",
-  "prismThreshold": 4,
-  "enableGateway": false
+      CONFIG_PATH="$CONFIG_FILE" PRISM_API_KEY="$API_KEY" node <<'NODE'
+const fs = require('fs');
+const configPath = process.env.CONFIG_PATH;
+let existing = {};
+try {
+  const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) existing = parsed;
+} catch {}
+
+const config = { ...existing, apiKey: process.env.PRISM_API_KEY };
+if (!Object.prototype.hasOwnProperty.call(config, 'prismThreshold')) {
+  config.prismThreshold = 4;
 }
-EOF
+fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+NODE
       chmod 600 "$CONFIG_FILE"
       info "API key saved: ${API_KEY:0:12}..."
 
@@ -163,7 +171,6 @@ EOF
 
       echo ""
       echo "Start Claude Code — the plugin activates automatically."
-      echo "Gateway routing is disabled by default. Run /prism:status to enable budget limits, guardrails, and usage logging."
       ;;
     *)
       echo ""
