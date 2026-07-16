@@ -15,7 +15,9 @@ let sendPrompt;
 let readGit;
 let writeGit;
 let collectGitContext;
+let readSummary;
 
+const MAX_SYSTEM_MESSAGE_LENGTH = 10_000;
 function readHookStdin() {
   return new Promise((resolve) => {
     let input = '';
@@ -101,6 +103,35 @@ function payloadHash(payload) {
 
 let activeBarrier;
 let activeSessionId;
+function buildContextNudge(summary) {
+  const health = summary && summary.contextHealth;
+  if (!health || typeof health !== 'object') return null;
+
+  const { growth } = require('../../lib/realtime').gradeFor(health);
+  const turnCount = Number.isInteger(health.turnCount) ? health.turnCount : 0;
+  const growthLabel = Number.isFinite(growth) ? growth.toFixed(1) : '0.0';
+
+  if (growth > 10 || turnCount > 80) {
+    if (growth > 10 && turnCount > 80) {
+      return `[Prism] Context has grown ${growthLabel}× over ${turnCount} turns — consider /clear to start fresh.`;
+    }
+    if (growth > 10) {
+      return `[Prism] Context has grown ${growthLabel}× since this session began — consider /clear to start fresh.`;
+    }
+    return `[Prism] Context has reached ${turnCount} turns — consider /clear to start fresh.`;
+  }
+  if (growth > 3) {
+    return `[Prism] Context has grown ${growthLabel}× since this session began — run /compact to free context.`;
+  }
+  return null;
+}
+
+function emitSystemMessage(message, showRealtimeSummary) {
+  if (!showRealtimeSummary || !message) return;
+  process.stdout.write(`${JSON.stringify({
+    systemMessage: message.slice(0, MAX_SYSTEM_MESSAGE_LENGTH),
+  })}\n`);
+}
 
 async function main() {
   const data = await readHookStdin();
@@ -110,7 +141,7 @@ async function main() {
     return;
   }
 
-  ({ advanceBarrier, attachActive, failBarrier, promoteActive, readGit, writeGit } = require('../../lib/session'));
+  ({ advanceBarrier, attachActive, failBarrier, promoteActive, readGit, writeGit, readSummary } = require('../../lib/session'));
   const barrier = advanceBarrier(data.session_id, 'normal-pending');
   if (!barrier) return;
   activeBarrier = barrier;
@@ -131,14 +162,19 @@ async function main() {
   if (validPromptId(data.prompt_id)) activeRecord.submitPromptId = data.prompt_id;
   if (!attachActive(data.session_id, activeRecord)) return;
 
-  const { API_KEY, INGEST_URL } = require('../../lib/env');
+  const { API_KEY, INGEST_URL, SHOW_REALTIME_SUMMARY } = require('../../lib/env');
   debug = require('../../lib/debug').createDebug('submit-handler');
   ({ sendPrompt } = require('../../lib/ingest'));
   if (!API_KEY || !INGEST_URL) {
     failBarrier(data.session_id, barrier.epoch);
-    process.stderr.write('[Prism] API key not configured. Run /prism:setup prism_YOUR_KEY.\n');
+    emitSystemMessage(
+      '[Prism] API key not configured. Run /prism:setup prism_YOUR_KEY.',
+      SHOW_REALTIME_SUMMARY,
+    );
     return;
   }
+  const nudge = buildContextNudge(readSummary(data.session_id));
+  emitSystemMessage(nudge, SHOW_REALTIME_SUMMARY);
 
   try {
     const result = await sendPrompt(payload);
