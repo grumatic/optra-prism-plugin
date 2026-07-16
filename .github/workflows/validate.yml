@@ -2,8 +2,13 @@ name: Validate Plugin
 
 on:
   push:
-    branches: [main]
+    branches: [develop]
   pull_request:
+    branches: [develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   validate:
@@ -14,7 +19,15 @@ jobs:
         with:
           node-version: '18'
 
-      - name: Validate plugin.json
+      - name: Install Claude Code validator
+        run: npm install --global @anthropic-ai/claude-code@2.1.207
+
+      - name: Validate plugin manifests
+        run: |
+          claude plugin validate .claude-plugin/plugin.json --strict
+          claude plugin validate .claude-plugin/marketplace.json --strict
+
+      - name: Validate release metadata
         run: |
           node -e "
             const p = JSON.parse(require('fs').readFileSync('.claude-plugin/plugin.json', 'utf8'));
@@ -24,7 +37,9 @@ jobs:
             if (!p.name) throw new Error('Missing name in plugin.json');
             if (p.version !== pkg.version) throw new Error('Version mismatch: plugin.json=' + p.version + ' package.json=' + pkg.version);
             const mp = m.plugins.find(x => x.name === p.name);
-            if (mp && mp.version !== p.version) throw new Error('Version mismatch: marketplace.json=' + mp.version);
+            if (!mp) throw new Error('Missing plugin entry in marketplace.json: ' + p.name);
+            if (mp.version !== p.version) throw new Error('Version mismatch: marketplace.json=' + mp.version);
+            if (mp.source !== './') throw new Error('Unexpected marketplace source: ' + mp.source);
             console.log('OK: ' + p.name + '@' + p.version);
           "
 
