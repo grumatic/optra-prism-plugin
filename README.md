@@ -11,13 +11,15 @@ PRISM intelligence plugin for Claude Code. Reviews prompts in real-time, capture
 ### Claude Code compatibility
 
 Claude Code 2.1.161+ is required for core telemetry and Score v3 support.
-Claude Code 2.1.196+ supports full prompt correlation. Older versions remain
-best-effort and are not blocked from ingest.
+Claude Code 2.1.196+ supports full prompt correlation (a reviewed declarative
+boundary, not a runtime semver gate). Older versions remain best-effort and are
+not blocked from ingest.
 
 | Capability | Claude Code boundary | Fallback when unavailable |
 |------------|----------------------|---------------------------|
 | Stop response capture | 2.1.47+ | Skip Hook response capture |
 | Native Plugin `userConfig` | 2.1.83+ | Use environment or local config |
+| Working-directory change hook | 2.1.83+ (conservative changelog-inferred floor) | Runtime shape-gate and submit-time refresh |
 | OTEL tool correlation | 2.1.119+ | Disable direct tool correlation |
 | Numeric OTEL attributes | Format changes in 2.1.122 | Accept both string and number values |
 | Core telemetry and Score v3 | 2.1.161+ | Continue raw ingest as best-effort |
@@ -47,12 +49,13 @@ curl -sL https://optra-ai.com/install-plugin.sh | bash -s -- prism_YOUR_KEY
 
 ## What It Does
 
-Three hooks run automatically:
+Four hooks run automatically:
 
 | Hook | Purpose |
 |------|---------|
 | **SessionStart** | Validates API key and configures OTEL telemetry |
 | **UserPromptSubmit** | Reviews prompts for specificity/scope and captures them to ingest for scoring |
+| **CwdChanged** | Refreshes sanitized Git repository metadata when the runtime supplies a valid working-directory change |
 | **Stop** | Captures prompt/response pairs for analytics, tracks turns, warns on context bloat |
 
 ## Commands

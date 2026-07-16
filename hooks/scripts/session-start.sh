@@ -22,14 +22,14 @@ if [ -z "$PRISM_PLUGIN_ROOT" ]; then
   PRISM_PLUGIN_ROOT="${SCRIPT_DIR:+$(cd "$SCRIPT_DIR/../.." >/dev/null 2>&1 && pwd)}"
 fi
 #
-# This is the only consumer of hook stdin. It validates the only two values
-# needed here and never persists the hook payload, source, or any prompt text.
+# This is the only consumer of hook stdin. It validates session identity and
+# source, then independently refreshes only sanitized Git context from cwd.
 PRISM_PLUGIN_ROOT="$PRISM_PLUGIN_ROOT" node -e '
   const path = require("path");
   let input = "";
   process.stdin.setEncoding("utf8");
   process.stdin.on("data", (chunk) => { input += chunk; });
-  process.stdin.on("end", () => {
+  process.stdin.on("end", async () => {
     const debug = process.env.PRISM_DEBUG === "1";
     const report = (reason) => {
       if (debug) process.stderr.write(`[Prism debug] SessionStart barrier skipped: ${reason}\n`);
@@ -49,6 +49,16 @@ PRISM_PLUGIN_ROOT="$PRISM_PLUGIN_ROOT" node -e '
         return;
       }
       if (!session.advanceBarrier(sessionId, "lifecycle")) report("lock unavailable");
+      const cwd = data && data.cwd;
+      if (typeof cwd === "string" && cwd.length > 0) {
+        try {
+          const { collectGitContext } = require(path.join(process.env.PRISM_PLUGIN_ROOT, "lib", "git"));
+          const context = await collectGitContext(cwd);
+          session.writeGit(sessionId, context);
+        } catch {
+          report("git context refresh failed");
+        }
+      }
     } catch {
       report("helper failure");
     }

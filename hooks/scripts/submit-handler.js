@@ -12,6 +12,9 @@ let attachActive;
 let failBarrier;
 let promoteActive;
 let sendPrompt;
+let readGit;
+let writeGit;
+let collectGitContext;
 
 function readHookStdin() {
   return new Promise((resolve) => {
@@ -46,7 +49,7 @@ function transcriptBoundary(transcriptPath) {
   try { return { byteOffset: fs.statSync(transcriptPath).size, lineOffset: 0 }; } catch { return { byteOffset: 0, lineOffset: 0 }; }
 }
 
-function frozenPayload(data, prompt, clientEventId) {
+function frozenPayload(data, prompt, clientEventId, git) {
   const payload = {
     prompt_text: prompt.slice(0, 2000),
     source: 'claude-code',
@@ -54,7 +57,42 @@ function frozenPayload(data, prompt, clientEventId) {
     client_event_id: clientEventId,
   };
   if (data.cwd) payload.cwd = data.cwd;
+  if (git) payload.metadata = { git };
   return payload;
+}
+
+async function gitMetadataForPrompt(data) {
+  if (typeof data.cwd !== 'string' || data.cwd.length === 0) return null;
+
+  let canonicalCwd;
+  try {
+    canonicalCwd = fs.realpathSync.native(data.cwd);
+  } catch {
+    return null;
+  }
+
+  let record = readGit(data.session_id);
+  const refreshedAt = record && record.refreshedAt ? Date.parse(record.refreshedAt) : NaN;
+  if (
+    !record
+    || record.canonicalCwd !== canonicalCwd
+    || !Number.isFinite(refreshedAt)
+    || Date.now() - refreshedAt >= 30_000
+  ) {
+    try {
+      const context = await collectGitContext(canonicalCwd);
+      record = writeGit(data.session_id, context);
+    } catch {
+      return null;
+    }
+  }
+
+  return record
+    && record.status === 'ok'
+    && record.canonicalCwd === canonicalCwd
+    && record.value
+    ? record.value
+    : null;
 }
 
 function payloadHash(payload) {
@@ -72,14 +110,16 @@ async function main() {
     return;
   }
 
-  ({ advanceBarrier, attachActive, failBarrier, promoteActive } = require('../../lib/session'));
+  ({ advanceBarrier, attachActive, failBarrier, promoteActive, readGit, writeGit } = require('../../lib/session'));
   const barrier = advanceBarrier(data.session_id, 'normal-pending');
   if (!barrier) return;
   activeBarrier = barrier;
   activeSessionId = data.session_id;
 
+  ({ collectGitContext } = require('../../lib/git'));
+  const git = await gitMetadataForPrompt(data);
   const clientEventId = crypto.randomUUID();
-  const payload = frozenPayload(data, prompt, clientEventId);
+  const payload = frozenPayload(data, prompt, clientEventId, git);
   const activeRecord = {
     epoch: barrier.epoch,
     clientEventId,
