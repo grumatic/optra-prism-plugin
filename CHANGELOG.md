@@ -5,6 +5,20 @@ All notable changes to the Prism plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-07-16
+
+### Added
+- Validated ingest base overrides through `PRISM_INGEST_URL` and `~/.prism/config.json.ingest_url`.
+- Plugin version provenance on config, hook, and OTLP requests.
+- Prism API key support with legacy `gck_*` compatibility.
+- Claude Code compatibility boundaries for individual plugin and OTEL capabilities.
+
+### Changed
+- Claude Code connection settings are no longer modified by the plugin.
+- Assistant response logging is disabled in generated OTEL settings.
+- API keys are passed to setup helpers through the process environment.
+- Rejected credentials are handled separately from transient config endpoint failures.
+
 ## [0.4.9] - 2026-05-27
 
 ### Changed
