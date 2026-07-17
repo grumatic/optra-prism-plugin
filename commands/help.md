@@ -13,16 +13,19 @@ Prism Plugin Commands
 
 Setup & Config
   /prism:setup [prism_KEY] Register Prism API key and enable telemetry
-  /prism:status            Connection health, status line, session info
+  /prism:status            Connection health, Lite session summary, exact correlation info
   /prism:uninstall         Remove plugin, clear all settings
 
 Review
+  /prism:realtime           Current session summary on demand — grade, cost, context, turns
   /prism:report            Weekly review — this week vs last week, PRISM grade, habits, worst prompts
 
 Automatic (hooks — no command needed)
-  Prompt advisor   Reviews prompts in realtime with rewrite advice when helpful
-  Response timer   Shows elapsed time and token count after each response
-  Context nudge    Smart /compact and /clear advice based on context growth
+  Prompt/response capture Uses exact host prompt_id correlation; unmatched turns are skipped
+  Lite summary         Shows grade, cost, context, and turn count when enabled
+  Lite summary (VS Code)  Panel does not render hook messages; use /prism:realtime
+  Context nudge        Recommends /compact above 3× growth; /clear above 10× or 80 turns
+  Terminal status line  Not supported; showStatusLine is deprecated
 
 Getting started:
   1. /prism:setup prism_YOUR_KEY  Set up your Prism API key
