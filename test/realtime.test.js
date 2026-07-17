@@ -132,7 +132,6 @@ test('exact Stop consumes one proven multi-assistant turn and separates totals f
   assert.match(result.stdout, /"systemMessage":"\[Prism\] B live · refactor \(t1\) · /);
   const summary = session.readSummary('exact-stop');
   assert.equal(summary.consumedTotals.input, 60_000);
-  assert.equal(summary.contextHealth.lastInputTokens, 30_000);
   assert.equal(summary.contextHealth.turnCount, 1);
   assert.deepEqual(summary.turnLog.map((entry) => entry.turn), [1]);
   assert.deepEqual(

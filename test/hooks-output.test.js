@@ -69,19 +69,6 @@ function assertJsonOrEmpty(stdout) {
   return JSON.parse(stdout);
 }
 
-function seedContextHealth(dataDir, sessionId, contextHealth) {
-  const original = process.env.CLAUDE_PLUGIN_DATA;
-  process.env.CLAUDE_PLUGIN_DATA = dataDir;
-  try {
-    assert.ok(session.updateSummary(sessionId, (summary) => ({
-      ...summary,
-      contextHealth: { ...summary.contextHealth, ...contextHealth },
-    })));
-  } finally {
-    if (original === undefined) delete process.env.CLAUDE_PLUGIN_DATA;
-    else process.env.CLAUDE_PLUGIN_DATA = original;
-  }
-}
 function readSessionRecord(dataDir, reader) {
   const original = process.env.CLAUDE_PLUGIN_DATA;
   process.env.CLAUDE_PLUGIN_DATA = dataDir;
@@ -618,64 +605,21 @@ test('submit uses JSON system messages for missing configuration and suppresses 
   assert.equal(assertJsonOrEmpty(hidden.stdout), null);
 });
 
-test('submit context nudges use strict growth and turn boundaries and remain JSON-only', () => {
-  const home = makeTempDir('prism-submit-nudge-home-');
-  const dataDir = makeTempDir('prism-submit-nudge-data-');
-  const interceptor = writeSuccessfulIngestInterceptor(home);
-  const cases = [
-    { label: 'growth-3', health: { firstInputTokens: 1, lastInputTokens: 3, turnCount: 0 }, message: null },
-    { label: 'growth-over-3', health: { firstInputTokens: 100, lastInputTokens: 301, turnCount: 0 }, message: /run \/compact/ },
-    { label: 'growth-10', health: { firstInputTokens: 1, lastInputTokens: 10, turnCount: 0 }, message: /run \/compact/ },
-    { label: 'growth-over-10', health: { firstInputTokens: 100, lastInputTokens: 1001, turnCount: 0 }, message: /consider \/clear/ },
-    { label: 'turn-80', health: { firstInputTokens: 1, lastInputTokens: 1, turnCount: 80 }, message: null },
-    { label: 'turn-over-80', health: { firstInputTokens: 1, lastInputTokens: 1, turnCount: 81 }, message: /consider \/clear/ },
-  ];
-
-  for (const { label, health, message } of cases) {
-    const sessionId = `nudge-${label}`;
-    seedContextHealth(dataDir, sessionId, health);
-    const result = spawnSync(process.execPath, [SUBMIT_HANDLER], {
-      cwd: ROOT,
-      encoding: 'utf8',
-      input: JSON.stringify({
-        session_id: sessionId,
-        prompt_id: `host-${label}`,
-        prompt: 'normal prompt',
-      }),
-      env: {
-        ...process.env,
-        HOME: home,
-        CLAUDE_PLUGIN_DATA: dataDir,
-        PRISM_API_KEY: 'prism_nudge_test',
-        PRISM_INGEST_URL: 'http://127.0.0.1:9',
-        CLAUDE_PLUGIN_OPTION_SHOWREALTIMESUMMARY: 'true',
-        NODE_OPTIONS: `--require=${interceptor}`,
-      },
-    });
-    assert.equal(result.status, 0, result.stderr);
-    assert.equal(result.stderr, '');
-    const output = assertJsonOrEmpty(result.stdout);
-    if (message) assert.match(output.systemMessage, message);
-    else assert.equal(output, null);
-  }
-});
-
-test('submit suppresses display nudges while retaining capture when realtime summaries are off', () => {
-  const home = makeTempDir('prism-submit-off-home-');
-  const dataDir = makeTempDir('prism-submit-off-data-');
-  const sessionId = 'submit-nudge-off';
-  seedContextHealth(dataDir, sessionId, { firstInputTokens: 1, lastInputTokens: 11, turnCount: 0 });
+test('submit emits no display output on a captured turn and retains capture', () => {
+  const home = makeTempDir('prism-submit-nooutput-home-');
+  const dataDir = makeTempDir('prism-submit-nooutput-data-');
+  const sessionId = 'submit-no-output';
   const result = spawnSync(process.execPath, [SUBMIT_HANDLER], {
     cwd: ROOT,
     encoding: 'utf8',
-    input: JSON.stringify({ session_id: sessionId, prompt_id: 'host-off', prompt: 'normal prompt' }),
+    input: JSON.stringify({ session_id: sessionId, prompt_id: 'host-nooutput', prompt: 'normal prompt' }),
     env: {
       ...process.env,
       HOME: home,
       CLAUDE_PLUGIN_DATA: dataDir,
-      PRISM_API_KEY: 'prism_off_test',
+      PRISM_API_KEY: 'prism_nooutput_test',
       PRISM_INGEST_URL: 'http://127.0.0.1:9',
-      CLAUDE_PLUGIN_OPTION_SHOWREALTIMESUMMARY: 'false',
+      CLAUDE_PLUGIN_OPTION_SHOWREALTIMESUMMARY: 'true',
       NODE_OPTIONS: `--require=${writeSuccessfulIngestInterceptor(home)}`,
     },
   });

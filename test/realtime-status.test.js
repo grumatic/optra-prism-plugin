@@ -28,8 +28,11 @@ function freshModules(dataDir, ingestUrl) {
     process.env.PRISM_INGEST_URL = ingestUrl;
     process.env.PRISM_API_KEY = 'prism_realtime_status_test';
   } else {
-    delete process.env.PRISM_INGEST_URL;
-    delete process.env.PRISM_API_KEY;
+    // Hermetic "no ingest": env.js otherwise falls back to the production URL
+    // and the real ~/.prism apiKey, which would make a live network call. A
+    // refused loopback port forces getJson to fail fast and return null.
+    process.env.PRISM_INGEST_URL = 'http://127.0.0.1:1';
+    process.env.PRISM_API_KEY = 'prism_realtime_status_test';
   }
   for (const key of Object.keys(require.cache)) {
     if (/lib[\\/](config|debug|env|ingest|session|realtime|realtime-status)\.js$/.test(key)) delete require.cache[key];

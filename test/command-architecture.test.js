@@ -24,8 +24,18 @@ function body(contents) {
 }
 
 function nodeInvocations(contents) {
-  return (body(contents).match(/node "\$PLUGIN_DIR/g) || []).length;
+  // Entrypoints resolve the plugin root via the official ${CLAUDE_PLUGIN_ROOT}
+  // substitution (not the bogus $PLUGIN_DIR, which never resolves).
+  return (body(contents).match(/node "\$\{CLAUDE_PLUGIN_ROOT\}/g) || []).length;
 }
+
+test('commands reference only Claude Code substitution variables, never bogus ones', () => {
+  for (const name of ['realtime', 'status', 'doctor', 'report', 'setup']) {
+    const contents = body(readCommand(name));
+    assert.doesNotMatch(contents, /\$PLUGIN_DIR|\$\{PLUGIN_DIR\}/, `${name}.md must not use $PLUGIN_DIR`);
+    assert.doesNotMatch(contents, /CLAUDE_CODE_SESSION_ID/, `${name}.md must not use $CLAUDE_CODE_SESSION_ID`);
+  }
+});
 
 test('read-only commands pre-authorize their node entrypoints', () => {
   for (const name of ['realtime', 'status', 'doctor', 'report']) {

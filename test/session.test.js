@@ -150,7 +150,6 @@ test('compact barrier reconciles a failed compact publish before readers expose 
     contextHealth: {
       ...current.contextHealth,
       turnCount: 5,
-      lastInputTokens: 100_000,
     },
   })));
 
@@ -173,7 +172,6 @@ test('compact barrier reconciles a failed compact publish before readers expose 
   assert.equal(turn.epoch, 1);
   assert.equal(summary.compactGeneration, 1);
   assert.equal(summary.contextHealth.turnCount, 0);
-  assert.equal(summary.contextHealth.lastInputTokens, 0);
   assert.equal(session.advanceCompactGeneration(sessionId).generation, 2);
 });
 test('concurrent barrier attempts serialize through the session lock', async () => {
