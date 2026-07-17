@@ -5,6 +5,23 @@ All notable changes to the Prism plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] - 2026-07-17
+
+### Added
+- `/prism:realtime` command printing the current session's turn summary and token detail on demand, for hosts that render no hook `systemMessage` output (VS Code panel).
+- `showRealtimeSummary` option controlling realtime summary display while capture continues.
+- Sanitized repository metadata (host/owner/repo, branch, head commit, dirty state, worktree flag) attached to prompt capture.
+
+### Changed
+- Stop hook emits correlated turn summaries authorized by transcript turn proof; token and cost figures derive from transcript usage records.
+- Prompt-submission user-facing output is routed through the documented hook JSON channel.
+
+### Deprecated
+- `showStatusLine` no longer has any effect; use `showRealtimeSummary` instead.
+
+### Removed
+- One-turn-delayed status line and legacy shared session state.
+
 ## [0.5.0] - 2026-07-16
 
 ### Added
