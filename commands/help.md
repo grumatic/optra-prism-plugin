@@ -17,11 +17,13 @@ Setup & Config
   /prism:uninstall         Remove plugin, clear all settings
 
 Review
+  /prism:realtime           Current session summary on demand — grade, cost, context, turns
   /prism:report            Weekly review — this week vs last week, PRISM grade, habits, worst prompts
 
 Automatic (hooks — no command needed)
   Prompt/response capture Uses exact host prompt_id correlation; unmatched turns are skipped
   Lite summary         Shows grade, cost, context, and turn count when enabled
+  Lite summary (VS Code)  Panel does not render hook messages; use /prism:realtime
   Context nudge        Recommends /compact above 3× growth; /clear above 10× or 80 turns
   Terminal status line  Not supported; showStatusLine is deprecated
 
