@@ -5,6 +5,16 @@ All notable changes to the Prism plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2026-07-17
+
+### Fixed
+- `/prism:*` commands resolve their entrypoint with the `${CLAUDE_PLUGIN_ROOT}` and `${CLAUDE_SESSION_ID}` substitutions instead of `$PLUGIN_DIR` / `$CLAUDE_CODE_SESSION_ID`, which never resolved — the previous forms broke the command path and triggered a shell-expansion permission prompt.
+- `/prism:realtime` reads the correct runtime session directory: it passes the plugin data dir explicitly (command context can inherit another plugin's `CLAUDE_PLUGIN_DATA`), and the fallback data location is the installed plugin data dir rather than `~/.prism`.
+- `/prism:realtime` falls back to the most recent session with completed turns, not merely the newest session directory (which may be an empty session created by slash commands only).
+
+### Removed
+- The Stop-hook context nudge and its context-token tracking (`firstInputTokens` / `lastInputTokens` / `responseTimes`); the plugin no longer estimates context health, which the editor status line already reports.
+
 ## [0.6.0] - 2026-07-17
 
 ### Added
