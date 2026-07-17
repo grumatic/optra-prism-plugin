@@ -53,7 +53,7 @@ Four hooks run automatically:
 | **SessionStart** | Validates API key and configures OTEL telemetry |
 | **UserPromptSubmit** | Reviews prompts for specificity/scope and captures them to ingest for scoring |
 | **CwdChanged** | Refreshes sanitized Git repository metadata when the runtime supplies a valid working-directory change |
-| **Stop** | Captures prompt/response pairs for analytics, tracks turns, warns on context bloat |
+| **Stop** | Captures prompt/response pairs for analytics, tracks turns, and relays the server-side PRISM realtime score |
 
 ## Commands
 
