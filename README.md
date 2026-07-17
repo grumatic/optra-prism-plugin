@@ -10,10 +10,7 @@ PRISM intelligence plugin for Claude Code. Reviews prompts in real-time, capture
 
 ### Claude Code compatibility
 
-Claude Code 2.1.161+ is required for core telemetry and Score v3 support.
-Claude Code 2.1.196+ supports full prompt correlation (a reviewed declarative
-boundary, not a runtime semver gate). Older versions remain best-effort and are
-not blocked from ingest.
+Claude Code 2.1.161+ is required for core telemetry and Score v3 support. Claude Code 2.1.196+ supports full prompt correlation (a reviewed declarative boundary, not a runtime semver gate). Older versions remain best-effort and are not blocked from ingest.
 
 | Capability | Claude Code boundary | Fallback when unavailable |
 |------------|----------------------|---------------------------|
@@ -56,7 +53,7 @@ Four hooks run automatically:
 | **SessionStart** | Validates API key and configures OTEL telemetry |
 | **UserPromptSubmit** | Reviews prompts for specificity/scope and captures them to ingest for scoring |
 | **CwdChanged** | Refreshes sanitized Git repository metadata when the runtime supplies a valid working-directory change |
-| **Stop** | Captures prompt/response pairs for analytics, tracks turns, warns on context bloat |
+| **Stop** | Captures prompt/response pairs for analytics, tracks turns, and relays the server-side PRISM realtime score |
 
 ## Commands
 
@@ -77,12 +74,12 @@ PRISM_INGEST_URL=http://localhost:9005 claude
 ```
 ### Realtime summary
 
-`showRealtimeSummary` is enabled by default. The effective value is resolved in this order:
+`showRealtimeSummary` is disabled by default — the Stop-hook score line is opt-in. Enable it by setting one of the sources below to `true`. The effective value is resolved in this order:
 
 1. `CLAUDE_PLUGIN_OPTION_SHOWREALTIMESUMMARY`
 2. `CLAUDE_PLUGIN_OPTION_showRealtimeSummary` (compatibility name)
 3. Own-property `showRealtimeSummary` in `~/.prism/config.json`
-4. Default `true`
+4. Default `false`
 
 Only boolean values and the exact strings `true` / `false` are accepted. An invalid selected source uses the safe default instead of falling through. A legacy config change is masked by either environment source and must not be treated as changing the active setting. `showStatusLine` is deprecated and has no effect on this setting.
 
