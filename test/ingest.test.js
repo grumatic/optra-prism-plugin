@@ -42,7 +42,7 @@ function closeServer() {
   });
 }
 
-async function loadIngestWithCapture(apiKey = API_KEY, envName = 'PRISM_API_KEY') {
+async function loadIngestWithCapture(apiKey = API_KEY, envName = 'PRISM_API_KEY', responseBody = 'accepted') {
   let resolveRequest;
   const requestReceived = new Promise((resolve) => { resolveRequest = resolve; });
 
@@ -58,7 +58,7 @@ async function loadIngestWithCapture(apiKey = API_KEY, envName = 'PRISM_API_KEY'
         path: request.url,
       });
       response.writeHead(202, { 'Content-Type': 'text/plain' });
-      response.end('accepted');
+      response.end(responseBody);
     });
   });
 
@@ -132,6 +132,7 @@ test('sendPrompt preserves the Hook prompt request and adds plugin provenance', 
     prompt_text: '안녕 Prism',
     source: 'claude-code-test',
     tool_session_id: 'session-prompt',
+    client_event_id: 'client-event-prompt',
     cwd: '/tmp/project',
     metadata: { editor: 'test', sequence: 1 },
   };
@@ -139,6 +140,7 @@ test('sendPrompt preserves the Hook prompt request and adds plugin provenance', 
     prompt_text: input.prompt_text,
     source: input.source,
     tool_session_id: input.tool_session_id,
+    client_event_id: input.client_event_id,
     cwd: input.cwd,
     metadata: input.metadata,
   };
@@ -202,4 +204,22 @@ test('sendPrompt preserves a legacy API key in the request header', async () => 
 
   assert.deepEqual(result, { status: 202, body: 'accepted' });
   assertRequest(request, '/v1/prompts', input, LEGACY_API_KEY);
+});
+test('debug logging records response metadata without echoing response contents', async () => {
+  const sentinel = 'prism_response_secret_sentinel';
+  const { ingest, requestReceived } = await loadIngestWithCapture(
+    API_KEY,
+    'PRISM_API_KEY',
+    JSON.stringify({ id: 'opaque-response-id', echoed_prompt: sentinel }),
+  );
+
+  await Promise.all([
+    ingest.sendPrompt({ prompt_text: 'private prompt', tool_session_id: 'debug-session' }),
+    requestReceived,
+  ]);
+
+  const debugLog = fs.readFileSync(path.join(homeDir, '.prism', 'logs', 'debug.log'), 'utf8');
+  assert.match(debugLog, /body_length=/);
+  assert.match(debugLog, /id=opaque-response-id/);
+  assert.doesNotMatch(debugLog, new RegExp(sentinel));
 });
