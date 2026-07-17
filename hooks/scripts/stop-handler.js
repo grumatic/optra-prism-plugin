@@ -94,8 +94,12 @@ async function main() {
     epoch: turn.epoch,
     clientEventId: active.clientEventId,
     submitPromptId: active.submitPromptId,
+    serverPromptId: active.serverPromptId,
   })) return;
 
+  // Local accounting is finalized once the exactly correlated turn is consumed.
+  // `processedUsageIds` keeps this safe if state is replayed.
+  const summary = updateSummary(data.session_id, (current) => summaryUpdate(current, proof, Date.parse(active.submittedAt)));
   if (!API_KEY || !INGEST_URL) {
     emitSystemMessage('[Prism] Realtime summary unavailable: ingest is not configured.');
     return;
@@ -107,6 +111,7 @@ async function main() {
   try {
     response = await sendResponse({
       tool_session_id: data.session_id,
+      prompt_id: active.serverPromptId,
       client_event_id: active.clientEventId,
       response_text: typeof data.last_assistant_message === 'string' ? data.last_assistant_message : '',
       input_tokens: totals.input,
@@ -121,8 +126,6 @@ async function main() {
     emitSystemMessage('[Prism] Realtime summary unavailable: response capture failed.');
     return;
   }
-
-  const summary = updateSummary(data.session_id, (current) => summaryUpdate(current, proof, Date.parse(active.submittedAt)));
   if (summary) emitSystemMessage(buildSystemMessage(summary));
 }
 

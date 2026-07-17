@@ -35,7 +35,8 @@ function validPromptId(value) {
 function persistedServerPromptId(body) {
   try {
     const parsed = JSON.parse(body);
-    return parsed && validPromptId(parsed.id) ? parsed.id : null;
+    const { validServerPromptId } = require('../../lib/session');
+    return parsed && validServerPromptId(parsed.id) ? parsed.id : null;
   } catch {
     return null;
   }
@@ -43,7 +44,7 @@ function persistedServerPromptId(body) {
 
 
 function isPrismControlPrompt(prompt) {
-  return prompt.startsWith('/prism:');
+  return /^[\x00-\x1F\s]*\/prism:/i.test(prompt);
 }
 
 function transcriptBoundary(transcriptPath) {
@@ -135,11 +136,12 @@ function emitSystemMessage(message, showRealtimeSummary) {
 
 async function main() {
   const data = await readHookStdin();
-  const prompt = typeof data.prompt === 'string' ? data.prompt.trim() : '';
-  if (isPrismControlPrompt(prompt)) {
-    require('../../lib/session').advanceBarrier(data.session_id, 'control');
+  const prompt = data && data.prompt;
+  if (typeof prompt !== 'string' || isPrismControlPrompt(prompt)) {
+    require('../../lib/session').advanceBarrier(data && data.session_id, 'control');
     return;
   }
+  const normalizedPrompt = prompt.trim();
 
   ({ advanceBarrier, attachActive, failBarrier, promoteActive, readGit, writeGit, readSummary } = require('../../lib/session'));
   const barrier = advanceBarrier(data.session_id, 'normal-pending');
@@ -150,7 +152,7 @@ async function main() {
   ({ collectGitContext } = require('../../lib/git'));
   const git = await gitMetadataForPrompt(data);
   const clientEventId = crypto.randomUUID();
-  const payload = frozenPayload(data, prompt, clientEventId, git);
+  const payload = frozenPayload(data, normalizedPrompt, clientEventId, git);
   const activeRecord = {
     epoch: barrier.epoch,
     clientEventId,
@@ -183,7 +185,7 @@ async function main() {
       !(result.status >= 200 && result.status < 300)
       || !serverPromptId
       || !validPromptId(data.prompt_id)
-      || !promoteActive(data.session_id, clientEventId, data.prompt_id)
+      || !promoteActive(data.session_id, clientEventId, data.prompt_id, serverPromptId)
     ) {
       failBarrier(data.session_id, barrier.epoch);
     }

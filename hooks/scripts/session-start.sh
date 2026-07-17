@@ -70,9 +70,8 @@ PLUGIN_ROOT="$PRISM_PLUGIN_ROOT"
 CONFIG_FILE="${HOME:-}/.prism/config.json"
 DATA_DIR="${CLAUDE_PLUGIN_DATA:-}"
 
-# ─── Read API key (userConfig → legacy config) ───
-
-API_KEY="${CLAUDE_PLUGIN_OPTION_apiKey:-}"
+# ─── Read API key (explicit env → userConfig → legacy config) ───
+API_KEY="${PRISM_API_KEY:-${PRISM_GCK_KEY:-${CLAUDE_PLUGIN_OPTION_APIKEY:-${CLAUDE_PLUGIN_OPTION_apiKey:-}}}}"
 
 if [ -z "$API_KEY" ] && [ -f "$CONFIG_FILE" ]; then
   API_KEY=$(CONFIG_PATH="$CONFIG_FILE" node -e "
@@ -92,9 +91,8 @@ if [ -z "$API_KEY" ]; then
   exit 0
 fi
 
-# ─── Read other config (userConfig → legacy config → defaults) ───
-
-PRISM_THRESHOLD="${CLAUDE_PLUGIN_OPTION_prismThreshold:-}"
+# ─── Read other config (explicit env → userConfig → legacy config → defaults) ───
+PRISM_THRESHOLD="${PRISM_THRESHOLD:-${CLAUDE_PLUGIN_OPTION_PRISMTHRESHOLD:-${CLAUDE_PLUGIN_OPTION_prismThreshold:-}}}"
 
 if [ -f "$CONFIG_FILE" ]; then
   if [ -z "$PRISM_THRESHOLD" ]; then
