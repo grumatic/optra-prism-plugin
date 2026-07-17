@@ -63,6 +63,7 @@ async function advanceInChild(dataDir, sessionId) {
 afterEach(() => {
   session._internals.setTestHook('afterReadRecordEntries', null);
   session._internals.setTestHook('beforeReleaseUnlink', null);
+  session._internals.setTestHook('beforeRecordPublish', null);
   if (originalDataDir === undefined) delete process.env.CLAUDE_PLUGIN_DATA;
   else process.env.CLAUDE_PLUGIN_DATA = originalDataDir;
   while (tempDirs.length > 0) fs.rmSync(tempDirs.pop(), { recursive: true, force: true });
@@ -140,6 +141,40 @@ test('epochs advance monotonically and compact generations are serialized', () =
   const compactTwo = session.advanceCompactGeneration(sessionId);
   assert.equal(compactOne.generation, 1);
   assert.equal(compactTwo.generation, 2);
+});
+test('compact barrier reconciles a failed compact publish before readers expose context health', () => {
+  const dataDir = makeDataDir();
+  const sessionId = 'compact-publish-recovery';
+  assert.ok(session.updateSummary(sessionId, (current) => ({
+    ...current,
+    contextHealth: {
+      ...current.contextHealth,
+      turnCount: 5,
+      lastInputTokens: 100_000,
+    },
+  })));
+
+  let injected = false;
+  session._internals.setTestHook('beforeRecordPublish', ({ name }) => {
+    if (name !== 'compact') return;
+    injected = true;
+    session._internals.setTestHook('beforeRecordPublish', null);
+    throw new Error('injected compact publish failure');
+  });
+
+  assert.equal(session.advanceCompactBarrier(sessionId), null);
+  assert.equal(injected, true);
+  const dir = sessionDir(dataDir, sessionId);
+  assert.equal(generationFiles(dir, 'turn').length, 1);
+  assert.equal(generationFiles(dir, 'compact').length, 0);
+
+  const summary = session.readSummary(sessionId);
+  const turn = session.readTurn(sessionId);
+  assert.equal(turn.epoch, 1);
+  assert.equal(summary.compactGeneration, 1);
+  assert.equal(summary.contextHealth.turnCount, 0);
+  assert.equal(summary.contextHealth.lastInputTokens, 0);
+  assert.equal(session.advanceCompactGeneration(sessionId).generation, 2);
 });
 test('concurrent barrier attempts serialize through the session lock', async () => {
   const dataDir = makeDataDir();
