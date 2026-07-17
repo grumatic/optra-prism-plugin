@@ -10,10 +10,7 @@ PRISM intelligence plugin for Claude Code. Reviews prompts in real-time, capture
 
 ### Claude Code compatibility
 
-Claude Code 2.1.161+ is required for core telemetry and Score v3 support.
-Claude Code 2.1.196+ supports full prompt correlation (a reviewed declarative
-boundary, not a runtime semver gate). Older versions remain best-effort and are
-not blocked from ingest.
+Claude Code 2.1.161+ is required for core telemetry and Score v3 support. Claude Code 2.1.196+ supports full prompt correlation (a reviewed declarative boundary, not a runtime semver gate). Older versions remain best-effort and are not blocked from ingest.
 
 | Capability | Claude Code boundary | Fallback when unavailable |
 |------------|----------------------|---------------------------|
