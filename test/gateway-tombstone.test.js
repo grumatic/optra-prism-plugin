@@ -241,10 +241,11 @@ test('session start does not export a key rejected by the config endpoint', () =
 test('setup command passes API keys through the process environment', () => {
   const contents = fs.readFileSync(path.join(ROOT, 'commands', 'setup.md'), 'utf8');
 
-  assert.equal((contents.match(/PRISM_API_KEY="\$API_KEY"/g) || []).length, 2);
-  assert.match(contents, /lib\/setup\.js" cache/);
-  assert.match(contents, /lib\/setup\.js" notify/);
-  assert.doesNotMatch(contents, /(?:ensureCache|notifySetupComplete)\(['"]\$API_KEY/);
+  assert.equal((contents.match(/PRISM_API_KEY="\$KEY"/g) || []).length, 1);
+  assert.match(contents, /lib\/setup\.js" apply/);
+  assert.doesNotMatch(contents, /lib\/setup\.js" cache/);
+  assert.doesNotMatch(contents, /lib\/setup\.js" notify/);
+  assert.doesNotMatch(contents, /apply\s+(?:--key|prism_)/);
 });
 
 test('installer preserves local config fields without publishing a routing control', () => {
