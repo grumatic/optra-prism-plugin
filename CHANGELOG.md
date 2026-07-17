@@ -5,6 +5,21 @@ All notable changes to the Prism plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-07-17
+
+### Added
+- Server-side PRISM score in the Stop-hook summary and `/prism:realtime`: the current session's most recent scored sub-session is fetched from ingest and rendered with its state (`live`/`settled`), intent, goal/rework markers, and turn range.
+- `/prism:realtime` session detail listing per-sub-session grade, state, intent, and turn range, plus a Today activity narrative from the server.
+
+### Changed
+- The Stop-hook summary now relays the real server PRISM grade instead of a locally computed heuristic; the grade shown always originates from the server.
+- `showRealtimeSummary` now defaults to **off**; the score line is opt-in via the option or `~/.prism/config.json`.
+- Slash commands compute and render their output in deterministic script entrypoints; command prompts only display the result. Read-only commands pre-authorize their entrypoint to avoid repeated permission prompts.
+- `/prism:setup` performs API-key validation, config writes, scope sync, and dashboard notification in a single script call; the key is passed only through the process environment.
+
+### Removed
+- Local "Lite" session-hygiene grade, the context-usage percentage, and the hardcoded context-window estimate from the summary line.
+
 ## [0.5.1] - 2026-07-17
 
 ### Added
@@ -35,6 +50,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Assistant response logging is disabled in generated OTEL settings.
 - API keys are passed to setup helpers through the process environment.
 - Rejected credentials are handled separately from transient config endpoint failures.
+
+### Removed
+- Gateway routing opt-in (`enableGateway`); API calls are never routed through the Optra gateway.
 
 ## [0.4.9] - 2026-05-27
 

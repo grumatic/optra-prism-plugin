@@ -1,7 +1,7 @@
 {
   "name": "prism",
   "description": "AI vibe coding intelligence for Claude Code — realtime coaching, PRISM scoring, and insights. Pairs with dashboard.optra-prism.com",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "author": {
     "name": "Optra",
     "url": "https://optra-prism.com"
@@ -34,7 +34,7 @@
     "showRealtimeSummary": {
       "title": "Show Realtime Summary",
       "type": "boolean",
-      "description": "Show Prism realtime summaries (default: true).",
+      "description": "Show Prism realtime score summaries (default: false).",
       "sensitive": false
     },
     "showStatusLine": {
