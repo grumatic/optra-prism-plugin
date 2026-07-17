@@ -5,9 +5,8 @@ user-invocable: true
 allowed-tools: Bash(node:*)
 ---
 
-Run:
-```bash
-node "$PLUGIN_DIR/lib/report.js"
-```
+Weekly Prism review:
 
-Display stdout verbatim. On a non-zero exit, display the script's stderr verbatim.
+!`node "${CLAUDE_PLUGIN_ROOT}/lib/report.js"`
+
+Display the output above verbatim.
