@@ -74,12 +74,12 @@ PRISM_INGEST_URL=http://localhost:9005 claude
 ```
 ### Realtime summary
 
-`showRealtimeSummary` is enabled by default. The effective value is resolved in this order:
+`showRealtimeSummary` is disabled by default — the Stop-hook score line is opt-in. Enable it by setting one of the sources below to `true`. The effective value is resolved in this order:
 
 1. `CLAUDE_PLUGIN_OPTION_SHOWREALTIMESUMMARY`
 2. `CLAUDE_PLUGIN_OPTION_showRealtimeSummary` (compatibility name)
 3. Own-property `showRealtimeSummary` in `~/.prism/config.json`
-4. Default `true`
+4. Default `false`
 
 Only boolean values and the exact strings `true` / `false` are accepted. An invalid selected source uses the safe default instead of falling through. A legacy config change is masked by either environment source and must not be treated as changing the active setting. `showStatusLine` is deprecated and has no effect on this setting.
 
