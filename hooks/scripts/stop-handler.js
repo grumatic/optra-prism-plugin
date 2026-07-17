@@ -8,15 +8,16 @@
 const crypto = require('crypto');
 const { API_KEY, INGEST_URL, SHOW_REALTIME_SUMMARY } = require('../../lib/env');
 const { readStdin } = require('../../lib/stdin');
-const { sendResponse } = require('../../lib/ingest');
+const { sendResponse, fetchRealtimeSubSessions } = require('../../lib/ingest');
 const { readTurn, consumeActive, updateSummary } = require('../../lib/session');
 const {
   validPromptId,
   proveTranscriptTurn,
   consumeUsage,
-  buildSystemMessage,
+  selectScoreRow,
+  mapTurnRange,
+  renderScoreLine,
   assistantContentHash,
-  isOpusModel,
 } = require('../../lib/realtime');
 
 const ACTIVE_TTL_MS = 30 * 60 * 1000;
@@ -50,13 +51,6 @@ function summaryUpdate(summary, proof, submittedAt) {
     firstInputTokens: previous.firstInputTokens || (last.input + last.cacheRead + last.cacheCreation),
     lastInputTokens: last.input + last.cacheRead + last.cacheCreation,
     responseTimes: [...(previous.responseTimes || []), elapsed].slice(-50),
-    opusLowOutputCount: (previous.opusLowOutputCount || 0)
-      // One increment per newly consumed usage identity, even when a turn
-      // replays multiple records that share the same stable id.
-      + addedIds.filter((id) => {
-        const usage = validUsage.find((item) => item.id === id);
-        return usage && isOpusModel(usage.model) && usage.output < 200;
-      }).length,
   } : previous;
   return {
     ...summary,
@@ -99,7 +93,17 @@ async function main() {
 
   // Local accounting is finalized once the exactly correlated turn is consumed.
   // `processedUsageIds` keeps this safe if state is replayed.
-  const summary = updateSummary(data.session_id, (current) => summaryUpdate(current, proof, Date.parse(active.submittedAt)));
+  const completedAt = new Date().toISOString();
+  const summary = updateSummary(data.session_id, (current) => {
+    const updated = summaryUpdate(current, proof, Date.parse(active.submittedAt));
+    return {
+      ...updated,
+      turnLog: [
+        ...(updated.turnLog || []),
+        { turn: updated.contextHealth.turnCount, completedAt },
+      ].slice(-50),
+    };
+  });
   if (!API_KEY || !INGEST_URL) {
     emitSystemMessage('[Prism] Realtime summary unavailable: ingest is not configured.');
     return;
@@ -107,17 +111,22 @@ async function main() {
 
   const validUsage = proof.usage.filter(Boolean);
   const { totals } = consumeUsage(validUsage, []);
+  const realtimeRequest = fetchRealtimeSubSessions({ claudeSessionId: data.session_id, limit: 5 });
   let response;
+  let rows;
   try {
-    response = await sendResponse({
-      tool_session_id: data.session_id,
-      prompt_id: active.serverPromptId,
-      client_event_id: active.clientEventId,
-      response_text: typeof data.last_assistant_message === 'string' ? data.last_assistant_message : '',
-      input_tokens: totals.input,
-      output_tokens: totals.output,
-      cost_usd: totals.unknownCost || validUsage.length !== proof.usage.length ? undefined : totals.cost,
-    });
+    [response, rows] = await Promise.all([
+      sendResponse({
+        tool_session_id: data.session_id,
+        prompt_id: active.serverPromptId,
+        client_event_id: active.clientEventId,
+        response_text: typeof data.last_assistant_message === 'string' ? data.last_assistant_message : '',
+        input_tokens: totals.input,
+        output_tokens: totals.output,
+        cost_usd: totals.unknownCost || validUsage.length !== proof.usage.length ? undefined : totals.cost,
+      }),
+      realtimeRequest,
+    ]);
   } catch {
     emitSystemMessage('[Prism] Realtime summary unavailable: response capture failed.');
     return;
@@ -126,7 +135,46 @@ async function main() {
     emitSystemMessage('[Prism] Realtime summary unavailable: response capture failed.');
     return;
   }
-  if (summary) emitSystemMessage(buildSystemMessage(summary));
+
+  let serverScore;
+  if (Array.isArray(rows)) {
+    const selected = selectScoreRow(rows);
+    if (selected) {
+      const range = mapTurnRange(
+        summary && summary.turnLog,
+        selected.row,
+        summary && summary.contextHealth.turnCount,
+      );
+      serverScore = {
+        state: selected.state,
+        grade: selected.state === 'live' ? selected.row.letter_grade : (selected.row.prompt_grade || selected.row.letter_grade),
+        intent: selected.row.intent_class || null,
+        goalComplete: selected.row.goal_complete === true,
+        rework: selected.row.rework === true,
+        turnStart: range.turnStart,
+        turnEnd: range.turnEnd,
+        subSessionId: selected.row.sub_session_id,
+        fetchedAt: new Date().toISOString(),
+      };
+      const stored = updateSummary(data.session_id, (current) => ({ ...current, serverScore }));
+      if (stored) serverScore = stored.serverScore;
+    } else {
+      serverScore = { state: 'scoring' };
+    }
+  } else {
+    serverScore = summary && summary.serverScore ? summary.serverScore : { state: 'no score' };
+  }
+
+  const display = summary || {
+    consumedTotals: { cost: totals.cost, unknownCost: totals.unknownCost },
+    contextHealth: { turnCount: 0 },
+  };
+  emitSystemMessage(renderScoreLine(
+    serverScore,
+    display.consumedTotals.cost,
+    display.consumedTotals.unknownCost,
+    display.contextHealth.turnCount,
+  ));
 }
 
 main().catch(() => {});

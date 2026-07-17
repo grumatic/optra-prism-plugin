@@ -108,7 +108,9 @@ function buildContextNudge(summary) {
   const health = summary && summary.contextHealth;
   if (!health || typeof health !== 'object') return null;
 
-  const { growth } = require('../../lib/realtime').gradeFor(health);
+  const first = Number.isFinite(health.firstInputTokens) ? health.firstInputTokens : 0;
+  const last = Number.isFinite(health.lastInputTokens) ? health.lastInputTokens : 0;
+  const growth = first > 0 ? last / first : 0;
   const turnCount = Number.isInteger(health.turnCount) ? health.turnCount : 0;
   const growthLabel = Number.isFinite(growth) ? growth.toFixed(1) : '0.0';
 
