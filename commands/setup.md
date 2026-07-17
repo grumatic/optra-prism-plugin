@@ -17,6 +17,11 @@ No API key? Get one at: https://dashboard.optra-prism.com/setup
 - OTEL env vars (including the Prism API key) live in exactly one scope at a time.
 - We **never** write to `$CLAUDE_PROJECT_DIR/.claude/settings.json` (shared, committed) because the API key embeds in `OTEL_EXPORTER_OTLP_HEADERS`.
 - Switching scopes moves the vars (does not duplicate).
+**Realtime summary setting:**
+- `showRealtimeSummary` defaults to enabled. Its effective value is resolved from `CLAUDE_PLUGIN_OPTION_SHOWREALTIMESUMMARY`, then `CLAUDE_PLUGIN_OPTION_showRealtimeSummary`, then the own-property `showRealtimeSummary` in `~/.prism/config.json`.
+- Only boolean `true` / `false` and exact lowercase strings `true` / `false` are accepted. An invalid selected source uses the safe default instead of falling through.
+- Preserve any legacy `showRealtimeSummary` value during setup, but do not report a legacy write as changing the active setting when either environment source masks it.
+- `showStatusLine` is deprecated; do not migrate it into `showRealtimeSummary`.
 
 **Steps:**
 

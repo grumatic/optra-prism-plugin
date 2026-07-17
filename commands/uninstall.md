@@ -40,9 +40,11 @@ Uninstall the Prism plugin and clean up all configuration.
    fi
    ```
 
-4. Remove plugin data and cache (`~/.prism` is handled by step 3's `cleanup-registries` — only deleted when no other scopes remain):
+4. Remove plugin data, including isolated runtime session state, and cache (`~/.prism` is handled by step 3's `cleanup-registries` — only deleted when no other scopes remain):
    ```bash
-   rm -rf "${CLAUDE_PLUGIN_DATA:-$HOME/.claude/plugins/data/prism-optra-prism}"
+   DATA_DIR="${CLAUDE_PLUGIN_DATA:-$HOME/.claude/plugins/data/prism-optra-prism}"
+   rm -rf "$DATA_DIR/runtime/sessions"
+   rm -rf "$DATA_DIR"
    rm -rf ~/.claude/plugins/cache/optra-prism ~/.claude/plugins/cache/optra-prism-*
    ```
 

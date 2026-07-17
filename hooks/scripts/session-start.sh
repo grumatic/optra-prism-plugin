@@ -12,15 +12,66 @@
 # and verifies the vars are correct; if they've drifted it re-syncs them for
 # the next session.
 
+# ─── Isolated lifecycle barrier (must run before every early exit) ───
+#
+# Resolve only the helper's path without strict-mode expansions so a missing
+# HOME or fallback-root calculation cannot bypass the lifecycle barrier.
+PRISM_PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-}"
+if [ -z "$PRISM_PLUGIN_ROOT" ]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)" || SCRIPT_DIR=""
+  PRISM_PLUGIN_ROOT="${SCRIPT_DIR:+$(cd "$SCRIPT_DIR/../.." >/dev/null 2>&1 && pwd)}"
+fi
+#
+# This is the only consumer of hook stdin. It validates session identity and
+# source, then independently refreshes only sanitized Git context from cwd.
+PRISM_PLUGIN_ROOT="$PRISM_PLUGIN_ROOT" node -e '
+  const path = require("path");
+  let input = "";
+  process.stdin.setEncoding("utf8");
+  process.stdin.on("data", (chunk) => { input += chunk; });
+  process.stdin.on("end", async () => {
+    const debug = process.env.PRISM_DEBUG === "1";
+    const report = (reason) => {
+      if (debug) process.stderr.write(`[Prism debug] SessionStart barrier skipped: ${reason}\n`);
+    };
+    try {
+      const session = require(path.join(process.env.PRISM_PLUGIN_ROOT, "lib", "session"));
+      session.cleanupStaleSessions();
+      const data = JSON.parse(input);
+      const sessionId = data && data.session_id;
+      const source = data && data.source;
+      if (typeof sessionId !== "string" || sessionId.length === 0 || sessionId.length > 1024) {
+        report("invalid session identity");
+        return;
+      }
+      if (typeof source !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(source)) {
+        report("invalid source");
+        return;
+      }
+      if (!session.advanceBarrier(sessionId, "lifecycle")) report("lock unavailable");
+      const cwd = data && data.cwd;
+      if (typeof cwd === "string" && cwd.length > 0) {
+        try {
+          const { collectGitContext } = require(path.join(process.env.PRISM_PLUGIN_ROOT, "lib", "git"));
+          const context = await collectGitContext(cwd);
+          session.writeGit(sessionId, context);
+        } catch {
+          report("git context refresh failed");
+        }
+      }
+    } catch {
+      report("helper failure");
+    }
+  });
+' || true
 set -euo pipefail
 
-CONFIG_FILE="${HOME}/.prism/config.json"
-PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}"
+PLUGIN_ROOT="$PRISM_PLUGIN_ROOT"
+CONFIG_FILE="${HOME:-}/.prism/config.json"
 DATA_DIR="${CLAUDE_PLUGIN_DATA:-}"
 
-# ─── Read API key (userConfig → legacy config) ───
-
-API_KEY="${CLAUDE_PLUGIN_OPTION_apiKey:-}"
+# ─── Read API key (explicit env → userConfig → legacy config) ───
+API_KEY="${PRISM_API_KEY:-${PRISM_GCK_KEY:-${CLAUDE_PLUGIN_OPTION_APIKEY:-${CLAUDE_PLUGIN_OPTION_apiKey:-}}}}"
 
 if [ -z "$API_KEY" ] && [ -f "$CONFIG_FILE" ]; then
   API_KEY=$(CONFIG_PATH="$CONFIG_FILE" node -e "
@@ -40,9 +91,8 @@ if [ -z "$API_KEY" ]; then
   exit 0
 fi
 
-# ─── Read other config (userConfig → legacy config → defaults) ───
-
-PRISM_THRESHOLD="${CLAUDE_PLUGIN_OPTION_prismThreshold:-}"
+# ─── Read other config (explicit env → userConfig → legacy config → defaults) ───
+PRISM_THRESHOLD="${PRISM_THRESHOLD:-${CLAUDE_PLUGIN_OPTION_PRISMTHRESHOLD:-${CLAUDE_PLUGIN_OPTION_prismThreshold:-}}}"
 
 if [ -f "$CONFIG_FILE" ]; then
   if [ -z "$PRISM_THRESHOLD" ]; then
@@ -202,17 +252,6 @@ if [ -n "$DATA_DIR" ]; then
     fi
     echo -n "$PLUGIN_VERSION" > "$LAST_VERSION_FILE"
   fi
-fi
-
-# ─── Reset session state ───
-
-if [ -n "$DATA_DIR" ]; then
-  STATE_FILE="${DATA_DIR}/session-state.json"
-  node -e "
-    const fs = require('fs');
-    fs.mkdirSync('${DATA_DIR}', { recursive: true });
-    fs.writeFileSync('${STATE_FILE}', JSON.stringify({ turnCount: 0, sessionStart: Date.now(), sessionId: '' }));
-  " 2>/dev/null || true
 fi
 
 # ─── Confirmation ───
