@@ -15,7 +15,6 @@ let sendPrompt;
 let readGit;
 let writeGit;
 let collectGitContext;
-let readSummary;
 
 const MAX_SYSTEM_MESSAGE_LENGTH = 10_000;
 function readHookStdin() {
@@ -104,30 +103,6 @@ function payloadHash(payload) {
 
 let activeBarrier;
 let activeSessionId;
-function buildContextNudge(summary) {
-  const health = summary && summary.contextHealth;
-  if (!health || typeof health !== 'object') return null;
-
-  const first = Number.isFinite(health.firstInputTokens) ? health.firstInputTokens : 0;
-  const last = Number.isFinite(health.lastInputTokens) ? health.lastInputTokens : 0;
-  const growth = first > 0 ? last / first : 0;
-  const turnCount = Number.isInteger(health.turnCount) ? health.turnCount : 0;
-  const growthLabel = Number.isFinite(growth) ? growth.toFixed(1) : '0.0';
-
-  if (growth > 10 || turnCount > 80) {
-    if (growth > 10 && turnCount > 80) {
-      return `[Prism] Context has grown ${growthLabel}× over ${turnCount} turns — consider /clear to start fresh.`;
-    }
-    if (growth > 10) {
-      return `[Prism] Context has grown ${growthLabel}× since this session began — consider /clear to start fresh.`;
-    }
-    return `[Prism] Context has reached ${turnCount} turns — consider /clear to start fresh.`;
-  }
-  if (growth > 3) {
-    return `[Prism] Context has grown ${growthLabel}× since this session began — run /compact to free context.`;
-  }
-  return null;
-}
 
 function emitSystemMessage(message, showRealtimeSummary) {
   if (!showRealtimeSummary || !message) return;
@@ -145,7 +120,7 @@ async function main() {
   }
   const normalizedPrompt = prompt.trim();
 
-  ({ advanceBarrier, attachActive, failBarrier, promoteActive, readGit, writeGit, readSummary } = require('../../lib/session'));
+  ({ advanceBarrier, attachActive, failBarrier, promoteActive, readGit, writeGit } = require('../../lib/session'));
   const barrier = advanceBarrier(data.session_id, 'normal-pending');
   if (!barrier) return;
   activeBarrier = barrier;
@@ -177,8 +152,6 @@ async function main() {
     );
     return;
   }
-  const nudge = buildContextNudge(readSummary(data.session_id));
-  emitSystemMessage(nudge, SHOW_REALTIME_SUMMARY);
 
   try {
     const result = await sendPrompt(payload);

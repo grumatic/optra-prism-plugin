@@ -38,19 +38,15 @@ function activeIsEligible(turn, data) {
   return Number.isFinite(submittedAt) && Date.now() - submittedAt >= 0 && Date.now() - submittedAt <= ACTIVE_TTL_MS;
 }
 
-function summaryUpdate(summary, proof, submittedAt) {
+function summaryUpdate(summary, proof) {
   const validUsage = proof.usage.filter(Boolean);
   const invalidUsage = validUsage.length !== proof.usage.length;
   const { totals, addedIds } = consumeUsage(validUsage, summary.processedUsageIds);
   const last = proof.usage.at(-1);
   const previous = summary.contextHealth;
-  const elapsed = Math.max(0, Date.now() - submittedAt);
   const contextHealth = last ? {
     ...previous,
     turnCount: (previous.turnCount || 0) + 1,
-    firstInputTokens: previous.firstInputTokens || (last.input + last.cacheRead + last.cacheCreation),
-    lastInputTokens: last.input + last.cacheRead + last.cacheCreation,
-    responseTimes: [...(previous.responseTimes || []), elapsed].slice(-50),
   } : previous;
   return {
     ...summary,
@@ -95,7 +91,7 @@ async function main() {
   // `processedUsageIds` keeps this safe if state is replayed.
   const completedAt = new Date().toISOString();
   const summary = updateSummary(data.session_id, (current) => {
-    const updated = summaryUpdate(current, proof, Date.parse(active.submittedAt));
+    const updated = summaryUpdate(current, proof);
     return {
       ...updated,
       turnLog: [
