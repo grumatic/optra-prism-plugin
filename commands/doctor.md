@@ -5,9 +5,8 @@ user-invocable: true
 allowed-tools: Bash(node:*)
 ---
 
-Run:
-```bash
-node "$PLUGIN_DIR/lib/doctor.js" --project-dir "$CLAUDE_PROJECT_DIR"
-```
+Prism diagnostic report:
 
-Display the output verbatim.
+!`node "${CLAUDE_PLUGIN_ROOT}/lib/doctor.js" --project-dir "${CLAUDE_PROJECT_DIR}"`
+
+Display the output above verbatim.
