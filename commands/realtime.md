@@ -2,6 +2,7 @@
 name: prism:realtime
 description: Show the current session's realtime Prism summary (grade, cost, context, turns)
 user-invocable: true
+allowed-tools: Bash(node:*)
 ---
 
 Show the realtime Prism summary for the current session.
