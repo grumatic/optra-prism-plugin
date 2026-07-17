@@ -126,7 +126,7 @@ test('exact Stop consumes one proven multi-assistant turn and separates totals f
     cwd: ROOT,
     encoding: 'utf8',
     input: JSON.stringify({ session_id: 'exact-stop', prompt_id: promptId, transcript_path: file, last_assistant_message: text }),
-    env: { ...process.env, HOME: home, CLAUDE_PLUGIN_DATA: data, PRISM_API_KEY: 'prism_test', PRISM_INGEST_URL: 'http://127.0.0.1:9', RESPONSE_MARKER: marker, NODE_OPTIONS: `--require=${interceptor(home)}` },
+    env: { ...process.env, HOME: home, CLAUDE_PLUGIN_DATA: data, PRISM_API_KEY: 'prism_test', PRISM_INGEST_URL: 'http://127.0.0.1:9', RESPONSE_MARKER: marker, CLAUDE_PLUGIN_OPTION_SHOWREALTIMESUMMARY: 'true', NODE_OPTIONS: `--require=${interceptor(home)}` },
   });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /"systemMessage":"\[Prism\] B live · refactor \(t1\) · /);
@@ -165,6 +165,7 @@ test('failed response capture retains accounting after the active turn is consum
       CLAUDE_PLUGIN_DATA: data,
       PRISM_API_KEY: 'prism_test',
       PRISM_INGEST_URL: 'http://127.0.0.1:9',
+      CLAUDE_PLUGIN_OPTION_SHOWREALTIMESUMMARY: 'true',
       RESPONSE_MARKER: marker,
       NODE_OPTIONS: `--require=${interceptor(home, 503)}`,
     },

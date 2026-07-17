@@ -64,7 +64,7 @@ test('resolves showRealtimeSummary by official env, compatibility env, legacy co
   assert.deepEqual(resolveShowRealtimeSummary(), { value: true, source: 'legacy' });
 
   fs.rmSync(path.join(homeDir, '.prism', 'config.json'));
-  assert.deepEqual(resolveShowRealtimeSummary(), { value: true, source: 'default' });
+  assert.deepEqual(resolveShowRealtimeSummary(), { value: false, source: 'default' });
 });
 
 test('accepts booleans and exact lowercase boolean strings, including false', () => {

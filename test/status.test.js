@@ -46,7 +46,7 @@ test('renders unconfigured status with invalid-option and shared-settings warnin
     scope: 'none',
     scopeWarnings: ['OTEL vars found in /workspace/project/.claude/settings.json (shared, likely checked in). This can leak your Prism API key — remove them manually.'],
     realtimeSummary: {
-      value: true,
+      value: false,
       source: 'env-official',
       error: 'Invalid boolean value from env-official; using the safe default.',
     },
@@ -67,7 +67,7 @@ test('renders unconfigured status with invalid-option and shared-settings warnin
     '**WARNING:** OTEL vars found in /workspace/project/.claude/settings.json (shared, likely checked in). This can leak your Prism API key — remove them manually.',
     '',
     '**Error:** Invalid boolean value from env-official; using the safe default.',
-    '**Realtime summary:** On (source: env-official)',
+    '**Realtime summary:** Off (source: env-official)',
     '',
     '**Ingest URL:** Invalid explicit override. Fix or remove PRISM_INGEST_URL or ~/.prism/config.json.ingest_url.',
     '**OTEL Logs:** unavailable (ingest override is invalid)',

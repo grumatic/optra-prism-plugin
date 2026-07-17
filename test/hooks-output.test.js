@@ -588,13 +588,24 @@ test('submit uses JSON system messages for missing configuration and suppresses 
     cwd: ROOT,
     encoding: 'utf8',
     input: JSON.stringify(input),
-    env,
+    env: { ...env, CLAUDE_PLUGIN_OPTION_SHOWREALTIMESUMMARY: 'true' },
   });
   assert.equal(shown.status, 0, shown.stderr);
   assert.equal(shown.stderr, '');
   assert.deepEqual(assertJsonOrEmpty(shown.stdout), {
     systemMessage: '[Prism] API key not configured. Run /prism:setup prism_YOUR_KEY.',
   });
+
+  // Opt-in default: without the option set, display output stays suppressed.
+  const defaulted = spawnSync(process.execPath, [SUBMIT_HANDLER], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    input: JSON.stringify({ ...input, session_id: 'missing-config-default' }),
+    env,
+  });
+  assert.equal(defaulted.status, 0, defaulted.stderr);
+  assert.equal(defaulted.stderr, '');
+  assert.equal(assertJsonOrEmpty(defaulted.stdout), null);
 
   const hidden = spawnSync(process.execPath, [SUBMIT_HANDLER], {
     cwd: ROOT,
@@ -637,6 +648,7 @@ test('submit context nudges use strict growth and turn boundaries and remain JSO
         CLAUDE_PLUGIN_DATA: dataDir,
         PRISM_API_KEY: 'prism_nudge_test',
         PRISM_INGEST_URL: 'http://127.0.0.1:9',
+        CLAUDE_PLUGIN_OPTION_SHOWREALTIMESUMMARY: 'true',
         NODE_OPTIONS: `--require=${interceptor}`,
       },
     });
@@ -692,6 +704,7 @@ test('real-host fixture completes submit-to-stop correlation without leaking pro
     CLAUDE_PLUGIN_DATA: dataDir,
     PRISM_API_KEY: 'prism_host_fixture',
     PRISM_INGEST_URL: 'http://127.0.0.1:9',
+    CLAUDE_PLUGIN_OPTION_SHOWREALTIMESUMMARY: 'true',
     NODE_OPTIONS: `--require=${interceptor}`,
   };
 
