@@ -234,6 +234,11 @@ test('normal prompts bind the captured server id to an opaque frozen payload', (
   assert.equal(turn.active.status, 'captured');
   assert.equal(turn.active.clientEventId, sent.client_event_id);
   assert.equal(turn.active.submitPromptId, 'submit-host-prompt-id');
+  assert.deepEqual(Object.keys(sent.metadata.git).sort(), [
+    'branch', 'dirty', 'head', 'host', 'owner', 'repo', 'worktree',
+  ]);
+  assert.equal(typeof sent.metadata.git.dirty, 'boolean');
+  assert.match(sent.metadata.git.head, /^[a-f0-9]{40,64}$/);
   assert.deepEqual(turn.active.transcriptBoundary, { byteOffset: 64 * 1024 * 1024, lineOffset: 0 });
   assert.equal(turn.active.frozenPayloadHash, crypto.createHash('sha256').update(JSON.stringify(sent)).digest('hex'));
   assert.equal(JSON.stringify(turn).includes(prompt), false);

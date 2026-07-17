@@ -10,6 +10,7 @@ const {
 const EXPECTED_BOUNDARIES = {
   stopResponse: '2.1.47',
   userConfig: '2.1.83',
+  cwdChanged: '2.1.83',
   toolCorrelation: '2.1.119',
   numericAttributesFrom: '2.1.122',
   coreEvents: '2.1.161',
