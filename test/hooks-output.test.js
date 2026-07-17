@@ -13,6 +13,10 @@ const STOP_HANDLER = path.join(ROOT, 'hooks', 'scripts', 'stop-handler.js');
 const SENTINEL = 'prism_submit_handler_secret_sentinel';
 const tempDirs = [];
 const session = require('../lib/session');
+const PREFLIGHT_FIXTURE = JSON.parse(fs.readFileSync(
+  path.resolve(ROOT, '..', 'artifacts', 'preflight-fixture.json'),
+  'utf8',
+));
 
 function makeTempDir(prefix) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -58,6 +62,58 @@ function seedActive(dataDir, sessionId) {
     if (original === undefined) delete process.env.CLAUDE_PLUGIN_DATA;
     else process.env.CLAUDE_PLUGIN_DATA = original;
   }
+}
+function assertJsonOrEmpty(stdout) {
+  if (stdout === '') return null;
+  assert.match(stdout, /^\{.*\}\n$/s);
+  return JSON.parse(stdout);
+}
+
+function seedContextHealth(dataDir, sessionId, contextHealth) {
+  const original = process.env.CLAUDE_PLUGIN_DATA;
+  process.env.CLAUDE_PLUGIN_DATA = dataDir;
+  try {
+    assert.ok(session.updateSummary(sessionId, (summary) => ({
+      ...summary,
+      contextHealth: { ...summary.contextHealth, ...contextHealth },
+    })));
+  } finally {
+    if (original === undefined) delete process.env.CLAUDE_PLUGIN_DATA;
+    else process.env.CLAUDE_PLUGIN_DATA = original;
+  }
+}
+function readSessionRecord(dataDir, reader) {
+  const original = process.env.CLAUDE_PLUGIN_DATA;
+  process.env.CLAUDE_PLUGIN_DATA = dataDir;
+  try {
+    return reader();
+  } finally {
+    if (original === undefined) delete process.env.CLAUDE_PLUGIN_DATA;
+    else process.env.CLAUDE_PLUGIN_DATA = original;
+  }
+}
+
+function writeSuccessfulIngestInterceptor(home) {
+  const interceptor = path.join(home, 'successful-ingest.js');
+  fs.writeFileSync(interceptor, [
+    "const events = require('node:events');",
+    "const http = require('node:http');",
+    'http.request = (url, options, callback) => {',
+    '  const request = new events.EventEmitter();',
+    '  request.write = () => {};',
+    '  request.destroy = () => {};',
+    '  request.end = () => {',
+    '    const response = new events.EventEmitter();',
+    "    response.statusCode = url.pathname === '/v1/prompts' ? 201 : 202;",
+    '    callback(response);',
+    "    if (url.pathname === '/v1/prompts') response.emit('data', Buffer.from('{\"id\":\"server-prompt-id\"}'));",
+    "    response.emit('end');",
+    '  };',
+    '  return request;',
+    '};',
+    '',
+  ].join('\n'));
+  return interceptor;
 }
 
 function runSessionStart(home, dataDir, input, env = {}) {
@@ -121,6 +177,7 @@ test('/prism control prompts only create an opaque control barrier', () => {
   });
 
   assert.equal(result.status, 0, result.stderr);
+  assert.equal(assertJsonOrEmpty(result.stdout), null);
   assert.equal(result.error, undefined);
   assert.doesNotMatch(result.stdout, new RegExp(SENTINEL));
   assert.doesNotMatch(result.stderr, new RegExp(SENTINEL));
@@ -228,6 +285,7 @@ test('normal prompts bind the captured server id to an opaque frozen payload', (
   });
 
   assert.equal(result.status, 0, result.stderr);
+  assert.equal(assertJsonOrEmpty(result.stdout), null);
   const sent = JSON.parse(fs.readFileSync(marker, 'utf8'));
   const turn = JSON.parse(fs.readFileSync(turnFile(dataDir, 'normal-capture-session'), 'utf8'));
   assert.equal(turn.kind, 'normal-pending');
@@ -299,6 +357,7 @@ test('control classification finishes stdin parsing before loading plugin module
     },
   });
   assert.equal(result.status, 0, result.stderr);
+  assert.equal(assertJsonOrEmpty(result.stdout), null);
   assert.equal(fs.existsSync(marker), false);
 });
 
@@ -380,7 +439,166 @@ test('submit refuses promotion when a successful response has no persisted serve
     },
   });
   assert.equal(result.status, 0, result.stderr);
+  assert.equal(assertJsonOrEmpty(result.stdout), null);
   const turn = JSON.parse(fs.readFileSync(turnFile(dataDir, 'nil-server-id'), 'utf8'));
   assert.equal(turn.kind, 'failed');
   assert.equal(turn.active, null);
+});
+test('submit uses JSON system messages for missing configuration and suppresses them when disabled', () => {
+  const home = makeTempDir('prism-submit-config-home-');
+  const dataDir = makeTempDir('prism-submit-config-data-');
+  const input = { session_id: 'missing-config', prompt: 'normal prompt' };
+  const env = { ...process.env, HOME: home, CLAUDE_PLUGIN_DATA: dataDir };
+  for (const key of ['PRISM_API_KEY', 'PRISM_GCK_KEY', 'CLAUDE_PLUGIN_OPTION_apiKey', 'PRISM_DEBUG']) delete env[key];
+
+  const shown = spawnSync(process.execPath, [SUBMIT_HANDLER], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    input: JSON.stringify(input),
+    env,
+  });
+  assert.equal(shown.status, 0, shown.stderr);
+  assert.equal(shown.stderr, '');
+  assert.deepEqual(assertJsonOrEmpty(shown.stdout), {
+    systemMessage: '[Prism] API key not configured. Run /prism:setup prism_YOUR_KEY.',
+  });
+
+  const hidden = spawnSync(process.execPath, [SUBMIT_HANDLER], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    input: JSON.stringify({ ...input, session_id: 'missing-config-off' }),
+    env: { ...env, CLAUDE_PLUGIN_OPTION_SHOWREALTIMESUMMARY: 'false' },
+  });
+  assert.equal(hidden.status, 0, hidden.stderr);
+  assert.equal(hidden.stderr, '');
+  assert.equal(assertJsonOrEmpty(hidden.stdout), null);
+});
+
+test('submit context nudges use strict Lite growth and turn boundaries and remain JSON-only', () => {
+  const home = makeTempDir('prism-submit-nudge-home-');
+  const dataDir = makeTempDir('prism-submit-nudge-data-');
+  const interceptor = writeSuccessfulIngestInterceptor(home);
+  const cases = [
+    { label: 'growth-3', health: { firstInputTokens: 1, lastInputTokens: 3, turnCount: 0 }, message: null },
+    { label: 'growth-over-3', health: { firstInputTokens: 100, lastInputTokens: 301, turnCount: 0 }, message: /run \/compact/ },
+    { label: 'growth-10', health: { firstInputTokens: 1, lastInputTokens: 10, turnCount: 0 }, message: /run \/compact/ },
+    { label: 'growth-over-10', health: { firstInputTokens: 100, lastInputTokens: 1001, turnCount: 0 }, message: /consider \/clear/ },
+    { label: 'turn-80', health: { firstInputTokens: 1, lastInputTokens: 1, turnCount: 80 }, message: null },
+    { label: 'turn-over-80', health: { firstInputTokens: 1, lastInputTokens: 1, turnCount: 81 }, message: /consider \/clear/ },
+  ];
+
+  for (const { label, health, message } of cases) {
+    const sessionId = `nudge-${label}`;
+    seedContextHealth(dataDir, sessionId, health);
+    const result = spawnSync(process.execPath, [SUBMIT_HANDLER], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      input: JSON.stringify({
+        session_id: sessionId,
+        prompt_id: `host-${label}`,
+        prompt: 'normal prompt',
+      }),
+      env: {
+        ...process.env,
+        HOME: home,
+        CLAUDE_PLUGIN_DATA: dataDir,
+        PRISM_API_KEY: 'prism_nudge_test',
+        PRISM_INGEST_URL: 'http://127.0.0.1:9',
+        NODE_OPTIONS: `--require=${interceptor}`,
+      },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stderr, '');
+    const output = assertJsonOrEmpty(result.stdout);
+    if (message) assert.match(output.systemMessage, message);
+    else assert.equal(output, null);
+  }
+});
+
+test('submit suppresses display nudges while retaining capture when realtime summaries are off', () => {
+  const home = makeTempDir('prism-submit-off-home-');
+  const dataDir = makeTempDir('prism-submit-off-data-');
+  const sessionId = 'submit-nudge-off';
+  seedContextHealth(dataDir, sessionId, { firstInputTokens: 1, lastInputTokens: 11, turnCount: 0 });
+  const result = spawnSync(process.execPath, [SUBMIT_HANDLER], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    input: JSON.stringify({ session_id: sessionId, prompt_id: 'host-off', prompt: 'normal prompt' }),
+    env: {
+      ...process.env,
+      HOME: home,
+      CLAUDE_PLUGIN_DATA: dataDir,
+      PRISM_API_KEY: 'prism_off_test',
+      PRISM_INGEST_URL: 'http://127.0.0.1:9',
+      CLAUDE_PLUGIN_OPTION_SHOWREALTIMESUMMARY: 'false',
+      NODE_OPTIONS: `--require=${writeSuccessfulIngestInterceptor(home)}`,
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, '');
+  assert.equal(assertJsonOrEmpty(result.stdout), null);
+  assert.equal(readSessionRecord(dataDir, () => session.readTurn(sessionId)).active.status, 'captured');
+});
+
+test('real-host fixture completes submit-to-stop correlation without leaking prompt content', () => {
+  const home = makeTempDir('prism-host-lifecycle-home-');
+  const dataDir = makeTempDir('prism-host-lifecycle-data-');
+  const transcript = path.join(home, 'transcript.jsonl');
+  const fixture = structuredClone(PREFLIGHT_FIXTURE);
+  const sentinelPrompt = `${fixture.userPromptSubmit.prompt} ${SENTINEL}`;
+  fs.writeFileSync(transcript, '');
+  fixture.userPromptSubmit.prompt = sentinelPrompt;
+  fixture.userPromptSubmit.transcript_path = transcript;
+  fixture.userPromptSubmit.cwd = ROOT;
+  fixture.stop.transcript_path = transcript;
+  fixture.stop.cwd = ROOT;
+  const interceptor = writeSuccessfulIngestInterceptor(home);
+  const env = {
+    ...process.env,
+    HOME: home,
+    CLAUDE_PLUGIN_DATA: dataDir,
+    PRISM_API_KEY: 'prism_host_fixture',
+    PRISM_INGEST_URL: 'http://127.0.0.1:9',
+    NODE_OPTIONS: `--require=${interceptor}`,
+  };
+
+  const submit = spawnSync(process.execPath, [SUBMIT_HANDLER], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    input: JSON.stringify(fixture.userPromptSubmit),
+    env,
+  });
+  assert.equal(submit.status, 0, submit.stderr);
+  assert.equal(submit.stderr, '');
+  assert.equal(assertJsonOrEmpty(submit.stdout), null);
+  assert.equal(readAllFiles(dataDir).includes(SENTINEL), false);
+
+  fs.writeFileSync(transcript, [
+    JSON.stringify({ type: 'user', prompt_id: fixture.stop.prompt_id, message: { role: 'user', content: 'request' } }),
+    JSON.stringify({
+      type: 'assistant',
+      uuid: 'fixture-assistant',
+      message: {
+        role: 'assistant',
+        stop_reason: 'end_turn',
+        content: fixture.stop.last_assistant_message,
+        model: 'claude-sonnet-4-6',
+        usage: { input_tokens: 100, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 10 },
+      },
+    }),
+    '',
+  ].join('\n'));
+  const stop = spawnSync(process.execPath, [STOP_HANDLER], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    input: JSON.stringify(fixture.stop),
+    env,
+  });
+  assert.equal(stop.status, 0, stop.stderr);
+  assert.equal(stop.stderr, '');
+  assert.match(assertJsonOrEmpty(stop.stdout).systemMessage, /^\[Prism\] Lite /);
+  assert.equal(readSessionRecord(dataDir, () => session.readTurn(fixture.stop.session_id)).active.status, 'consumed');
+  assert.equal(readSessionRecord(dataDir, () => session.readSummary(fixture.stop.session_id)).contextHealth.turnCount, 1);
+  assert.equal(readAllFiles(home).includes(SENTINEL), false);
+  assert.equal(readAllFiles(dataDir).includes(SENTINEL), false);
 });
