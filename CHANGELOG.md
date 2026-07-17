@@ -36,6 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - API keys are passed to setup helpers through the process environment.
 - Rejected credentials are handled separately from transient config endpoint failures.
 
+### Removed
+- Gateway routing opt-in (`enableGateway`); API calls are never routed through the Optra gateway.
+
 ## [0.4.9] - 2026-05-27
 
 ### Changed
