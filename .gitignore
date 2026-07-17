@@ -2,4 +2,9 @@ node_modules/
 .env
 .env.*
 *.log
+
+# Agent runtime
 .claude/
+.gjc/
+.omc/
+.omx/

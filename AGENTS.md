@@ -23,16 +23,18 @@ Repository instructions for the Optra Prism Claude Code plugin.
 - Treat promotion from `develop` to a release branch or `main` as a file/hunk projection, not commit transport.
 - Never merge, rebase, or cherry-pick a `develop` commit into a release branch or `main`, even when its subject describes only a feature.
 - Create each release branch from the current `main`, copy only the approved distribution file/hunk changes, and create new signed conventional commits on the release branch.
-- Exclude development-only content from release branches and `main`, including `.github/`, `AGENTS.md`, `CLAUDE.md`, `test/`, and test/development scripts or tooling in `package.json`.
-- If a `develop` commit or file mixes distribution and development changes, select only the distribution hunks. Never copy the whole commit or file merely for convenience.
+- Exclude development-only content from release branches and `main`, including `.github/`, `AGENTS.md`, `CLAUDE.md`, `test/`, agent runtime state directories (`.omc/`, `.omx/`, `.gjc/`, `.claude/`), and test/development scripts or tooling in `package.json`.
+- Do not create mixed commits in the first place (see Implementation). If a legacy `develop` commit or file already mixes distribution and development changes, select only the distribution hunks during projection. Hunk selection is a recovery tool for legacy history, not a license to mix. Never copy the whole commit or file merely for convenience.
 - Apply release metadata (`CHANGELOG.md` and synchronized version fields) as the final, separate release commit after all approved feature projections.
 - Before handoff, compare the release candidate with both `main` and the corresponding `develop` release state. Every difference must be either an approved distribution change or an explicitly excluded development-only change.
 
 ## Implementation
 
 - Use conventional commits with subjects that state implementation facts only.
-- Keep each logical change reviewable and separate from release metadata.
-- Add or update tests for behavior changes on the development branch.
+- Keep each logical change reviewable, and keep it separate from release metadata and from development-only changes.
+- Never mix distribution files (`lib/`, `hooks/`, `commands/`, `.claude-plugin/`, `README.md`, `install.sh`, distribution fields of `package.json`) and development-only files (`test/`, `.github/`, `AGENTS.md`, `CLAUDE.md`, dev tooling in `package.json`) in one commit. Commit-level separation is what makes release projection auditable.
+- Add or update tests for behavior changes on the development branch, as a separate development-only commit (e.g. `test(plugin): …`) paired with the distribution commit it verifies.
+- Never commit agent or editor runtime state (`.omc/`, `.omx/`, `.gjc/`, `.claude/`, session or memory files). If such files appear as untracked, leave them untracked.
 - Preserve backward-compatible behavior unless the user explicitly approves a breaking change.
 
 ## Validation
