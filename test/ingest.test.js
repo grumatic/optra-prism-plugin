@@ -159,6 +159,7 @@ test('sendResponse preserves the Hook response request and adds plugin provenanc
   const input = {
     tool_session_id: 'session-response',
     client_event_id: 'client-event-response',
+    prompt_id: '44444444-4444-4444-8444-444444444444',
     response_text: 'completed',
     elapsed_ms: 125,
     input_tokens: 10,
@@ -170,6 +171,7 @@ test('sendResponse preserves the Hook response request and adds plugin provenanc
     tool_session_id: input.tool_session_id,
     response_text: input.response_text,
     client_event_id: input.client_event_id,
+    prompt_id: input.prompt_id,
     elapsed_ms: input.elapsed_ms,
     input_tokens: input.input_tokens,
     output_tokens: input.output_tokens,
@@ -185,11 +187,28 @@ test('sendResponse preserves the Hook response request and adds plugin provenanc
   assert.deepEqual(result, { status: 202, body: 'accepted' });
   assertRequest(request, '/v1/prompts/response', expectedBody);
 });
-test('sendResponse rejects an uncorrelated session-only request before network I/O', async () => {
+test('sendResponse rejects incomplete or invalid dual correlation before network I/O', async () => {
   const { ingest } = await loadIngestWithCapture();
   await assert.rejects(
     ingest.sendResponse({ tool_session_id: 'session-only', response_text: 'completed' }),
-    /client_event_id or prompt_id/,
+    /client_event_id and server prompt_id/,
+  );
+  await assert.rejects(
+    ingest.sendResponse({
+      tool_session_id: 'client-only',
+      client_event_id: 'client-event',
+      response_text: 'completed',
+    }),
+    /client_event_id and server prompt_id/,
+  );
+  await assert.rejects(
+    ingest.sendResponse({
+      tool_session_id: 'nil-server-id',
+      client_event_id: 'client-event',
+      prompt_id: '00000000-0000-0000-0000-000000000000',
+      response_text: 'completed',
+    }),
+    /client_event_id and server prompt_id/,
   );
 });
 

@@ -6,6 +6,7 @@ const { afterEach, beforeEach, test } = require('node:test');
 const {
   resolveBooleanOption,
   resolveShowRealtimeSummary,
+  resolveStringOption,
 } = require('../lib/options');
 
 let homeDir;
@@ -13,11 +14,17 @@ let originalEnv;
 
 const ENV_KEYS = [
   'HOME',
+  'PRISM_API_KEY',
+  'PRISM_GCK_KEY',
+  'PRISM_THRESHOLD',
+  'CLAUDE_PLUGIN_OPTION_APIKEY',
+  'CLAUDE_PLUGIN_OPTION_apiKey',
+  'CLAUDE_PLUGIN_OPTION_PRISMTHRESHOLD',
+  'CLAUDE_PLUGIN_OPTION_prismThreshold',
   'CLAUDE_PLUGIN_OPTION_SHOWREALTIMESUMMARY',
   'CLAUDE_PLUGIN_OPTION_showRealtimeSummary',
   'CLAUDE_PLUGIN_OPTION_showStatusLine',
 ];
-
 function writeLegacyConfig(value) {
   const configPath = path.join(homeDir, '.prism', 'config.json');
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
@@ -31,8 +38,9 @@ beforeEach(() => {
     value: process.env[key],
   }]));
   process.env.HOME = homeDir;
-  delete process.env.CLAUDE_PLUGIN_OPTION_SHOWREALTIMESUMMARY;
-  delete process.env.CLAUDE_PLUGIN_OPTION_showRealtimeSummary;
+  for (const key of ENV_KEYS) {
+    if (key !== 'HOME') delete process.env[key];
+  }
 });
 
 afterEach(() => {
@@ -128,6 +136,52 @@ test('a legacy value remains masked by either environment source', () => {
 
   process.env.CLAUDE_PLUGIN_OPTION_SHOWREALTIMESUMMARY = 'false';
   assert.deepEqual(resolveShowRealtimeSummary(), { value: false, source: 'env-official' });
+});
+test('resolves string options by official env, compatibility env, legacy config, then default', () => {
+  const option = {
+    officialEnv: 'OFFICIAL',
+    compatEnv: 'COMPAT',
+    legacyKey: 'value',
+    defaultValue: 'default',
+    legacyConfig: { value: 'legacy' },
+  };
+
+  assert.deepEqual(resolveStringOption({ ...option, env: { OFFICIAL: 'official', COMPAT: 'compat' } }), {
+    value: 'official',
+    source: 'env-official',
+  });
+  assert.deepEqual(resolveStringOption({ ...option, env: { COMPAT: 'compat' } }), {
+    value: 'compat',
+    source: 'env-compat',
+  });
+  assert.deepEqual(resolveStringOption({ ...option, env: {} }), {
+    value: 'legacy',
+    source: 'legacy',
+  });
+  assert.deepEqual(resolveStringOption({ ...option, env: {}, legacyConfig: {} }), {
+    value: 'default',
+    source: 'default',
+  });
+});
+
+test('env recognizes official uppercase API key and threshold userConfig values', () => {
+  writeLegacyConfig({ apiKey: 'prism_legacy', prismThreshold: 3 });
+  process.env.CLAUDE_PLUGIN_OPTION_APIKEY = 'prism_official';
+  process.env.CLAUDE_PLUGIN_OPTION_PRISMTHRESHOLD = '7.25';
+  delete require.cache[require.resolve('../lib/env')];
+
+  const official = require('../lib/env');
+  assert.equal(official.API_KEY, 'prism_official');
+  assert.equal(official.PRISM_THRESHOLD, 7.25);
+
+  process.env.PRISM_API_KEY = 'prism_explicit';
+  process.env.PRISM_THRESHOLD = '9.5';
+  delete require.cache[require.resolve('../lib/env')];
+
+  const explicit = require('../lib/env');
+  assert.equal(explicit.API_KEY, 'prism_explicit');
+  assert.equal(explicit.PRISM_THRESHOLD, 9.5);
+  delete require.cache[require.resolve('../lib/env')];
 });
 test('env exports the resolved realtime summary value', () => {
   process.env.CLAUDE_PLUGIN_OPTION_SHOWREALTIMESUMMARY = 'false';

@@ -148,7 +148,7 @@ test('enforces a shared output budget across git commands', async () => {
     process.env.PATH = fakeBin;
     process.env.PRISM_GIT_PAYLOAD = payload;
     process.env.PRISM_GIT_CALL_LOG = callLog;
-    const context = await collectGitContext(repo);
+    const context = await collectGitContext(repo, 2_000);
     assert.equal(context.status, 'transient_error');
     assert.deepEqual(fs.readFileSync(callLog, 'utf8').trim().split('\n'), [
       'rev-parse --is-inside-work-tree',

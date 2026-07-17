@@ -14,7 +14,7 @@ const SENTINEL = 'prism_submit_handler_secret_sentinel';
 const tempDirs = [];
 const session = require('../lib/session');
 const PREFLIGHT_FIXTURE = JSON.parse(fs.readFileSync(
-  path.resolve(ROOT, '..', 'artifacts', 'preflight-fixture.json'),
+  path.resolve(ROOT, 'test', 'fixtures', 'preflight-fixture.json'),
   'utf8',
 ));
 
@@ -106,9 +106,27 @@ function writeSuccessfulIngestInterceptor(home) {
     '    const response = new events.EventEmitter();',
     "    response.statusCode = url.pathname === '/v1/prompts' ? 201 : 202;",
     '    callback(response);',
-    "    if (url.pathname === '/v1/prompts') response.emit('data', Buffer.from('{\"id\":\"server-prompt-id\"}'));",
+    "    if (url.pathname === '/v1/prompts') response.emit('data', Buffer.from('{\"id\":\"5e1f8f6e-4b2a-4c3d-9e0f-1a2b3c4d5e6f\"}'));",
     "    response.emit('end');",
     '  };',
+    '  return request;',
+    '};',
+    '',
+  ].join('\n'));
+  return interceptor;
+}
+function writePostInterceptor(home) {
+  const interceptor = path.join(home, 'post-interceptor.js');
+  fs.writeFileSync(interceptor, [
+    "const events = require('node:events');",
+    "const fs = require('node:fs');",
+    "const http = require('node:http');",
+    'http.request = (url, options, callback) => {',
+    "  fs.appendFileSync(process.env.PRISM_POST_MARKER, `${url.pathname}\\n`);",
+    '  const request = new events.EventEmitter();',
+    '  request.write = () => {};',
+    '  request.destroy = () => {};',
+    '  request.end = () => {};',
     '  return request;',
     '};',
     '',
@@ -192,6 +210,110 @@ test('/prism control prompts only create an opaque control barrier', () => {
   assert.equal(turn.active, null);
   assert.equal(JSON.stringify(turn).includes(SENTINEL), false);
 });
+test('case-insensitive and whitespace-prefixed Prism controls never post', () => {
+  for (const prompt of [
+    '/PRISM:setup sk-secret',
+    '\u0000/prism:setup sk-secret',
+    '\u00A0/PRISM:config x',
+  ]) {
+    const home = makeTempDir('prism-control-home-');
+    const dataDir = makeTempDir('prism-control-data-');
+    const postMarker = path.join(home, 'posts');
+    const result = spawnSync(process.execPath, [SUBMIT_HANDLER], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      input: JSON.stringify({ session_id: `control-${Buffer.from(prompt).toString('hex')}`, prompt }),
+      env: {
+        ...process.env,
+        HOME: home,
+        CLAUDE_PLUGIN_DATA: dataDir,
+        PRISM_API_KEY: 'prism_control_test',
+        PRISM_INGEST_URL: 'http://127.0.0.1:12345',
+        PRISM_POST_MARKER: postMarker,
+        NODE_OPTIONS: `--require=${writePostInterceptor(home)}`,
+      },
+      timeout: 1000,
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(fs.existsSync(postMarker), false);
+    const turn = JSON.parse(fs.readFileSync(
+      turnFile(dataDir, `control-${Buffer.from(prompt).toString('hex')}`),
+      'utf8',
+    ));
+    assert.equal(turn.kind, 'control');
+    assert.equal(turn.active, null);
+  }
+});
+
+test('non-string prompts advance only control barriers without posting', () => {
+  for (const [label, prompt] of [
+    ['number', 42],
+    ['object', { secret: SENTINEL }],
+    ['null', null],
+    ['missing', undefined],
+  ]) {
+    const home = makeTempDir(`prism-${label}-prompt-home-`);
+    const dataDir = makeTempDir(`prism-${label}-prompt-data-`);
+    const sessionId = `${label}-prompt-session`;
+    const postMarker = path.join(home, 'posts');
+    const result = spawnSync(process.execPath, [SUBMIT_HANDLER], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      input: JSON.stringify({ session_id: sessionId, prompt }),
+      env: {
+        ...process.env,
+        HOME: home,
+        CLAUDE_PLUGIN_DATA: dataDir,
+        PRISM_API_KEY: 'prism_nonstring_test',
+        PRISM_INGEST_URL: 'http://127.0.0.1:12345',
+        PRISM_POST_MARKER: postMarker,
+        NODE_OPTIONS: `--require=${writePostInterceptor(home)}`,
+      },
+      timeout: 1000,
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(fs.existsSync(postMarker), false);
+    const turn = JSON.parse(fs.readFileSync(turnFile(dataDir, sessionId), 'utf8'));
+    assert.equal(turn.kind, 'control');
+    assert.equal(turn.active, null);
+    assert.equal(JSON.stringify(turn).includes(SENTINEL), false);
+  }
+});
+test('SessionStart resolves official uppercase API key and threshold userConfig values', () => {
+  const home = makeTempDir('prism-session-start-uppercase-home-');
+  const dataDir = makeTempDir('prism-session-start-uppercase-data-');
+  const envFile = path.join(home, 'session-env');
+  const apiKey = 'prism_uppercase_session';
+  fs.mkdirSync(path.join(home, '.prism'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.prism', 'config-cache.json'), JSON.stringify({
+    ingest_url: 'https://ingest.example.test',
+    dashboard_url: 'https://dashboard.example.test',
+    source: 'cache',
+    cached_at: new Date().toISOString(),
+    api_key_fingerprint: crypto.createHash('sha256').update(apiKey).digest('hex'),
+  }));
+
+  const result = runSessionStart(home, dataDir, {
+    session_id: 'uppercase-session',
+    source: 'startup',
+  }, {
+    PRISM_API_KEY: '',
+    PRISM_GCK_KEY: '',
+    PRISM_THRESHOLD: '',
+    CLAUDE_PLUGIN_OPTION_APIKEY: apiKey,
+    CLAUDE_PLUGIN_OPTION_apiKey: '',
+    CLAUDE_PLUGIN_OPTION_PRISMTHRESHOLD: '6.5',
+    CLAUDE_PLUGIN_OPTION_prismThreshold: '',
+    CLAUDE_ENV_FILE: envFile,
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const written = fs.readFileSync(envFile, 'utf8');
+  assert.match(written, /export PRISM_API_KEY=prism_uppercase_session/);
+  assert.match(written, /export PRISM_THRESHOLD=6\.5/);
+});
 
 test('SessionStart advances lifecycle barriers before missing and invalid key exits', () => {
   for (const [label, config] of [
@@ -254,7 +376,7 @@ test('normal prompts bind the captured server id to an opaque frozen payload', (
     '    const response = new events.EventEmitter();',
     '    response.statusCode = 201;',
     '    callback(response);',
-    "    response.emit('data', Buffer.from('{\"id\":\"server-prompt-id\"}'));",
+    "    response.emit('data', Buffer.from('{\"id\":\"5e1f8f6e-4b2a-4c3d-9e0f-1a2b3c4d5e6f\"}'));",
     "    response.emit('end');",
     '  };',
     '  return request;',
@@ -292,6 +414,7 @@ test('normal prompts bind the captured server id to an opaque frozen payload', (
   assert.equal(turn.active.status, 'captured');
   assert.equal(turn.active.clientEventId, sent.client_event_id);
   assert.equal(turn.active.submitPromptId, 'submit-host-prompt-id');
+  assert.equal(turn.active.serverPromptId, '5e1f8f6e-4b2a-4c3d-9e0f-1a2b3c4d5e6f');
   assert.deepEqual(Object.keys(sent.metadata.git).sort(), [
     'branch', 'dirty', 'head', 'host', 'owner', 'repo', 'worktree',
   ]);
@@ -449,7 +572,7 @@ test('submit uses JSON system messages for missing configuration and suppresses 
   const dataDir = makeTempDir('prism-submit-config-data-');
   const input = { session_id: 'missing-config', prompt: 'normal prompt' };
   const env = { ...process.env, HOME: home, CLAUDE_PLUGIN_DATA: dataDir };
-  for (const key of ['PRISM_API_KEY', 'PRISM_GCK_KEY', 'CLAUDE_PLUGIN_OPTION_apiKey', 'PRISM_DEBUG']) delete env[key];
+  for (const key of ['PRISM_API_KEY', 'PRISM_GCK_KEY', 'CLAUDE_PLUGIN_OPTION_APIKEY', 'CLAUDE_PLUGIN_OPTION_apiKey', 'PRISM_DEBUG']) delete env[key];
 
   const shown = spawnSync(process.execPath, [SUBMIT_HANDLER], {
     cwd: ROOT,

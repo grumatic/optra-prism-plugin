@@ -10,7 +10,7 @@ const ROOT = path.resolve(__dirname, '..');
 const STOP = path.join(ROOT, 'hooks', 'scripts', 'stop-handler.js');
 const session = require('../lib/session');
 const PREFLIGHT_FIXTURE = JSON.parse(fs.readFileSync(
-  path.resolve(ROOT, '..', 'artifacts', 'preflight-fixture.json'),
+  path.join(ROOT, 'test', 'fixtures', 'preflight-fixture.json'),
   'utf8',
 ));
 const {
@@ -22,13 +22,20 @@ const {
   isOpusModel,
 } = require('../lib/realtime');
 
+const SERVER_PROMPT_ID = '11111111-1111-4111-8111-111111111111';
 const dirs = [];
 function temp(prefix) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   dirs.push(dir);
   return dir;
 }
-function active(sessionId, promptId, transcriptPath, submittedAt = new Date().toISOString()) {
+function active(
+  sessionId,
+  promptId,
+  transcriptPath,
+  submittedAt = new Date().toISOString(),
+  serverPromptId = SERVER_PROMPT_ID,
+) {
   const barrier = session.advanceBarrier(sessionId, 'normal-pending');
   const attached = session.attachActive(sessionId, {
     epoch: barrier.epoch,
@@ -40,8 +47,8 @@ function active(sessionId, promptId, transcriptPath, submittedAt = new Date().to
     status: 'submitting',
   });
   assert.ok(attached);
-  assert.ok(session.promoteActive(sessionId, `event-${sessionId}`, promptId));
-  return transcript;
+  assert.ok(session.promoteActive(sessionId, `event-${sessionId}`, promptId, serverPromptId));
+  return transcriptPath;
 }
 function transcript(promptId, content, usages) {
   return [
@@ -58,7 +65,7 @@ function transcript(promptId, content, usages) {
     })),
   ].join('\n') + '\n';
 }
-function interceptor(home) {
+function interceptor(home, statusCode = 202) {
   const hook = path.join(home, 'http.js');
   fs.writeFileSync(hook, [
     "const events = require('node:events');",
@@ -67,7 +74,7 @@ function interceptor(home) {
     'http.request = (url, options, callback) => {',
     '  let body = ""; const request = new events.EventEmitter();',
     '  request.write = (chunk) => { body += chunk; }; request.destroy = () => {};',
-    '  request.end = () => { fs.writeFileSync(process.env.RESPONSE_MARKER, body); const response = new events.EventEmitter(); response.statusCode = 202; callback(response); response.emit("end"); };',
+    `  request.end = () => { fs.writeFileSync(process.env.RESPONSE_MARKER, body); const response = new events.EventEmitter(); response.statusCode = ${statusCode}; callback(response); response.emit("end"); };`,
     '  return request;',
     '};',
   ].join('\n'));
@@ -112,9 +119,43 @@ test('exact Stop consumes one proven multi-assistant turn and separates totals f
   assert.equal(summary.contextHealth.lastInputTokens, 30_000);
   assert.equal(summary.contextHealth.turnCount, 1);
   const response = JSON.parse(fs.readFileSync(marker, 'utf8'));
-  assert.equal(Object.hasOwn(response, 'prompt_id'), false);
+  assert.equal(response.prompt_id, SERVER_PROMPT_ID);
   assert.equal(response.client_event_id, 'event-exact-stop');
   assert.equal(session.readTurn('exact-stop').active.status, 'consumed');
+});
+test('failed response capture retains accounting after the active turn is consumed', () => {
+  const home = temp('prism-realtime-failed-response-home-');
+  const data = temp('prism-realtime-failed-response-data-');
+  const file = path.join(home, 'turn.jsonl');
+  const marker = path.join(home, 'response.json');
+  const promptId = 'failed-response-prompt';
+  const text = 'failed response reply';
+  fs.writeFileSync(file, transcript(promptId, text, [{ input: 321, output: 12, model: 'claude-sonnet-4-6' }]));
+  process.env.CLAUDE_PLUGIN_DATA = data;
+  active('failed-response', promptId, file);
+
+  const result = spawnSync(process.execPath, [STOP], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    input: JSON.stringify({ session_id: 'failed-response', prompt_id: promptId, transcript_path: file, last_assistant_message: text }),
+    env: {
+      ...process.env,
+      HOME: home,
+      CLAUDE_PLUGIN_DATA: data,
+      PRISM_API_KEY: 'prism_test',
+      PRISM_INGEST_URL: 'http://127.0.0.1:9',
+      RESPONSE_MARKER: marker,
+      NODE_OPTIONS: `--require=${interceptor(home, 503)}`,
+    },
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Realtime summary unavailable: response capture failed/);
+  assert.equal(session.readTurn('failed-response').active.status, 'consumed');
+  const summary = session.readSummary('failed-response');
+  assert.equal(summary.contextHealth.turnCount, 1);
+  assert.equal(summary.consumedTotals.input, 321);
+  assert.equal(summary.processedUsageIds.length, 1);
 });
 
 test('control, stale, expired, prompt mismatch, and transcript lag leave active records unconsumed', async () => {
@@ -128,8 +169,18 @@ test('control, stale, expired, prompt mismatch, and transcript lag leave active 
   assert.equal(session.readTurn('skip-control').active.status, 'invalidated');
   active('skip-cas', promptId, file);
   const turn = session.readTurn('skip-cas');
-  assert.ok(session.consumeActive('skip-cas', { epoch: turn.epoch, clientEventId: turn.active.clientEventId, submitPromptId: promptId }));
-  assert.equal(session.consumeActive('skip-cas', { epoch: turn.epoch, clientEventId: turn.active.clientEventId, submitPromptId: promptId }), null);
+  assert.ok(session.consumeActive('skip-cas', {
+    epoch: turn.epoch,
+    clientEventId: turn.active.clientEventId,
+    submitPromptId: promptId,
+    serverPromptId: turn.active.serverPromptId,
+  }));
+  assert.equal(session.consumeActive('skip-cas', {
+    epoch: turn.epoch,
+    clientEventId: turn.active.clientEventId,
+    submitPromptId: promptId,
+    serverPromptId: turn.active.serverPromptId,
+  }), null);
   assert.equal(await proveTranscriptTurn({ transcriptPath: file, boundary: { byteOffset: 0 }, promptId }), null);
 });
 
@@ -334,7 +385,7 @@ test('the pricing allowlist matches the official per-model four-bucket rates', (
     'claude-opus-4-1-20250805': [15, 18.75, 1.5, 75],
   };
   for (const [model, [input, cacheWrite, cacheRead, output]] of Object.entries(expected)) {
-    const pricing = pricingFor(model);
+    const pricing = pricingFor(model, () => Date.UTC(2026, 7, 31, 23, 59, 59, 999));
     assert.ok(pricing, `missing pricing for ${model}`);
     assert.deepEqual(
       [pricing.input, pricing.cacheWrite, pricing.cacheRead, pricing.output],
@@ -342,6 +393,10 @@ test('the pricing allowlist matches the official per-model four-bucket rates', (
       model,
     );
   }
+  assert.deepEqual(
+    pricingFor('claude-sonnet-5', () => Date.UTC(2026, 8, 1)),
+    { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+  );
   // Long-context marker normalizes to the same standard rates.
   assert.deepEqual(pricingFor('claude-opus-4-8[1m]'), pricingFor('claude-opus-4-8'));
   // No family fallback for unlisted snapshots.

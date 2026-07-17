@@ -92,6 +92,40 @@ test('control, failure, and lifecycle barriers invalidate active submissions', (
   assert.equal(lifecycle.kind, 'lifecycle');
   assert.equal(lifecycle.active.status, 'invalidated');
 });
+test('promotion persists a non-nil server UUID and consumption requires both identities', () => {
+  makeDataDir();
+  const sessionId = 'server-prompt-id';
+  const hostPromptId = 'host-prompt-id';
+  const barrier = session.advanceBarrier(sessionId, 'normal-pending');
+  assert.ok(session.attachActive(sessionId, {
+    ...active(barrier.epoch, 'client-event'),
+    submitPromptId: hostPromptId,
+  }));
+
+  assert.equal(session.promoteActive(
+    sessionId,
+    'client-event',
+    hostPromptId,
+    '00000000-0000-0000-0000-000000000000',
+  ), null);
+  assert.equal(session.readTurn(sessionId).active.status, 'submitting');
+
+  const serverPromptId = '22222222-2222-4222-8222-222222222222';
+  const captured = session.promoteActive(sessionId, 'client-event', hostPromptId, serverPromptId);
+  assert.equal(captured.active.serverPromptId, serverPromptId);
+  assert.equal(session.consumeActive(sessionId, {
+    epoch: captured.epoch,
+    clientEventId: 'client-event',
+    submitPromptId: hostPromptId,
+    serverPromptId: '33333333-3333-4333-8333-333333333333',
+  }), null);
+  assert.ok(session.consumeActive(sessionId, {
+    epoch: captured.epoch,
+    clientEventId: 'client-event',
+    submitPromptId: hostPromptId,
+    serverPromptId,
+  }));
+});
 
 test('epochs advance monotonically and compact generations are serialized', () => {
   makeDataDir();
@@ -169,6 +203,35 @@ test('schema and identity mismatches are ignored and reinitialized', () => {
   assert.equal(reset.epoch, 1);
   assert.equal(reset.sessionId, sessionId);
   assert.equal(reset.schemaVersion, 1);
+});
+test('unsafe generation and epoch records are rejected and terminal generations cannot publish', () => {
+  const dataDir = makeDataDir();
+  const sessionId = 'safe-integer-terminal';
+  const dir = sessionDir(dataDir, sessionId);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, `turn.g${Number.MAX_SAFE_INTEGER + 1}.f1.json`), JSON.stringify({
+    schemaVersion: 1,
+    sessionId,
+    updatedAt: new Date().toISOString(),
+    generation: Number.MAX_SAFE_INTEGER + 1,
+    epoch: Number.MAX_SAFE_INTEGER + 1,
+    kind: 'control',
+    active: null,
+  }));
+  assert.equal(session.readTurn(sessionId).epoch, 0);
+
+  fs.writeFileSync(path.join(dir, `turn.g${Number.MAX_SAFE_INTEGER}.f2.json`), JSON.stringify({
+    schemaVersion: 1,
+    sessionId,
+    updatedAt: new Date().toISOString(),
+    generation: Number.MAX_SAFE_INTEGER,
+    epoch: Number.MAX_SAFE_INTEGER,
+    kind: 'control',
+    active: null,
+  }));
+  assert.equal(session.readTurn(sessionId).generation, Number.MAX_SAFE_INTEGER);
+  assert.equal(session.advanceBarrier(sessionId, 'normal-pending'), null);
+  assert.equal(session.readTurn(sessionId).generation, Number.MAX_SAFE_INTEGER);
 });
 test('stale lock reclamation cannot let a suspended owner release the replacement lock', async () => {
   const dataDir = makeDataDir();
@@ -364,7 +427,7 @@ test('repeated non-publishing acquisitions keep fence markers bounded and monoto
 
   // Stale/invalid promote attempts acquire a fenced lock but publish nothing.
   for (let i = 0; i < 10; i += 1) {
-    assert.equal(session.promoteActive(sessionId, 'missing-event-id', 'server-id'), null);
+    assert.equal(session.promoteActive(sessionId, 'missing-event-id', 'server-id', '55555555-5555-4555-8555-555555555555'), null);
   }
 
   const fences = fs.readdirSync(dir).filter((name) => /^fence\.f\d+\.json$/.test(name));

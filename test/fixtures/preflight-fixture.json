@@ -1,0 +1,26 @@
+{
+  "kind": "real-host-derived-hook-fixture",
+  "source": "sanitized from the 2026-07-16 real-host pre-flight receipt; the host version is recorded in the receipt only; all values are synthetic dummies with real-host key sets and types",
+  "userPromptSubmit": {
+    "cwd": "/workspace/project",
+    "hook_event_name": "UserPromptSubmit",
+    "permission_mode": "default",
+    "prompt": "example prompt text",
+    "prompt_id": "00000000-0000-4000-8000-000000000001",
+    "session_id": "00000000-0000-4000-8000-0000000000aa",
+    "transcript_path": "/tmp/example-transcript.jsonl"
+  },
+  "stop": {
+    "background_tasks": [],
+    "cwd": "/workspace/project",
+    "effort": { "level": "medium" },
+    "hook_event_name": "Stop",
+    "last_assistant_message": "example assistant reply",
+    "permission_mode": "default",
+    "prompt_id": "00000000-0000-4000-8000-000000000001",
+    "session_crons": [],
+    "session_id": "00000000-0000-4000-8000-0000000000aa",
+    "stop_hook_active": false,
+    "transcript_path": "/tmp/example-transcript.jsonl"
+  }
+}
