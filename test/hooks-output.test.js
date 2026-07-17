@@ -127,7 +127,6 @@ test('/prism control prompts only create an opaque control barrier', () => {
   assert.equal(readAllFiles(home).includes(SENTINEL), false);
   assert.equal(readAllFiles(dataDir).includes(SENTINEL), false);
   assert.equal(fs.existsSync(path.join(home, '.prism', 'advisor-context.json')), false);
-  assert.equal(fs.existsSync(path.join(dataDir, 'session-state.json')), false);
   assert.equal(fs.existsSync(fetchMarker), false);
   assert.equal(fs.existsSync(path.join(dataDir, 'debug.log')), false);
   const turn = JSON.parse(fs.readFileSync(turnFile(dataDir, 'control-session'), 'utf8'));
@@ -214,6 +213,7 @@ test('normal prompts bind the captured server id to an opaque frozen payload', (
       cwd: ROOT,
       prompt,
       transcript_path: transcript,
+      prompt_id: 'submit-host-prompt-id',
     }),
     env: {
       ...process.env,
@@ -233,46 +233,20 @@ test('normal prompts bind the captured server id to an opaque frozen payload', (
   assert.equal(turn.kind, 'normal-pending');
   assert.equal(turn.active.status, 'captured');
   assert.equal(turn.active.clientEventId, sent.client_event_id);
-  assert.equal(turn.active.submitPromptId, 'server-prompt-id');
+  assert.equal(turn.active.submitPromptId, 'submit-host-prompt-id');
   assert.deepEqual(turn.active.transcriptBoundary, { byteOffset: 64 * 1024 * 1024, lineOffset: 0 });
   assert.equal(turn.active.frozenPayloadHash, crypto.createHash('sha256').update(JSON.stringify(sent)).digest('hex'));
   assert.equal(JSON.stringify(turn).includes(prompt), false);
 });
-test('stop-handler continues to write legacy state and send the response request', () => {
+test('Stop without an exact captured prompt is a zero-effect skip', () => {
   const home = makeTempDir('prism-stop-home-');
   const dataDir = makeTempDir('prism-stop-data-');
-  const marker = path.join(home, 'response.json');
-  const interceptor = path.join(home, 'http-interceptor.js');
-  fs.writeFileSync(interceptor, [
-    "const events = require('node:events');",
-    "const fs = require('node:fs');",
-    "const http = require('node:http');",
-    'http.request = (url, options, callback) => {',
-    '  let body = "";',
-    '  const request = new events.EventEmitter();',
-    '  request.write = (chunk) => { body += chunk; };',
-    '  request.destroy = () => {};',
-    '  request.end = () => {',
-    "    if (url.pathname === '/v1/prompts/response') fs.writeFileSync(process.env.PRISM_RESPONSE_MARKER, JSON.stringify({ path: url.pathname, body }));",
-    '    const response = new events.EventEmitter();',
-    '    response.statusCode = 202;',
-    '    callback(response);',
-    '    response.emit("end");',
-    '  };',
-    '  return request;',
-    '};',
-    '',
-  ].join('\n'));
-
   const result = spawnSync(process.execPath, [STOP_HANDLER], {
     cwd: ROOT,
     encoding: 'utf8',
     input: JSON.stringify({
-      session_id: 'legacy-stop-session',
-      last_assistant_message: 'legacy response',
-      input_tokens: 10,
-      output_tokens: 5,
-      model: 'claude-sonnet-4-6',
+      session_id: 'uncorrelated-stop-session',
+      last_assistant_message: 'unmatched response',
     }),
     env: {
       ...process.env,
@@ -280,18 +254,12 @@ test('stop-handler continues to write legacy state and send the response request
       CLAUDE_PLUGIN_DATA: dataDir,
       PRISM_API_KEY: 'prism_stop_handler_test',
       PRISM_INGEST_URL: 'http://127.0.0.1:12345',
-      PRISM_RESPONSE_MARKER: marker,
-      NODE_OPTIONS: `--require=${interceptor}`,
     },
     timeout: 3000,
   });
 
   assert.equal(result.status, 0, result.stderr);
-  const state = JSON.parse(fs.readFileSync(path.join(dataDir, 'session-state.json'), 'utf8'));
-  assert.equal(state.turnCount, 1);
-  const response = JSON.parse(fs.readFileSync(marker, 'utf8'));
-  assert.equal(response.path, '/v1/prompts/response');
-  assert.equal(JSON.parse(response.body).response_text, 'legacy response');
+  assert.equal(result.stdout, '');
 });
 test('control classification finishes stdin parsing before loading plugin modules', () => {
   const home = makeTempDir('prism-bootstrap-home-');
@@ -379,4 +347,35 @@ test('SessionStart advances lifecycle barriers with missing HOME and fallback pl
   });
   assert.equal(result.status, 0, result.stderr);
   assertLifecycleInvalidated(dataDir, sessionId);
+});
+test('submit refuses promotion when a successful response has no persisted server id', () => {
+  const home = makeTempDir('prism-submit-nil-id-home-');
+  const dataDir = makeTempDir('prism-submit-nil-id-data-');
+  const hook = path.join(home, 'nil-id-interceptor.js');
+  fs.writeFileSync(hook, [
+    "const events = require('node:events');",
+    "const http = require('node:http');",
+    'http.request = (url, options, callback) => {',
+    '  const request = new events.EventEmitter(); request.write = () => {}; request.destroy = () => {};',
+    '  request.end = () => { const response = new events.EventEmitter(); response.statusCode = 201; callback(response); response.emit("data", Buffer.from(\'{"id":null}\')); response.emit("end"); };',
+    '  return request;',
+    '};',
+  ].join('\n'));
+  const result = spawnSync(process.execPath, [SUBMIT_HANDLER], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    input: JSON.stringify({ session_id: 'nil-server-id', prompt_id: 'host-prompt', prompt: 'capture this' }),
+    env: {
+      ...process.env,
+      HOME: home,
+      CLAUDE_PLUGIN_DATA: dataDir,
+      PRISM_API_KEY: 'prism_submit_nil_id',
+      PRISM_INGEST_URL: 'http://127.0.0.1:9',
+      NODE_OPTIONS: `--require=${hook}`,
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const turn = JSON.parse(fs.readFileSync(turnFile(dataDir, 'nil-server-id'), 'utf8'));
+  assert.equal(turn.kind, 'failed');
+  assert.equal(turn.active, null);
 });

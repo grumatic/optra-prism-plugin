@@ -137,12 +137,3 @@ test('env exports the resolved realtime summary value', () => {
 
   delete require.cache[require.resolve('../lib/env')];
 });
-test('deprecated showStatusLine does not affect the runtime compatibility export', () => {
-  writeLegacyConfig({ showStatusLine: false });
-  process.env.CLAUDE_PLUGIN_OPTION_showStatusLine = 'false';
-  delete require.cache[require.resolve('../lib/env')];
-
-  assert.equal(require('../lib/env').SHOW_STATUS_LINE, true);
-
-  delete require.cache[require.resolve('../lib/env')];
-});

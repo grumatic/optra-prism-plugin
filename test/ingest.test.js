@@ -158,6 +158,7 @@ test('sendResponse preserves the Hook response request and adds plugin provenanc
   const { ingest, requestReceived } = await loadIngestWithCapture();
   const input = {
     tool_session_id: 'session-response',
+    client_event_id: 'client-event-response',
     response_text: 'completed',
     elapsed_ms: 125,
     input_tokens: 10,
@@ -168,6 +169,7 @@ test('sendResponse preserves the Hook response request and adds plugin provenanc
   const expectedBody = {
     tool_session_id: input.tool_session_id,
     response_text: input.response_text,
+    client_event_id: input.client_event_id,
     elapsed_ms: input.elapsed_ms,
     input_tokens: input.input_tokens,
     output_tokens: input.output_tokens,
@@ -182,6 +184,13 @@ test('sendResponse preserves the Hook response request and adds plugin provenanc
 
   assert.deepEqual(result, { status: 202, body: 'accepted' });
   assertRequest(request, '/v1/prompts/response', expectedBody);
+});
+test('sendResponse rejects an uncorrelated session-only request before network I/O', async () => {
+  const { ingest } = await loadIngestWithCapture();
+  await assert.rejects(
+    ingest.sendResponse({ tool_session_id: 'session-only', response_text: 'completed' }),
+    /client_event_id or prompt_id/,
+  );
 });
 
 test('sendPrompt preserves a legacy API key in the request header', async () => {
