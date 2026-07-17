@@ -4,82 +4,30 @@ description: Configure the Prism plugin with your Prism API key
 user-invocable: true
 ---
 
-Configure the Prism plugin with a Prism API key.
+Configure Prism with a Prism API key.
 
 **Usage:**
-- `/prism:setup prism_YOUR_KEY` — default scope (keeps current scope if already set up; else user).
-- `/prism:setup prism_YOUR_KEY --user` — activate for every project (writes to `~/.claude/settings.json`).
-- `/prism:setup prism_YOUR_KEY --project` — activate only in this project (writes to `$CLAUDE_PROJECT_DIR/.claude/settings.local.json`, auto-gitignored).
+- `/prism:setup prism_YOUR_KEY`
+- `/prism:setup prism_YOUR_KEY --user`
+- `/prism:setup prism_YOUR_KEY --project`
 
 No API key? Get one at: https://dashboard.optra-prism.com/setup
 
 **Scope rules:**
-- OTEL env vars (including the Prism API key) live in exactly one scope at a time.
-- We **never** write to `$CLAUDE_PROJECT_DIR/.claude/settings.json` (shared, committed) because the API key embeds in `OTEL_EXPORTER_OTLP_HEADERS`.
-- Switching scopes moves the vars (does not duplicate).
-**Realtime summary setting:**
-- `showRealtimeSummary` defaults to enabled. Its effective value is resolved from `CLAUDE_PLUGIN_OPTION_SHOWREALTIMESUMMARY`, then `CLAUDE_PLUGIN_OPTION_showRealtimeSummary`, then the own-property `showRealtimeSummary` in `~/.prism/config.json`.
-- Only boolean `true` / `false` and exact lowercase strings `true` / `false` are accepted. An invalid selected source uses the safe default instead of falling through.
-- Preserve any legacy `showRealtimeSummary` value during setup, but do not report a legacy write as changing the active setting when either environment source masks it.
-- `showStatusLine` is deprecated; do not migrate it into `showRealtimeSummary`.
+- OTEL environment variables, including the Prism API key, live in exactly one scope.
+- User scope applies to every project; project scope applies only to this project.
+- Prism never uses `$CLAUDE_PROJECT_DIR/.claude/settings.json` because it may be shared or committed. Switching scopes moves variables rather than duplicating them.
 
-**Steps:**
+Extract the API key and optional `--user` or `--project` flag from the user's command arguments. Run this single command, translating `--user` to `--scope user` and `--project` to `--scope project`:
 
-1. Read existing config from `~/.prism/config.json` (if it exists). If a key already exists and no new key was provided, state "Prism API key configured" without showing any part of the key and ask if they want to replace it.
+```bash
+PRISM_API_KEY="$KEY" node "$PLUGIN_DIR/lib/setup.js" apply [--scope user|project] --project-dir "$CLAUDE_PROJECT_DIR"
+```
 
-2. Validate the key with `$PLUGIN_DIR/lib/api-key.js` `isSupportedApiKey()`. If invalid: "Usage: `/prism:setup prism_YOUR_KEY [--user|--project]`"
+Pass the key only through `PRISM_API_KEY`; never interpolate it anywhere else. Do not read or write Prism configuration files yourself. Display the script's stdout verbatim.
 
-3. Write the plugin config with a read-modify-write: preserve all existing fields (including `ingest_url`), update `apiKey`, and preserve `prismThreshold` (default to 4 when absent). Wipe the stale config cache so step 4 fetches fresh URLs for the (possibly new) key:
-   ```bash
-   mkdir -p ~/.prism && chmod 700 ~/.prism
-   rm -f ~/.prism/config-cache.json
-   ```
-   Write the merged JSON to `~/.prism/config.json`. Then `chmod 600 ~/.prism/config.json`.
+When the script exits 3, show its `CONFIRM_REQUIRED` reason and ask: `Continue? [y/N]`. On yes, rerun the same command with `--confirm`; otherwise stop.
 
-4. Fetch the latest service URLs and guarantee `~/.prism/config-cache.json` exists (writes production fallback URLs if the endpoint is unreachable):
-   ```bash
-   PRISM_API_KEY="$API_KEY" node "$PLUGIN_DIR/lib/setup.js" cache
-   ```
+When no key argument was given, run `node "$PLUGIN_DIR/lib/setup.js" apply --check-existing`. State `Prism API key configured` only when it prints `KEY_PRESENT`; otherwise ask for a key.
 
-5. **Resolve target scope** — determine where OTEL vars should live:
-
-   If the user provided `--user` or `--project`, use that as the explicit target scope. Otherwise, auto-detect:
-   ```bash
-   RESOLVE_RAW=$(node "$PLUGIN_DIR/lib/settings.js" resolve-scope --project-dir "$CLAUDE_PROJECT_DIR")
-   # Output format: action:targetScope:removeScopes (colon-delimited)
-   RESOLVE_ACTION="${RESOLVE_RAW%%:*}"
-   RESOLVE_REST="${RESOLVE_RAW#*:}"
-   TARGET_SCOPE="${RESOLVE_REST%%:*}"
-   REMOVE_SCOPES="${RESOLVE_REST#*:}"
-   ```
-
-   If user provided an explicit flag that differs from `TARGET_SCOPE`, prompt for migration confirmation:
-   - `--user` when current is `project`: **Prompt:** "Prism is currently active only in this project. Switching to user scope will enable telemetry in *every* project. Continue? [y/N]"
-   - `--project` when current is `user`: **Prompt:** "Prism is currently active globally. Switching to project scope will stop telemetry in other projects. Continue? [y/N]"
-
-   If `RESOLVE_ACTION` is `skip` (scope unknown, no existing OTEL): Ask the user — "Install for this project only (`--project`) or all projects (`--user`)?" Use the answer as `TARGET_SCOPE`.
-
-   If `RESOLVE_ACTION` is `repair`: the resolver detected misplaced OTEL. Proceed to step 7 with `REMOVE_SCOPES` to clean up before syncing.
-
-6. (Merged into step 5)
-
-7. **Apply the decision:**
-   ```bash
-   # Remove from the other scope if migrating
-   node "$PLUGIN_DIR/lib/settings.js" remove --scope <other-scope> --project-dir "$CLAUDE_PROJECT_DIR"
-
-   # Sync to the target scope
-   node "$PLUGIN_DIR/lib/settings.js" sync --scope <target-scope> --project-dir "$CLAUDE_PROJECT_DIR"
-   ```
-   Show the resolved ingest URL so the user can confirm it's correct.
-
-8. **Notify the dashboard** that setup is complete. Best-effort — never block on the result; the dashboard's Verify modal will fall back to the first-prompt signal if this ping doesn't land. Auth-resolved `developer_id` / `org_id` are written server-side; we only send a minimal body.
-
-   ```bash
-   PRISM_API_KEY="$API_KEY" node "$PLUGIN_DIR/lib/setup.js" notify
-   ```
-
-9. Confirm what was done and remind: "Scope: **<target>** (`<file-path>`). **Restart Claude Code to activate telemetry.**"
-
-10. End with this call-to-action (verbatim):
-    > 🚀 **Next:** open https://dashboard.optra-prism.com/ for realtime coaching, PRISM scores, and insights.
+> 🚀 **Next:** open https://dashboard.optra-prism.com/ for realtime coaching, PRISM scores, and insights.
