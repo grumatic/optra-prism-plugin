@@ -95,15 +95,25 @@ function readSessionRecord(dataDir, reader) {
 
 function writeSuccessfulIngestInterceptor(home) {
   const interceptor = path.join(home, 'successful-ingest.js');
+  const realtimeRows = JSON.stringify([{
+    sub_session_id: 'live-sub-session',
+    is_preview: true,
+    substance_floor_passed: true,
+    letter_grade: 'B',
+    intent_class: 'refactor',
+    started_at: '2000-01-01T00:00:00.000Z',
+  }]);
   fs.writeFileSync(interceptor, [
     "const events = require('node:events');",
     "const http = require('node:http');",
+    `const realtimeRows = ${JSON.stringify(realtimeRows)};`,
     'http.request = (url, options, callback) => {',
     '  const request = new events.EventEmitter();',
     '  request.write = () => {};',
     '  request.destroy = () => {};',
     '  request.end = () => {',
     '    const response = new events.EventEmitter();',
+    "    if (url.pathname === '/v1/score_v3/realtime/sub-sessions') { response.statusCode = 200; callback(response); response.emit('data', Buffer.from(realtimeRows)); response.emit('end'); return; }",
     "    response.statusCode = url.pathname === '/v1/prompts' ? 201 : 202;",
     '    callback(response);',
     "    if (url.pathname === '/v1/prompts') response.emit('data', Buffer.from('{\"id\":\"5e1f8f6e-4b2a-4c3d-9e0f-1a2b3c4d5e6f\"}'));",
@@ -597,7 +607,7 @@ test('submit uses JSON system messages for missing configuration and suppresses 
   assert.equal(assertJsonOrEmpty(hidden.stdout), null);
 });
 
-test('submit context nudges use strict Lite growth and turn boundaries and remain JSON-only', () => {
+test('submit context nudges use strict growth and turn boundaries and remain JSON-only', () => {
   const home = makeTempDir('prism-submit-nudge-home-');
   const dataDir = makeTempDir('prism-submit-nudge-data-');
   const interceptor = writeSuccessfulIngestInterceptor(home);
@@ -719,7 +729,7 @@ test('real-host fixture completes submit-to-stop correlation without leaking pro
   });
   assert.equal(stop.status, 0, stop.stderr);
   assert.equal(stop.stderr, '');
-  assert.match(assertJsonOrEmpty(stop.stdout).systemMessage, /^\[Prism\] Lite /);
+  assert.match(assertJsonOrEmpty(stop.stdout).systemMessage, /^\[Prism\] B live · refactor \(t1\) · /);
   assert.equal(readSessionRecord(dataDir, () => session.readTurn(fixture.stop.session_id)).active.status, 'consumed');
   assert.equal(readSessionRecord(dataDir, () => session.readSummary(fixture.stop.session_id)).contextHealth.turnCount, 1);
   assert.equal(readAllFiles(home).includes(SENTINEL), false);

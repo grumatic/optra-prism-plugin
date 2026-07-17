@@ -16,10 +16,11 @@ const PREFLIGHT_FIXTURE = JSON.parse(fs.readFileSync(
 const {
   proveTranscriptTurn,
   consumeUsage,
-  gradeFor,
+  selectScoreRow,
+  mapTurnRange,
+  renderScoreLine,
   MAX_TRANSCRIPT_BYTES,
   pricingFor,
-  isOpusModel,
 } = require('../lib/realtime');
 
 const SERVER_PROMPT_ID = '11111111-1111-4111-8111-111111111111';
@@ -67,14 +68,29 @@ function transcript(promptId, content, usages) {
 }
 function interceptor(home, statusCode = 202) {
   const hook = path.join(home, 'http.js');
+  const realtimeRows = JSON.stringify([{
+    sub_session_id: 'sub-live',
+    is_preview: true,
+    substance_floor_passed: true,
+    letter_grade: 'B',
+    intent_class: 'refactor',
+    started_at: '2000-01-01T00:00:00.000Z',
+  }]);
   fs.writeFileSync(hook, [
     "const events = require('node:events');",
     "const fs = require('node:fs');",
     "const http = require('node:http');",
+    `const realtimeRows = ${JSON.stringify(realtimeRows)};`,
     'http.request = (url, options, callback) => {',
     '  let body = ""; const request = new events.EventEmitter();',
     '  request.write = (chunk) => { body += chunk; }; request.destroy = () => {};',
-    `  request.end = () => { fs.writeFileSync(process.env.RESPONSE_MARKER, body); const response = new events.EventEmitter(); response.statusCode = ${statusCode}; callback(response); response.emit("end"); };`,
+    '  request.end = () => {',
+    '    const response = new events.EventEmitter();',
+    "    if (url.pathname === '/v1/score_v3/realtime/sub-sessions') { response.statusCode = 200; callback(response); response.emit('data', Buffer.from(realtimeRows)); response.emit('end'); return; }",
+    `    response.statusCode = ${statusCode}; callback(response);`,
+    "    if (url.pathname === '/v1/prompts/response') fs.writeFileSync(process.env.RESPONSE_MARKER, body);",
+    "    response.emit('end');",
+    '  };',
     '  return request;',
     '};',
   ].join('\n'));
@@ -113,11 +129,16 @@ test('exact Stop consumes one proven multi-assistant turn and separates totals f
     env: { ...process.env, HOME: home, CLAUDE_PLUGIN_DATA: data, PRISM_API_KEY: 'prism_test', PRISM_INGEST_URL: 'http://127.0.0.1:9', RESPONSE_MARKER: marker, NODE_OPTIONS: `--require=${interceptor(home)}` },
   });
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /"systemMessage":"\[Prism\] Lite A\+/);
+  assert.match(result.stdout, /"systemMessage":"\[Prism\] B live · refactor \(t1\) · /);
   const summary = session.readSummary('exact-stop');
   assert.equal(summary.consumedTotals.input, 60_000);
   assert.equal(summary.contextHealth.lastInputTokens, 30_000);
   assert.equal(summary.contextHealth.turnCount, 1);
+  assert.deepEqual(summary.turnLog.map((entry) => entry.turn), [1]);
+  assert.deepEqual(
+    { state: summary.serverScore.state, grade: summary.serverScore.grade, turnStart: summary.serverScore.turnStart, turnEnd: summary.serverScore.turnEnd },
+    { state: 'live', grade: 'B', turnStart: 1, turnEnd: 1 },
+  );
   const response = JSON.parse(fs.readFileSync(marker, 'utf8'));
   assert.equal(response.prompt_id, SERVER_PROMPT_ID);
   assert.equal(response.client_event_id, 'event-exact-stop');
@@ -184,7 +205,7 @@ test('control, stale, expired, prompt mismatch, and transcript lag leave active 
   assert.equal(await proveTranscriptTurn({ transcriptPath: file, boundary: { byteOffset: 0 }, promptId }), null);
 });
 
-test('usage dedupe, unknown pricing, and the Lite rubric preserve specified boundaries', () => {
+test('usage dedupe and unknown pricing preserve specified boundaries', () => {
   const usage = [
     { id: 'a'.repeat(64), input: 10, cacheRead: 0, cacheCreation: 0, output: 1, model: 'unknown' },
     { id: 'b'.repeat(64), input: 20, cacheRead: 0, cacheCreation: 0, output: 1, model: 'claude-sonnet-4-6' },
@@ -194,8 +215,51 @@ test('usage dedupe, unknown pricing, and the Lite rubric preserve specified boun
   assert.equal(first.totals.unknownCost, true);
   const deduped = consumeUsage(usage, first.addedIds);
   assert.equal(deduped.totals.input, 0);
-  assert.equal(gradeFor({ firstInputTokens: 1, lastInputTokens: 11, turnCount: 81, responseTimes: [21_000, 21_000, 21_000], opusLowOutputCount: 3 }).grade, 'D');
-  assert.equal(gradeFor({ firstInputTokens: 1, lastInputTokens: 1, turnCount: 5, responseTimes: [], opusLowOutputCount: 0 }).grade, 'A+');
+});
+
+test('selectScoreRow prefers graded previews, skips trivia, and falls back to settled grades', () => {
+  const settled = { is_preview: false, substance_floor_passed: true, prompt_grade: 'A-' };
+  const preview = { is_preview: true, substance_floor_passed: true, letter_grade: 'B' };
+  assert.deepEqual(selectScoreRow([
+    { is_preview: true, substance_floor_passed: false, letter_grade: 'A+' },
+    preview,
+    settled,
+  ]), { state: 'live', row: preview });
+  assert.deepEqual(selectScoreRow([settled]), { state: 'settled', row: settled });
+  assert.equal(selectScoreRow([{ is_preview: false, substance_floor_passed: false, prompt_grade: 'A' }]), null);
+  assert.equal(selectScoreRow([]), null);
+});
+
+test('mapTurnRange maps live and settled ranges and falls back to the current turn', () => {
+  const log = [
+    { turn: 8, completedAt: '2026-07-17T10:00:00.000Z' },
+    { turn: 9, completedAt: '2026-07-17T10:02:00.000Z' },
+    { turn: 10, completedAt: '2026-07-17T10:04:00.000Z' },
+  ];
+  assert.deepEqual(mapTurnRange(log, {
+    is_preview: false,
+    started_at: '2026-07-17T10:01:00.000Z',
+    ended_at: '2026-07-17T10:03:00.000Z',
+  }, 10), { turnStart: 9, turnEnd: 9 });
+  assert.deepEqual(mapTurnRange(log, {
+    is_preview: true,
+    started_at: '2026-07-17T10:04:00.000Z',
+  }, 10), { turnStart: 10, turnEnd: 10 });
+  assert.deepEqual(mapTurnRange([], { is_preview: false }, 7), { turnStart: 7, turnEnd: 7 });
+});
+
+test('renderScoreLine renders live, settled, scoring, and no-score states', () => {
+  assert.equal(renderScoreLine({
+    state: 'live', grade: 'B', intent: 'refactor_work', turnStart: 8, turnEnd: 10,
+  }, 0.4, false, 12), '[Prism] B live · refactor-work (t8–10) · $0.400 · 12 turns');
+  assert.equal(renderScoreLine({
+    state: 'settled', grade: 'B+', intent: 'refactor_work', goalComplete: true, rework: true, turnStart: 8, turnEnd: 8,
+  }, 0.4, false, 12), '[Prism] B+ · refactor-work ✓ ↺ (t8) · $0.400 · 12 turns');
+  assert.equal(renderScoreLine({
+    state: 'settled', grade: 'A', intent: null, turnStart: 3, turnEnd: 3,
+  }, 0.1, false, 2), '[Prism] A · (t3) · $0.100 · 2 turns');
+  assert.equal(renderScoreLine({ state: 'scoring' }, 0.1, false, 2), '[Prism] scoring… · $0.100 · 2 turns');
+  assert.equal(renderScoreLine({ state: 'no score' }, 0.4, false, 12), '[Prism] no score · $0.400 · 12 turns');
 });
 test('exact authorization skips malformed prompt ids, expired records, and compact or failed barriers', () => {
   const home = temp('prism-realtime-guards-home-');
@@ -314,33 +378,7 @@ test('usage identities ignore mutable values and pricing charges all four token 
   const consumed = consumeUsage(first.usage, []);
   assert.equal(consumeUsage(replay.usage, consumed.addedIds).totals.output, 0);
 });
-test('Lite rubric uses strict growth, turn, latency, and opus thresholds', () => {
-  const base = { firstInputTokens: 1, lastInputTokens: 1, turnCount: 20, responseTimes: [], opusLowOutputCount: 2 };
-  assert.equal(gradeFor({ ...base, lastInputTokens: 3 }).score, 10);
-  assert.equal(gradeFor({ ...base, lastInputTokens: 4 }).score, 8.5);
-  assert.equal(gradeFor({ ...base, lastInputTokens: 10 }).score, 8.5);
-  assert.equal(gradeFor({ ...base, lastInputTokens: 11 }).score, 7);
-  assert.equal(gradeFor({ ...base, turnCount: 21 }).score, 9.5);
-  assert.equal(gradeFor({ ...base, turnCount: 80 }).score, 9.5);
-  assert.equal(gradeFor({ ...base, turnCount: 81 }).score, 8);
-  assert.equal(gradeFor({ ...base, responseTimes: [20_000, 20_000, 20_000] }).score, 10);
-  assert.equal(gradeFor({ ...base, responseTimes: [20_001, 20_001, 20_001] }).score, 9);
-  assert.equal(gradeFor({ ...base, opusLowOutputCount: 3 }).score, 9.5);
-  assert.deepEqual(
-    [
-      base,
-      { ...base, responseTimes: [20_001, 20_001, 20_001] },
-      { ...base, lastInputTokens: 4 },
-      { ...base, lastInputTokens: 4, turnCount: 21 },
-      { ...base, lastInputTokens: 11 },
-      { ...base, lastInputTokens: 11, turnCount: 21 },
-      { ...base, lastInputTokens: 11, responseTimes: [20_001, 20_001, 20_001] },
-      { ...base, lastInputTokens: 11, turnCount: 81 },
-      { ...base, lastInputTokens: 11, turnCount: 81, responseTimes: [20_001, 20_001, 20_001] },
-    ].map((health) => gradeFor(health).grade),
-    ['A+', 'A', 'A-', 'B+', 'B', 'B-', 'C+', 'C', 'D'],
-  );
-});
+
 test('concurrent Stop hooks have exactly one compare-and-swap winner', async () => {
   const home = temp('prism-realtime-cas-home-');
   const data = temp('prism-realtime-cas-data-');
@@ -402,53 +440,9 @@ test('the pricing allowlist matches the official per-model four-bucket rates', (
   // No family fallback for unlisted snapshots.
   assert.equal(pricingFor('claude-opus-4-5-20250514'), null);
   assert.equal(pricingFor('claude-opus-9'), null);
-  assert.equal(isOpusModel('claude-opus-4-8[1m]'), true);
-  assert.equal(isOpusModel('claude-sonnet-4-6'), false);
+
 });
 
-test('duplicate usage identities increment the opus rubric signal only once', async () => {
-  const home = temp('prism-realtime-opus-home-');
-  const data = temp('prism-realtime-opus-data-');
-  const file = path.join(home, 'turn.jsonl');
-  const promptId = 'opus-dup-prompt';
-  const text = 'short';
-  const usage = { input: 10, output: 10, model: 'claude-opus-4-8' };
-  const shared = {
-    type: 'assistant',
-    message: {
-      id: 'msg-shared', role: 'assistant', stop_reason: 'end_turn', content: text, model: usage.model,
-      usage: { input_tokens: usage.input, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: usage.output },
-    },
-  };
-  fs.writeFileSync(file, [
-    JSON.stringify({ type: 'user', prompt_id: promptId, message: { role: 'user', content: 'request' } }),
-    JSON.stringify(shared),
-    JSON.stringify(shared),
-  ].join('\n') + '\n');
-  process.env.CLAUDE_PLUGIN_DATA = data;
-  active('opus-dup', promptId, file);
-  const marker = path.join(home, 'response.json');
-  const env = {
-    ...process.env,
-    HOME: home,
-    CLAUDE_PLUGIN_DATA: data,
-    CLAUDE_PLUGIN_OPTION_SHOWREALTIMESUMMARY: 'false',
-    PRISM_API_KEY: 'prism_test',
-    PRISM_INGEST_URL: 'http://127.0.0.1:9',
-    RESPONSE_MARKER: marker,
-    NODE_OPTIONS: `--require=${interceptor(home)}`,
-  };
-  const result = spawnSync(process.execPath, [STOP], {
-    cwd: ROOT,
-    encoding: 'utf8',
-    input: JSON.stringify({ session_id: 'opus-dup', prompt_id: promptId, transcript_path: file, last_assistant_message: text }),
-    env,
-  });
-  assert.equal(result.status, 0, result.stderr);
-  const summary = session.readSummary('opus-dup');
-  assert.equal(summary.contextHealth.opusLowOutputCount, 1);
-  assert.equal(summary.consumedTotals.input, 10);
-});
 
 test('an explicitly present falsey transcript prompt id is a mismatch, not an absence', async () => {
   const home = temp('prism-realtime-falsey-home-');
