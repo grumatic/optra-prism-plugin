@@ -3,7 +3,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const { afterEach, test } = require('node:test');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -155,6 +155,31 @@ function writePostInterceptor(home) {
   ].join('\n'));
   return interceptor;
 }
+function writeCrashAfterPrompt2xxInterceptor(home) {
+  const interceptor = path.join(home, 'crash-after-prompt-2xx.js');
+  fs.writeFileSync(interceptor, [
+    "const events = require('node:events');",
+    "const fs = require('node:fs');",
+    "const http = require('node:http');",
+    'http.request = (url, options, callback) => {',
+    '  const request = new events.EventEmitter();',
+    '  request.write = () => {};',
+    '  request.destroy = () => {};',
+    '  request.end = () => {',
+    "    fs.writeFileSync(process.env.PRISM_CRASH_MARKER, url.pathname);",
+    '    const response = new events.EventEmitter();',
+    '    response.statusCode = 201;',
+    '    callback(response);',
+    "    response.emit('data', Buffer.from('{\"id\":\"5e1f8f6e-4b2a-4c3d-9e0f-1a2b3c4d5e6f\"}'));",
+    "    response.emit('end');",
+    '    process.exit(0);',
+    '  };',
+    '  return request;',
+    '};',
+    '',
+  ].join('\n'));
+  return interceptor;
+}
 
 function runSessionStart(home, dataDir, input, env = {}) {
   return spawnSync('bash', [SESSION_START], {
@@ -169,6 +194,53 @@ function runSessionStart(home, dataDir, input, env = {}) {
       ...env,
     },
     timeout: 3000,
+  });
+}
+async function startTricklingServer() {
+  let resolveResponseClosed;
+  const responseClosed = new Promise((resolve) => { resolveResponseClosed = resolve; });
+  const server = require('node:http').createServer((request, response) => {
+    request.resume();
+    response.writeHead(202, { 'Content-Type': 'text/plain' });
+    const trickle = setInterval(() => response.write('.'), 10);
+    response.on('close', () => {
+      clearInterval(trickle);
+      resolveResponseClosed();
+    });
+  });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const { port } = server.address();
+  return {
+    url: `http://127.0.0.1:${port}`,
+    responseClosed,
+    close: () => new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve()))),
+  };
+}
+
+function runHook(command, args, input, env, timeout = 3500) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { cwd: ROOT, env });
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGKILL');
+    }, timeout);
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.once('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once('close', (status, signal) => {
+      clearTimeout(timer);
+      resolve({ status, signal, stdout, stderr, timedOut });
+    });
+    child.stdin.end(JSON.stringify(input));
   });
 }
 
@@ -574,7 +646,128 @@ test('SessionStart advances lifecycle barriers with missing HOME and fallback pl
   assert.equal(result.status, 0, result.stderr);
   assertLifecycleInvalidated(dataDir, sessionId);
 });
-test('submit refuses promotion when a successful response has no persisted server id', () => {
+test('Submit drain aborts a trickling POST at its deadline', async () => {
+  const home = makeTempDir('prism-submit-trickle-home-');
+  const dataDir = makeTempDir('prism-submit-trickle-data-');
+  const server = await startTricklingServer();
+  try {
+    const startedAt = Date.now();
+    const result = await runHook(process.execPath, [SUBMIT_HANDLER], {
+      session_id: 'submit-trickle-session',
+      prompt_id: 'submit-trickle-prompt',
+      prompt: 'capture with deadline',
+    }, runtimeEnv(home, dataDir, {
+      apiKey: 'prism_submit_trickle',
+      ingest_url: server.url,
+    }));
+    const elapsedMs = Date.now() - startedAt;
+
+    await Promise.race([
+      server.responseClosed,
+      new Promise((resolve, reject) => setTimeout(() => reject(new Error('Submit drain did not abort the response')), 500)),
+    ]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.timedOut, false);
+    assert.ok(elapsedMs >= 1700, `Submit drain ended too early after ${elapsedMs}ms`);
+    assert.ok(elapsedMs <= 2600, `Submit drain exceeded its budget at ${elapsedMs}ms`);
+    assert.equal(readSessionRecord(dataDir, () => require('../lib/response-outbox').listPending()).length, 1);
+  } finally {
+    await server.close();
+  }
+});
+
+test('SessionStart drain aborts a trickling POST at its deadline', async () => {
+  const home = makeTempDir('prism-session-start-trickle-home-');
+  const dataDir = makeTempDir('prism-session-start-trickle-data-');
+  const apiKey = 'prism_session_start_trickle';
+  const server = await startTricklingServer();
+  writeRuntimeConfig(home, { apiKey, ingest_url: server.url });
+  readSessionRecord(dataDir, () => require('../lib/response-outbox').enqueue({
+    id: 'prompt-session-start-trickle',
+    kind: 'prompt',
+    payload: {
+      prompt_text: 'recover with deadline',
+      source: 'claude-code',
+      tool_session_id: 'prior-session-start-trickle',
+      client_event_id: 'prior-session-start-event',
+    },
+  }));
+  try {
+    const startedAt = Date.now();
+    const result = await runHook('bash', [SESSION_START], {
+      session_id: 'session-start-trickle-session',
+      source: 'startup',
+    }, {
+      ...process.env,
+      HOME: home,
+      CLAUDE_PLUGIN_DATA: dataDir,
+      CLAUDE_PLUGIN_ROOT: ROOT,
+      PRISM_API_KEY: apiKey,
+      PRISM_INGEST_URL: server.url,
+    });
+    const elapsedMs = Date.now() - startedAt;
+
+    await Promise.race([
+      server.responseClosed,
+      new Promise((resolve, reject) => setTimeout(() => reject(new Error('SessionStart drain did not abort the response')), 500)),
+    ]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.timedOut, false);
+    assert.ok(elapsedMs >= 1700, `SessionStart drain ended too early after ${elapsedMs}ms`);
+    assert.ok(elapsedMs <= 2600, `SessionStart drain exceeded its budget at ${elapsedMs}ms`);
+    assert.equal(readSessionRecord(dataDir, () => require('../lib/response-outbox').listPending()).length, 1);
+  } finally {
+    await server.close();
+  }
+});
+test('SessionStart replays a prior-session prompt and promotes its durable server id', () => {
+  const home = makeTempDir('prism-session-replay-home-');
+  const dataDir = makeTempDir('prism-session-replay-data-');
+  const priorSessionId = 'prior-session-replay';
+  const hostPromptId = 'prior-host-prompt';
+  const barrier = readSessionRecord(dataDir, () => session.advanceBarrier(priorSessionId, 'normal-pending'));
+  readSessionRecord(dataDir, () => session.attachActive(priorSessionId, {
+    epoch: barrier.epoch,
+    clientEventId: 'prior-event',
+    submitPromptId: hostPromptId,
+    submittedAt: new Date().toISOString(),
+    transcriptBoundary: { byteOffset: 0, lineOffset: 0 },
+    frozenPayloadHash: crypto.createHash('sha256').update('prior-replay').digest('hex'),
+    status: 'submitting',
+  }));
+  readSessionRecord(dataDir, () => require('../lib/response-outbox').enqueue({
+    id: 'prompt-prior-event',
+    kind: 'prompt',
+    payload: {
+      prompt_text: 'recover me',
+      source: 'claude-code',
+      tool_session_id: priorSessionId,
+      client_event_id: 'prior-event',
+    },
+    promotion: {
+      sessionId: priorSessionId,
+      epoch: barrier.epoch,
+      clientEventId: 'prior-event',
+      hostPromptId,
+    },
+  }));
+
+  writeRuntimeConfig(home, {
+    apiKey: 'prism_session_replay',
+    ingest_url: 'http://127.0.0.1:9',
+  });
+  const result = runSessionStart(home, dataDir, { session_id: 'new-session', source: 'startup' }, {
+    PRISM_API_KEY: 'prism_session_replay',
+    PRISM_INGEST_URL: 'http://127.0.0.1:9',
+    NODE_OPTIONS: `--require=${writeSuccessfulIngestInterceptor(home)}`,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const priorTurn = readSessionRecord(dataDir, () => session.readTurn(priorSessionId));
+  assert.equal(priorTurn.active.status, 'captured');
+  assert.equal(priorTurn.active.serverPromptId, '5e1f8f6e-4b2a-4c3d-9e0f-1a2b3c4d5e6f');
+  assert.deepEqual(readSessionRecord(dataDir, () => require('../lib/response-outbox').listPending()), []);
+});
+test('submit treats the nil-UUID dropped-prompt acknowledgment as terminal', () => {
   const home = makeTempDir('prism-submit-nil-id-home-');
   const dataDir = makeTempDir('prism-submit-nil-id-data-');
   const hook = path.join(home, 'nil-id-interceptor.js');
@@ -583,7 +776,7 @@ test('submit refuses promotion when a successful response has no persisted serve
     "const http = require('node:http');",
     'http.request = (url, options, callback) => {',
     '  const request = new events.EventEmitter(); request.write = () => {}; request.destroy = () => {};',
-    '  request.end = () => { const response = new events.EventEmitter(); response.statusCode = 201; callback(response); response.emit("data", Buffer.from(\'{"id":null}\')); response.emit("end"); };',
+    '  request.end = () => { const response = new events.EventEmitter(); response.statusCode = 200; callback(response); response.emit("data", Buffer.from(\'{"id":"00000000-0000-0000-0000-000000000000"}\')); response.emit("end"); };',
     '  return request;',
     '};',
   ].join('\n'));
@@ -601,8 +794,89 @@ test('submit refuses promotion when a successful response has no persisted serve
   assert.equal(result.status, 0, result.stderr);
   assert.equal(assertJsonOrEmpty(result.stdout), null);
   const turn = JSON.parse(fs.readFileSync(turnFile(dataDir, 'nil-server-id'), 'utf8'));
-  assert.equal(turn.kind, 'failed');
-  assert.equal(turn.active, null);
+  assert.equal(turn.kind, 'normal-pending');
+  assert.equal(turn.active.status, 'submitting');
+  assert.equal(turn.active.serverPromptId, undefined);
+  assert.deepEqual(readSessionRecord(dataDir, () => require('../lib/response-outbox').listPending()), []);
+});
+test('Stop replays an exactly-correlated submitting prompt before consuming its response', () => {
+  const home = makeTempDir('prism-stop-recovery-home-');
+  const dataDir = makeTempDir('prism-stop-recovery-data-');
+  const transcript = path.join(home, 'transcript.jsonl');
+  const crashMarker = path.join(home, 'prompt-2xx');
+  const sessionId = 'same-session-stop-recovery';
+  const hostPromptId = 'same-session-host-prompt';
+  const assistantMessage = 'recovered assistant response';
+  writeRuntimeConfig(home, {
+    apiKey: 'prism_stop_recovery',
+    ingest_url: 'http://127.0.0.1:9',
+  });
+
+  const submit = spawnSync(process.execPath, [SUBMIT_HANDLER], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    input: JSON.stringify({
+      session_id: sessionId,
+      prompt_id: hostPromptId,
+      prompt: 'persist this prompt before the failpoint',
+      transcript_path: transcript,
+    }),
+    env: {
+      ...process.env,
+      HOME: home,
+      CLAUDE_PLUGIN_DATA: dataDir,
+      PRISM_API_KEY: 'prism_stop_recovery',
+      PRISM_INGEST_URL: 'http://127.0.0.1:9',
+      PRISM_CRASH_MARKER: crashMarker,
+      NODE_OPTIONS: `--require=${writeCrashAfterPrompt2xxInterceptor(home)}`,
+    },
+    timeout: 3000,
+  });
+  assert.equal(submit.status, 0, submit.stderr);
+  assert.equal(fs.readFileSync(crashMarker, 'utf8'), '/v1/prompts');
+  assert.equal(readSessionRecord(dataDir, () => session.readTurn(sessionId)).active.status, 'submitting');
+  assert.equal(readSessionRecord(dataDir, () => require('../lib/response-outbox').listPending()).length, 1);
+
+  fs.writeFileSync(transcript, [
+    JSON.stringify({ type: 'user', prompt_id: hostPromptId, message: { role: 'user', content: 'request' } }),
+    JSON.stringify({
+      type: 'assistant',
+      uuid: 'recovered-assistant',
+      message: {
+        role: 'assistant',
+        stop_reason: 'end_turn',
+        content: assistantMessage,
+        model: 'claude-sonnet-4-6',
+        usage: { input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 5 },
+      },
+    }),
+    '',
+  ].join('\n'));
+
+  const stop = spawnSync(process.execPath, [STOP_HANDLER], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    input: JSON.stringify({
+      session_id: sessionId,
+      prompt_id: hostPromptId,
+      transcript_path: transcript,
+      last_assistant_message: assistantMessage,
+    }),
+    env: {
+      ...process.env,
+      HOME: home,
+      CLAUDE_PLUGIN_DATA: dataDir,
+      PRISM_API_KEY: 'prism_stop_recovery',
+      PRISM_INGEST_URL: 'http://127.0.0.1:9',
+      NODE_OPTIONS: `--require=${writeSuccessfulIngestInterceptor(home)}`,
+    },
+    timeout: 3000,
+  });
+  assert.equal(stop.status, 0, stop.stderr);
+  const recovered = readSessionRecord(dataDir, () => session.readTurn(sessionId));
+  assert.equal(recovered.active.status, 'consumed');
+  assert.equal(recovered.active.serverPromptId, '5e1f8f6e-4b2a-4c3d-9e0f-1a2b3c4d5e6f');
+  assert.deepEqual(readSessionRecord(dataDir, () => require('../lib/response-outbox').listPending()), []);
 });
 test('submit uses JSON system messages for missing configuration and suppresses them when disabled', () => {
   const home = makeTempDir('prism-submit-config-home-');

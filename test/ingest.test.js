@@ -15,6 +15,7 @@ const API_KEY = 'prism_ingest_test_key';
 const LEGACY_API_KEY = 'gck_ingest_test_key';
 const ENV_KEYS = [
   'HOME',
+  'CLAUDE_PLUGIN_DATA',
   'PRISM_INGEST_URL',
   'PRISM_API_KEY',
   'PRISM_GCK_KEY',
@@ -224,6 +225,11 @@ test('sendResponse preserves the Hook response request and adds plugin provenanc
     output_tokens: 20,
     model: 'claude-test',
     cost_usd: 0.001,
+    cache_read_tokens: 5,
+    cache_creation_tokens: 3,
+    response_operation_id: 'response-operation-test',
+    response_content_hash: 'a'.repeat(64),
+    host_prompt_id: 'host-prompt-test',
   };
   const expectedBody = {
     tool_session_id: input.tool_session_id,
@@ -233,6 +239,10 @@ test('sendResponse preserves the Hook response request and adds plugin provenanc
     elapsed_ms: input.elapsed_ms,
     input_tokens: input.input_tokens,
     output_tokens: input.output_tokens,
+    cache_read_tokens: input.cache_read_tokens,
+    cache_creation_tokens: input.cache_creation_tokens,
+    response_operation_id: input.response_operation_id,
+    host_prompt_id: input.host_prompt_id,
     model: input.model,
     cost_usd: input.cost_usd,
   };
@@ -244,12 +254,13 @@ test('sendResponse preserves the Hook response request and adds plugin provenanc
 
   assert.deepEqual(result, { status: 202, body: 'accepted' });
   assertRequest(request, '/v1/prompts/response', expectedBody);
+  assert.equal(Object.hasOwn(JSON.parse(request.body), 'response_content_hash'), false);
 });
 test('sendResponse rejects incomplete or invalid dual correlation before network I/O', async () => {
   const { ingest } = await loadIngestWithCapture();
   await assert.rejects(
     ingest.sendResponse({ tool_session_id: 'session-only', response_text: 'completed' }),
-    /client_event_id and server prompt_id/,
+    /client_event_id, server prompt_id, and response_operation_id/,
   );
   await assert.rejects(
     ingest.sendResponse({
@@ -257,7 +268,7 @@ test('sendResponse rejects incomplete or invalid dual correlation before network
       client_event_id: 'client-event',
       response_text: 'completed',
     }),
-    /client_event_id and server prompt_id/,
+    /client_event_id, server prompt_id, and response_operation_id/,
   );
   await assert.rejects(
     ingest.sendResponse({
@@ -266,7 +277,16 @@ test('sendResponse rejects incomplete or invalid dual correlation before network
       prompt_id: '00000000-0000-0000-0000-000000000000',
       response_text: 'completed',
     }),
-    /client_event_id and server prompt_id/,
+    /client_event_id, server prompt_id, and response_operation_id/,
+  );
+  await assert.rejects(
+    ingest.sendResponse({
+      tool_session_id: 'missing-operation-id',
+      client_event_id: 'client-event',
+      prompt_id: '44444444-4444-4444-8444-444444444444',
+      response_text: 'completed',
+    }),
+    /client_event_id, server prompt_id, and response_operation_id/,
   );
 });
 
@@ -304,4 +324,52 @@ test('debug logging records response metadata without echoing response contents'
   assert.match(debugLog, /body_length=/);
   assert.match(debugLog, /id=opaque-response-id/);
   assert.doesNotMatch(debugLog, new RegExp(sentinel));
+});
+test('drain aborts a trickling in-flight POST at its absolute deadline', async () => {
+  const outbox = require('../lib/response-outbox');
+  let resolveRequestClosed;
+  const requestClosed = new Promise((resolve) => { resolveRequestClosed = resolve; });
+  server = http.createServer((request, response) => {
+    request.resume();
+    response.writeHead(202, { 'Content-Type': 'text/plain' });
+    const trickle = setInterval(() => response.write('.'), 10);
+    request.on('close', () => {
+      clearInterval(trickle);
+      resolveRequestClosed();
+    });
+  });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+
+  const address = server.address();
+  process.env.CLAUDE_PLUGIN_DATA = homeDir;
+  writeRuntimeConfig({
+    apiKey: API_KEY,
+    ingest_url: `http://127.0.0.1:${address.port}`,
+  });
+  clearTestModules();
+  const ingest = require('../lib/ingest');
+
+  assert.equal(outbox.enqueue({
+    id: 'trickling-prompt',
+    kind: 'prompt',
+    payload: { prompt_text: 'deadline', tool_session_id: 'deadline-session' },
+  }), true);
+  const startedAt = Date.now();
+  const outcomes = await outbox.drain(
+    (entry, options) => ingest.sendPrompt(entry.payload, options),
+    { maxElapsedMs: 120, minRequestMs: 25 },
+  );
+  const elapsedMs = Date.now() - startedAt;
+
+  await Promise.race([
+    requestClosed,
+    new Promise((resolve, reject) => setTimeout(() => reject(new Error('request was not destroyed')), 500)),
+  ]);
+  assert.equal(outcomes.length, 1);
+  assert.equal(outcomes[0].acked, false);
+  assert.ok(elapsedMs <= 250, `drain took ${elapsedMs}ms`);
+  assert.equal(outbox.listPending().length, 1);
 });

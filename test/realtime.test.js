@@ -164,9 +164,25 @@ test('exact Stop consumes one proven multi-assistant turn and separates totals f
   const response = JSON.parse(fs.readFileSync(marker, 'utf8'));
   assert.equal(response.prompt_id, SERVER_PROMPT_ID);
   assert.equal(response.client_event_id, 'event-exact-stop');
+  assert.equal(response.cache_read_tokens, 0);
+  assert.equal(response.cache_creation_tokens, 0);
+  assert.equal(response.host_prompt_id, promptId);
+  assert.equal(
+    response.response_operation_id,
+    crypto.createHash('sha256').update(`exact-stop\nevent-exact-stop\n${promptId}`).digest('hex'),
+  );
+  assert.equal(
+    response.response_operation_id,
+    crypto.createHash('sha256').update(`exact-stop\nevent-exact-stop\n${promptId}`).digest('hex'),
+  );
+  assert.notEqual(
+    response.response_operation_id,
+    crypto.createHash('sha256').update(`exact-stop\nevent-next-turn\n${promptId}`).digest('hex'),
+  );
+  assert.equal(Object.hasOwn(response, 'response_content_hash'), false);
   assert.equal(session.readTurn('exact-stop').active.status, 'consumed');
 });
-test('failed response capture retains accounting after the active turn is consumed', () => {
+test('failed response capture retains accounting after the active turn is consumed', async () => {
   const home = temp('prism-realtime-failed-response-home-');
   const data = temp('prism-realtime-failed-response-data-');
   const file = path.join(home, 'turn.jsonl');
@@ -193,6 +209,14 @@ test('failed response capture retains accounting after the active turn is consum
 
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Realtime summary unavailable: response capture failed/);
+  const outbox = require('../lib/response-outbox');
+  assert.equal(outbox.listPending().length, 1);
+  const replay = await outbox.drain(async (entry) => {
+    assert.equal(entry.kind, 'response');
+    return { status: 202, body: 'idempotent-noop' };
+  });
+  assert.equal(replay[0].acked, true);
+  assert.deepEqual(outbox.listPending(), []);
   assert.equal(session.readTurn('failed-response').active.status, 'consumed');
   const summary = session.readSummary('failed-response');
   assert.equal(summary.contextHealth.turnCount, 1);
