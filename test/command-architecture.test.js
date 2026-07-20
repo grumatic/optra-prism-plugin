@@ -30,7 +30,7 @@ function nodeInvocations(contents) {
 }
 
 test('commands reference only Claude Code substitution variables, never bogus ones', () => {
-  for (const name of ['realtime', 'status', 'doctor', 'report', 'setup']) {
+  for (const name of ['realtime', 'status', 'doctor', 'report', 'setup', 'config']) {
     const contents = body(readCommand(name));
     assert.doesNotMatch(contents, /\$PLUGIN_DIR|\$\{PLUGIN_DIR\}/, `${name}.md must not use $PLUGIN_DIR`);
     assert.doesNotMatch(contents, /CLAUDE_CODE_SESSION_ID/, `${name}.md must not use $CLAUDE_CODE_SESSION_ID`);
@@ -48,7 +48,7 @@ test('read-only commands pre-authorize their node entrypoints', () => {
 });
 
 test('mutating and static commands keep the permission gate', () => {
-  for (const name of ['setup', 'uninstall', 'help']) {
+  for (const name of ['setup', 'config', 'uninstall', 'help']) {
     assert.doesNotMatch(
       frontmatter(readCommand(name)),
       /allowed-tools/,
@@ -69,11 +69,27 @@ test('deterministic commands are a single entrypoint call plus verbatim display'
   }
 });
 
-test('status keeps one entrypoint plus the conversational toggle appendix', () => {
+test('status stays a single read-only entrypoint', () => {
   const contents = readCommand('status');
   assert.equal(nodeInvocations(contents), 1);
   assert.match(contents, /verbatim/i);
-  assert.match(contents, /showRealtimeSummary/);
+});
+
+test('config is a thin relay to the deterministic config entrypoint', () => {
+  const contents = readCommand('config');
+  assert.match(contents, /lib\/config-command\.js/);
+  assert.match(contents, /\bshow\b/);
+  assert.match(contents, /\bset\b/);
+  assert.match(contents, /\bunset\b/);
+  assert.match(contents, /verbatim/i);
+  assert.doesNotMatch(contents, /PRISM_(?:API_KEY|INGEST_URL)|CLAUDE_PLUGIN_OPTION/);
+});
+
+test('help lists every user-invocable Prism command', () => {
+  const contents = readCommand('help');
+  for (const name of ['setup', 'config', 'status', 'doctor', 'help', 'uninstall', 'realtime', 'report']) {
+    assert.match(contents, new RegExp(`/prism:${name}\\b`));
+  }
 });
 
 test('command prose never re-implements scoring or rendering math', () => {

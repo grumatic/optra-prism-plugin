@@ -9,7 +9,6 @@ const {
 
 const EXPECTED_BOUNDARIES = {
   stopResponse: '2.1.47',
-  userConfig: '2.1.83',
   cwdChanged: '2.1.83',
   toolCorrelation: '2.1.119',
   numericAttributesFrom: '2.1.122',
@@ -33,6 +32,7 @@ function compareSemver(left, right) {
 
 test('declares the reviewed Claude Code capability boundaries', () => {
   assert.deepEqual(CLAUDE_CODE_CAPABILITY_BOUNDARIES, EXPECTED_BOUNDARIES);
+  assert.equal(Object.hasOwn(CLAUDE_CODE_CAPABILITY_BOUNDARIES, 'userConfig'), false);
 });
 
 test('declares valid and ordered semantic versions', () => {

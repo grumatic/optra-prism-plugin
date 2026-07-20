@@ -7,26 +7,27 @@ const {
   beforeEach,
   test,
 } = require('node:test');
-const { fingerprintApiKey } = require('../lib/api-key');
 
-const API_KEY = 'prism_1234567890abcdef';
-const LEGACY_API_KEY = 'gck_1234567890abcdef';
-const PROD_INGEST_URL = 'https://ingest.optra-prism.com';
+const OPAQUE_KEY = 'opaque key with no required prefix';
+const ENV_KEYS = [
+  'HOME',
+  'PRISM_API_KEY',
+  'PRISM_GCK_KEY',
+  'PRISM_INGEST_URL',
+  'PRISM_THRESHOLD',
+  'CLAUDE_PLUGIN_OPTION_APIKEY',
+  'CLAUDE_PLUGIN_OPTION_apiKey',
+  'CLAUDE_PLUGIN_OPTION_PRISMTHRESHOLD',
+  'CLAUDE_PLUGIN_OPTION_SHOWREALTIMESUMMARY',
+];
+const MODULE_PATHS = ['../lib/config', '../lib/env'];
 
 let homeDir;
 let originalEnv;
 let originalFetch;
 
-const ENV_KEYS = [
-  'HOME',
-  'PRISM_INGEST_URL',
-  'PRISM_API_KEY',
-  'PRISM_GCK_KEY',
-  'CLAUDE_PLUGIN_OPTION_apiKey',
-];
-
-function prismPath(file) {
-  return path.join(homeDir, '.prism', file);
+function configFile() {
+  return path.join(homeDir, '.prism', 'config.json');
 }
 
 function writeJson(file, value) {
@@ -34,19 +35,8 @@ function writeJson(file, value) {
   fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-function writeCache(overrides = {}) {
-  writeJson(prismPath('config-cache.json'), {
-    ingest_url: 'https://cached-ingest.example',
-    dashboard_url: 'https://cached-dashboard.example',
-    environment: 'test',
-    api_key_fingerprint: fingerprintApiKey(API_KEY),
-    cached_at: new Date().toISOString(),
-    ...overrides,
-  });
-}
-
-function clearModule(modulePath) {
-  delete require.cache[require.resolve(modulePath)];
+function clearModules() {
+  for (const modulePath of MODULE_PATHS) delete require.cache[require.resolve(modulePath)];
 }
 
 beforeEach(() => {
@@ -57,10 +47,7 @@ beforeEach(() => {
   }]));
   originalFetch = global.fetch;
   process.env.HOME = homeDir;
-  delete process.env.PRISM_INGEST_URL;
-  delete process.env.PRISM_API_KEY;
-  delete process.env.PRISM_GCK_KEY;
-  delete process.env.CLAUDE_PLUGIN_OPTION_apiKey;
+  clearModules();
 });
 
 afterEach(() => {
@@ -69,260 +56,246 @@ afterEach(() => {
     else delete process.env[key];
   }
   global.fetch = originalFetch;
-  clearModule('../lib/config');
-  clearModule('../lib/env');
-  clearModule('../lib/settings');
+  clearModules();
   fs.rmSync(homeDir, { recursive: true, force: true });
 });
 
-test('resolves ingest URL by env, local config, cache, then production', () => {
-  const { getConfig } = require('../lib/config');
-
-  writeCache();
-  assert.equal(getConfig(API_KEY).ingest_url, 'https://cached-ingest.example');
-
-  writeJson(prismPath('config.json'), {
-    apiKey: API_KEY,
-    ingest_url: 'https://local-ingest.example/',
+test('config.json is the sole runtime authority and env/userConfig values are ignored', () => {
+  writeJson(configFile(), {
+    apiKey: OPAQUE_KEY,
+    ingest_url: 'https://config-ingest.example/base',
+    showRealtimeSummary: true,
+    legacyField: 'preserved',
   });
-  assert.equal(getConfig(API_KEY).ingest_url, 'https://local-ingest.example');
-
-  process.env.PRISM_INGEST_URL = 'https://env-ingest.example/';
-  assert.equal(getConfig(API_KEY).ingest_url, 'https://env-ingest.example');
-
-  delete process.env.PRISM_INGEST_URL;
-  fs.rmSync(prismPath('config.json'));
-  fs.rmSync(prismPath('config-cache.json'));
-  assert.equal(getConfig(API_KEY).ingest_url, PROD_INGEST_URL);
-});
-
-test('local ingest override does not replace the cached dashboard URL', () => {
-  const { getConfig } = require('../lib/config');
-
-  writeCache();
-  writeJson(prismPath('config.json'), {
-    apiKey: API_KEY,
-    ingest_url: 'https://local-ingest.example',
+  Object.assign(process.env, {
+    PRISM_API_KEY: 'env-key',
+    PRISM_GCK_KEY: 'legacy-env-key',
+    PRISM_INGEST_URL: 'https://env-ingest.example',
+    PRISM_THRESHOLD: '9',
+    CLAUDE_PLUGIN_OPTION_APIKEY: 'user-config-key',
+    CLAUDE_PLUGIN_OPTION_apiKey: 'compat-user-config-key',
+    CLAUDE_PLUGIN_OPTION_PRISMTHRESHOLD: '2',
+    CLAUDE_PLUGIN_OPTION_SHOWREALTIMESUMMARY: 'false',
   });
 
-  const resolved = getConfig(API_KEY);
-  assert.equal(resolved.ingest_url, 'https://local-ingest.example');
-  assert.equal(resolved.dashboard_url, 'https://cached-dashboard.example');
-  assert.deepEqual(Object.keys(resolved).sort(), ['dashboard_url', 'environment', 'ingest_url']);
-});
-
-test('cache is isolated by an API key fingerprint', () => {
-  const { getCachedConfig } = require('../lib/config');
-
-  writeCache();
-  assert.ok(getCachedConfig(API_KEY));
-  assert.equal(getCachedConfig('prism_different_key'), null);
-});
-
-test('legacy key-prefix cache metadata is not reused', () => {
-  const { getCachedConfig } = require('../lib/config');
-
-  writeJson(prismPath('config-cache.json'), {
-    ingest_url: 'https://legacy-cache.example',
-    dashboard_url: 'https://legacy-dashboard.example',
-    key_prefix: 'gck_12345678',
-    cached_at: new Date().toISOString(),
-  });
-
-  assert.equal(getCachedConfig(API_KEY), null);
-});
-
-test('runtime prefers the neutral environment variable and accepts the legacy fallback', () => {
-  process.env.PRISM_API_KEY = API_KEY;
-  process.env.PRISM_GCK_KEY = LEGACY_API_KEY;
-  clearModule('../lib/env');
-  assert.equal(require('../lib/env').API_KEY, API_KEY);
-
-  delete process.env.PRISM_API_KEY;
-  clearModule('../lib/env');
-  assert.equal(require('../lib/env').API_KEY, LEGACY_API_KEY);
-});
-
-test('runtime and native OTEL settings use the same local ingest override', () => {
-  writeCache();
-  writeJson(prismPath('config.json'), {
-    apiKey: API_KEY,
-    ingest_url: 'https://local-ingest.example/prism/',
-  });
-  process.env.CLAUDE_PLUGIN_OPTION_apiKey = API_KEY;
-
-  clearModule('../lib/env');
-  clearModule('../lib/settings');
+  const config = require('../lib/config').getConfig();
   const runtime = require('../lib/env');
-  const { buildExpectedOtelEnv } = require('../lib/settings');
-  const expected = buildExpectedOtelEnv();
 
-  assert.equal(runtime.INGEST_URL, 'https://local-ingest.example/prism');
-  assert.equal(expected.otelEnv.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT,
-    'https://local-ingest.example/prism/v1/logs');
-  assert.equal(expected.otelEnv.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT,
-    'https://local-ingest.example/prism/v1/metrics');
+  assert.equal(config.apiKey, OPAQUE_KEY);
+  assert.equal(config.ingest_url, 'https://config-ingest.example/base');
+  assert.equal(config.showRealtimeSummary, true);
+  assert.equal(config.legacyField, 'preserved');
+  assert.equal(runtime.API_KEY, OPAQUE_KEY);
+  assert.equal(runtime.INGEST_URL, 'https://config-ingest.example/base');
+  assert.equal(runtime.SHOW_REALTIME_SUMMARY, true);
+  assert.equal(Object.hasOwn(runtime, 'PRISM_THRESHOLD'), false);
 });
 
-test('invalid explicit override fails closed instead of using local, cache, or production', async () => {
-  const config = require('../lib/config');
-  writeCache();
-  writeJson(prismPath('config.json'), {
-    apiKey: API_KEY,
-    ingest_url: 'https://valid-local.example',
+test('missing config has no implicit runtime route even when legacy inputs are present', () => {
+  Object.assign(process.env, {
+    PRISM_API_KEY: 'env-key',
+    PRISM_INGEST_URL: 'https://env-ingest.example',
+    CLAUDE_PLUGIN_OPTION_APIKEY: 'user-config-key',
   });
-  process.env.PRISM_INGEST_URL = 'http://remote-ingest.example';
 
-  let fetchCalls = 0;
-  global.fetch = async () => {
-    fetchCalls += 1;
-    throw new Error('unexpected fetch');
-  };
-
-  assert.equal(config.getConfig(API_KEY).ingest_url, null);
-  assert.equal(config.getConfigEndpoint(), null);
-  assert.equal(await config.fetchConfig(API_KEY), null);
-  assert.equal(fetchCalls, 0);
+  const { getConfig } = require('../lib/config');
+  assert.deepEqual(getConfig(), {
+    apiKey: '',
+    showRealtimeSummary: false,
+  });
 });
 
-test('rejects unsafe local override URL forms', () => {
-  const { getConfig } = require('../lib/config');
-  writeCache();
+test('runtime config preserves stored values without URL or boolean reinterpretation', () => {
+  writeJson(configFile(), {
+    apiKey: OPAQUE_KEY,
+    ingest_url: 'https://config-ingest.example/base/',
+    showRealtimeSummary: 'false',
+  });
 
-  const unsafeUrls = [
-    'http://remote-ingest.example',
-    'https://user:secret@ingest.example',
-    'https://ingest.example?environment=test',
-    'https://ingest.example#fragment',
-    'file:///tmp/ingest',
-    '',
-  ];
+  const configModule = require('../lib/config');
+  assert.equal(configModule.getConfig().ingest_url, 'https://config-ingest.example/base/');
+  assert.equal(configModule.getConfig().showRealtimeSummary, 'false');
+  const runtime = require('../lib/env');
+  assert.equal(runtime.INGEST_URL, 'https://config-ingest.example/base/');
+  assert.equal(runtime.SHOW_REALTIME_SUMMARY, false);
 
-  for (const ingestUrl of unsafeUrls) {
-    writeJson(prismPath('config.json'), { apiKey: API_KEY, ingest_url: ingestUrl });
-    assert.equal(getConfig(API_KEY).ingest_url, null, ingestUrl || '(empty)');
+  writeJson(configFile(), { showRealtimeSummary: 'true', ingest_url: 'http://remote.example' });
+  assert.equal(configModule.getConfig().showRealtimeSummary, 'true');
+  assert.equal(configModule.getConfig().ingest_url, 'http://remote.example');
+
+  writeJson(configFile(), { showRealtimeSummary: 'invalid' });
+  assert.equal(configModule.getConfig().showRealtimeSummary, 'invalid');
+
+  for (const ingestUrl of ['https://host.example?', 'https://host.example#']) {
+    writeJson(configFile(), { ingest_url: ingestUrl });
+    assert.equal(configModule.getConfig().ingest_url, ingestUrl);
   }
 });
 
-test('allows loopback HTTP overrides', () => {
-  const { getConfig } = require('../lib/config');
-
-  for (const ingestUrl of [
-    'http://localhost:9005/prism/',
-    'http://127.0.0.1:9005/prism/',
-    'http://[::1]:9005/prism/',
-  ]) {
-    writeJson(prismPath('config.json'), { apiKey: API_KEY, ingest_url: ingestUrl });
-    assert.equal(getConfig(API_KEY).ingest_url, ingestUrl.replace(/\/$/, ''));
-  }
-});
-
-test('config refresh uses the override and allowlists fields persisted from the server', async () => {
-  const config = require('../lib/config');
-  const { readPluginVersion } = require('../lib/plugin-version');
-  writeJson(prismPath('config.json'), {
-    apiKey: API_KEY,
-    ingest_url: 'https://local-ingest.example/prism/',
+test('an unsafe stored URL remains visible but is not used as a runtime route', () => {
+  writeJson(configFile(), {
+    apiKey: OPAQUE_KEY,
+    ingest_url: 'http://remote.example',
   });
 
-  let requestedUrl;
-  let requestedOptions;
+  const config = require('../lib/config').getConfig();
+  const runtime = require('../lib/env');
+
+  assert.equal(config.ingest_url, 'http://remote.example');
+  assert.equal(runtime.API_KEY, OPAQUE_KEY);
+  assert.equal(runtime.INGEST_URL, '');
+});
+
+test('read, patch, and write preserve config fields and secure the authority file', () => {
+  const config = require('../lib/config');
+  config.writeConfig({ custom: { preserved: true }, prismThreshold: 2 });
+  config.patchConfig({ showRealtimeSummary: true });
+
+  assert.deepEqual(config.readConfig(), {
+    custom: { preserved: true },
+    prismThreshold: 2,
+    showRealtimeSummary: true,
+  });
+  assert.equal(fs.statSync(path.dirname(configFile())).mode & 0o777, 0o700);
+  assert.equal(fs.statSync(configFile()).mode & 0o777, 0o600);
+});
+
+test('fetch sends an opaque key to the configured bootstrap and keeps only used remote fields', async () => {
+  writeJson(configFile(), {
+    ingest_url: 'http://127.0.0.1:9005/bootstrap/',
+    localOnly: 'preserved',
+  });
+  const requests = [];
   global.fetch = async (url, options) => {
-    requestedUrl = url;
-    requestedOptions = options;
+    requests.push({ url, options });
     return {
       ok: true,
+      status: 200,
       json: async () => ({
-        ingest_url: 'https://server-ingest.example',
-        gateway_url: 'https://server-gateway.example',
-        anthropic_base_url: 'https://server-anthropic.example',
-        enableGateway: true,
-        dashboard_url: 'https://server-dashboard.example',
+        ingest_url: 'https://remote-ingest.example/',
+        dashboard_url: 'https://remote-dashboard.example',
         environment: 'test',
-        future_field: 'ignored',
+        apiKey: 'must-not-be-accepted-from-server',
+        futureField: 'ignored',
       }),
     };
   };
 
-  const resolved = await config.ensureCache(API_KEY);
-  const cached = JSON.parse(fs.readFileSync(prismPath('config-cache.json'), 'utf8'));
-
-  assert.equal(requestedUrl, 'https://local-ingest.example/prism/v1/plugin/config');
-  assert.equal(requestedOptions.headers['x-api-key'], API_KEY);
-  assert.equal(requestedOptions.headers['x-prism-plugin-version'], readPluginVersion());
-  assert.equal(Object.hasOwn(requestedOptions.headers, 'x-prism-config-contract'), false);
-  assert.equal(resolved.ingest_url, 'https://local-ingest.example/prism');
-  assert.equal(cached.ingest_url, 'https://server-ingest.example');
-  assert.deepEqual(Object.keys(cached).sort(), [
-    'api_key_fingerprint',
-    'cached_at',
-    'dashboard_url',
-    'environment',
-    'ingest_url',
-  ]);
-  assert.equal(config.getConfig(API_KEY).ingest_url, 'https://local-ingest.example/prism');
-});
-
-test('legacy routing fields in an existing cache are ignored', () => {
-  const { getCachedConfig, getConfig } = require('../lib/config');
-  writeCache({
-    gateway_url: 'https://stale-gateway.example',
-    anthropic_base_url: 'https://stale-anthropic.example',
-    enableGateway: true,
+  const { fetchConfig } = require('../lib/config');
+  assert.deepEqual(await fetchConfig(OPAQUE_KEY), {
+    status: 'server',
+    config: {
+      ingest_url: 'https://remote-ingest.example/',
+      dashboard_url: 'https://remote-dashboard.example',
+    },
   });
-
-  const cached = getCachedConfig(API_KEY);
-  assert.deepEqual(Object.keys(cached).sort(), [
-    'api_key_fingerprint',
-    'cached_at',
-    'dashboard_url',
-    'environment',
-    'ingest_url',
-  ]);
-  assert.deepEqual(Object.keys(getConfig(API_KEY)).sort(), [
-    'dashboard_url',
-    'environment',
-    'ingest_url',
-  ]);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, 'http://127.0.0.1:9005/bootstrap/v1/plugin/config');
+  assert.equal(requests[0].options.headers['x-api-key'], OPAQUE_KEY);
+  assert.deepEqual(JSON.parse(fs.readFileSync(configFile(), 'utf8')), {
+    ingest_url: 'http://127.0.0.1:9005/bootstrap/',
+    localOnly: 'preserved',
+  });
 });
 
-test('fallback cache contains only telemetry service fields and metadata', async () => {
-  const { ensureCache } = require('../lib/config');
-  global.fetch = async () => { throw new Error('offline'); };
-
-  const resolved = await ensureCache(API_KEY);
-  const cached = JSON.parse(fs.readFileSync(prismPath('config-cache.json'), 'utf8'));
-
-  assert.equal(resolved.source, 'fallback');
-  assert.equal(Object.hasOwn(resolved, 'auth_status'), false);
-  assert.deepEqual(Object.keys(cached).sort(), [
-    'api_key_fingerprint',
-    'cached_at',
-    'dashboard_url',
-    'environment',
-    'ingest_url',
-    'source',
-  ]);
-});
-
-test('credential rejection is distinct from an unreachable config endpoint', async () => {
-  const { ensureCache, getCachedConfig } = require('../lib/config');
+test('backend 401 and 403 responses are authoritative authentication failures', async () => {
+  const { fetchConfig } = require('../lib/config');
 
   for (const status of [401, 403]) {
     global.fetch = async () => ({ ok: false, status });
-
-    const resolved = await ensureCache(API_KEY);
-    const cached = JSON.parse(fs.readFileSync(prismPath('config-cache.json'), 'utf8'));
-
-    assert.equal(resolved.source, 'auth-error');
-    assert.equal(resolved.auth_status, status);
-    assert.equal(cached.source, 'auth-error');
-    assert.equal(cached.auth_status, status);
-    assert.equal(getCachedConfig(API_KEY).source, 'auth-error');
+    assert.deepEqual(await fetchConfig('anything non-empty'), {
+      status: 'auth-error',
+      authStatus: status,
+    });
   }
 });
 
-test('config refresh retains the production bootstrap without an override', () => {
-  const { CONFIG_ENDPOINT, getConfigEndpoint } = require('../lib/config');
-  assert.equal(getConfigEndpoint(), CONFIG_ENDPOINT);
+test('invalid keys and fetch errors retain the original config and failure reason', async () => {
+  writeJson(configFile(), { ingest_url: 'http://127.0.0.1:9005', marker: true });
+  let fetchCalls = 0;
+  global.fetch = async () => {
+    fetchCalls += 1;
+    throw new Error('connection refused');
+  };
+
+  const { fetchConfig } = require('../lib/config');
+  assert.equal(require('../lib/config').getConfig().ingest_url, 'http://127.0.0.1:9005');
+  assert.deepEqual(await fetchConfig(''), { status: 'missing-key' });
+  assert.deepEqual(await fetchConfig('opaque'), {
+    status: 'error',
+    message: 'Unable to fetch Prism configuration: connection refused',
+  });
+  assert.equal(fetchCalls, 1);
+  assert.deepEqual(JSON.parse(fs.readFileSync(configFile(), 'utf8')), {
+    ingest_url: 'http://127.0.0.1:9005',
+    marker: true,
+  });
+});
+
+test('fetch refuses an unsafe configured bootstrap before sending the API key', async () => {
+  writeJson(configFile(), { ingest_url: 'http://remote.example', marker: true });
+  let fetchCalls = 0;
+  global.fetch = async () => {
+    fetchCalls += 1;
+    throw new Error('must not run');
+  };
+
+  const { fetchConfig } = require('../lib/config');
+  const result = await fetchConfig(OPAQUE_KEY);
+
+  assert.equal(result.status, 'error');
+  assert.match(result.message, /HTTP on loopback/);
+  assert.equal(fetchCalls, 0);
+  assert.deepEqual(JSON.parse(fs.readFileSync(configFile(), 'utf8')), {
+    ingest_url: 'http://remote.example',
+    marker: true,
+  });
+});
+
+test('fetch reports HTTP, JSON, and unsupported ingest_url failures distinctly', async () => {
+  const { fetchConfig } = require('../lib/config');
+
+  global.fetch = async () => ({ ok: false, status: 503 });
+  assert.deepEqual(await fetchConfig(OPAQUE_KEY), {
+    status: 'error',
+    message: 'Config endpoint returned HTTP 503.',
+    httpStatus: 503,
+  });
+
+  global.fetch = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => { throw new SyntaxError('unexpected token'); },
+  });
+  assert.deepEqual(await fetchConfig(OPAQUE_KEY), {
+    status: 'error',
+    message: 'Config endpoint returned invalid JSON: unexpected token',
+    httpStatus: 200,
+  });
+
+  global.fetch = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ dashboard_url: 'https://dashboard.example' }),
+  });
+  assert.deepEqual(await fetchConfig(OPAQUE_KEY), {
+    status: 'error',
+    message:
+      'Config endpoint response is missing a supported ingest_url ' +
+      '(HTTPS, or HTTP on loopback, without credentials, query, or fragment).',
+    httpStatus: 200,
+  });
+
+  global.fetch = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ ingest_url: 'ftp://ingest.example' }),
+  });
+  assert.deepEqual(await fetchConfig(OPAQUE_KEY), {
+    status: 'error',
+    message:
+      'Config endpoint response is missing a supported ingest_url ' +
+      '(HTTPS, or HTTP on loopback, without credentials, query, or fragment).',
+    httpStatus: 200,
+  });
 });

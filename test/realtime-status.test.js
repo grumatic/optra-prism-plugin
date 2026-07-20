@@ -6,6 +6,19 @@ const os = require('node:os');
 const path = require('node:path');
 
 const tempDirs = [];
+const ENV_KEYS = [
+  'HOME',
+  'CLAUDE_PLUGIN_DATA',
+  'PRISM_API_KEY',
+  'PRISM_GCK_KEY',
+  'PRISM_INGEST_URL',
+  'CLAUDE_PLUGIN_OPTION_APIKEY',
+  'CLAUDE_PLUGIN_OPTION_showRealtimeSummary',
+];
+const originalEnv = new Map(ENV_KEYS.map((key) => [key, {
+  present: Object.prototype.hasOwnProperty.call(process.env, key),
+  value: process.env[key],
+}]));
 
 function makeDataDir() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-realtime-status-'));
@@ -14,26 +27,32 @@ function makeDataDir() {
 }
 
 test.after(() => {
-  delete process.env.CLAUDE_PLUGIN_DATA;
-  delete process.env.PRISM_INGEST_URL;
-  delete process.env.PRISM_API_KEY;
+  for (const [key, original] of originalEnv) {
+    if (original.present) process.env[key] = original.value;
+    else delete process.env[key];
+  }
   for (const dir of tempDirs) {
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
   }
 });
 
 function freshModules(dataDir, ingestUrl) {
+  const configFile = path.join(dataDir, '.prism', 'config.json');
+  fs.mkdirSync(path.dirname(configFile), { recursive: true });
+  fs.writeFileSync(configFile, `${JSON.stringify({
+    apiKey: 'prism_realtime_status_test',
+    ingest_url: ingestUrl || 'http://127.0.0.1:1',
+  }, null, 2)}\n`);
+
+  process.env.HOME = dataDir;
   process.env.CLAUDE_PLUGIN_DATA = dataDir;
-  if (ingestUrl) {
-    process.env.PRISM_INGEST_URL = ingestUrl;
-    process.env.PRISM_API_KEY = 'prism_realtime_status_test';
-  } else {
-    // Hermetic "no ingest": env.js otherwise falls back to the production URL
-    // and the real ~/.prism apiKey, which would make a live network call. A
-    // refused loopback port forces getJson to fail fast and return null.
-    process.env.PRISM_INGEST_URL = 'http://127.0.0.1:1';
-    process.env.PRISM_API_KEY = 'prism_realtime_status_test';
-  }
+  Object.assign(process.env, {
+    PRISM_API_KEY: 'hostile-prism-key',
+    PRISM_GCK_KEY: 'hostile-gck-key',
+    PRISM_INGEST_URL: 'https://hostile-ingest.invalid',
+    CLAUDE_PLUGIN_OPTION_APIKEY: 'hostile-option-key',
+    CLAUDE_PLUGIN_OPTION_showRealtimeSummary: 'true',
+  });
   for (const key of Object.keys(require.cache)) {
     if (/lib[\\/](config|debug|env|ingest|session|realtime|realtime-status)\.js$/.test(key)) delete require.cache[key];
   }

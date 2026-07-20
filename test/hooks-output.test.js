@@ -24,6 +24,31 @@ function makeTempDir(prefix) {
   return dir;
 }
 
+function writeRuntimeConfig(home, value) {
+  const configFile = path.join(home, '.prism', 'config.json');
+  fs.mkdirSync(path.dirname(configFile), { recursive: true });
+  fs.writeFileSync(configFile, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function runtimeEnv(home, dataDir, config, extra = {}) {
+  writeRuntimeConfig(home, config);
+  return {
+    ...process.env,
+    HOME: home,
+    CLAUDE_PLUGIN_DATA: dataDir,
+    PRISM_API_KEY: 'hostile-prism-key',
+    PRISM_GCK_KEY: 'hostile-gck-key',
+    PRISM_INGEST_URL: 'https://hostile-ingest.invalid',
+    PRISM_THRESHOLD: '99',
+    PRISM_DEBUG: '1',
+    CLAUDE_PLUGIN_OPTION_APIKEY: 'hostile-option-key',
+    CLAUDE_PLUGIN_OPTION_apiKey: 'hostile-compat-key',
+    CLAUDE_PLUGIN_OPTION_PRISMTHRESHOLD: '88',
+    CLAUDE_PLUGIN_OPTION_SHOWREALTIMESUMMARY: config.showRealtimeSummary === true ? 'false' : 'true',
+    ...extra,
+  };
+}
+
 function readAllFiles(dir) {
   if (!fs.existsSync(dir)) return '';
   return fs.readdirSync(dir, { withFileTypes: true }).map((entry) => {
@@ -161,8 +186,6 @@ afterEach(() => {
 test('/prism control prompts only create an opaque control barrier', () => {
   const home = makeTempDir('prism-hook-home-');
   const dataDir = makeTempDir('prism-hook-data-');
-  const env = { ...process.env };
-  for (const key of ['PRISM_API_KEY', 'PRISM_GCK_KEY', 'CLAUDE_PLUGIN_OPTION_apiKey', 'PRISM_DEBUG']) delete env[key];
   const fetchMarker = path.join(home, 'fetch-called');
   const fetchBlocker = path.join(home, 'block-fetch.js');
   fs.writeFileSync(fetchBlocker, [
@@ -178,16 +201,13 @@ test('/prism control prompts only create an opaque control barrier', () => {
     cwd: ROOT,
     encoding: 'utf8',
     input: JSON.stringify({ session_id: 'control-session', cwd: ROOT, prompt: `/prism:setup ${SENTINEL}` }),
-    env: {
-      ...env,
-      HOME: home,
-      CLAUDE_PLUGIN_DATA: dataDir,
-      PRISM_INGEST_URL: 'http://127.0.0.1:9',
-      PRISM_API_KEY: 'prism_1234567890abcdef',
-      PRISM_DEBUG: '1',
+    env: runtimeEnv(home, dataDir, {
+      apiKey: 'prism_1234567890abcdef',
+      ingest_url: 'http://127.0.0.1:9',
+    }, {
       PRISM_FETCH_MARKER: fetchMarker,
       NODE_OPTIONS: `--require=${fetchBlocker}`,
-    },
+    }),
     timeout: 1000,
   });
 
@@ -220,15 +240,13 @@ test('case-insensitive and whitespace-prefixed Prism controls never post', () =>
       cwd: ROOT,
       encoding: 'utf8',
       input: JSON.stringify({ session_id: `control-${Buffer.from(prompt).toString('hex')}`, prompt }),
-      env: {
-        ...process.env,
-        HOME: home,
-        CLAUDE_PLUGIN_DATA: dataDir,
-        PRISM_API_KEY: 'prism_control_test',
-        PRISM_INGEST_URL: 'http://127.0.0.1:12345',
+      env: runtimeEnv(home, dataDir, {
+        apiKey: 'prism_control_test',
+        ingest_url: 'http://127.0.0.1:12345',
+      }, {
         PRISM_POST_MARKER: postMarker,
         NODE_OPTIONS: `--require=${writePostInterceptor(home)}`,
-      },
+      }),
       timeout: 1000,
     });
 
@@ -258,15 +276,13 @@ test('non-string prompts advance only control barriers without posting', () => {
       cwd: ROOT,
       encoding: 'utf8',
       input: JSON.stringify({ session_id: sessionId, prompt }),
-      env: {
-        ...process.env,
-        HOME: home,
-        CLAUDE_PLUGIN_DATA: dataDir,
-        PRISM_API_KEY: 'prism_nonstring_test',
-        PRISM_INGEST_URL: 'http://127.0.0.1:12345',
+      env: runtimeEnv(home, dataDir, {
+        apiKey: 'prism_nonstring_test',
+        ingest_url: 'http://127.0.0.1:12345',
+      }, {
         PRISM_POST_MARKER: postMarker,
         NODE_OPTIONS: `--require=${writePostInterceptor(home)}`,
-      },
+      }),
       timeout: 1000,
     });
 
@@ -278,75 +294,108 @@ test('non-string prompts advance only control barriers without posting', () => {
     assert.equal(JSON.stringify(turn).includes(SENTINEL), false);
   }
 });
-test('SessionStart resolves official uppercase API key and threshold userConfig values', () => {
-  const home = makeTempDir('prism-session-start-uppercase-home-');
-  const dataDir = makeTempDir('prism-session-start-uppercase-data-');
+test('SessionStart accepts an opaque config key without fetch, OTEL repair, or env-file writes', () => {
+  const home = makeTempDir('prism-session-start-config-home-');
+  const dataDir = makeTempDir('prism-session-start-config-data-');
   const envFile = path.join(home, 'session-env');
-  const apiKey = 'prism_uppercase_session';
-  fs.mkdirSync(path.join(home, '.prism'), { recursive: true });
-  fs.writeFileSync(path.join(home, '.prism', 'config-cache.json'), JSON.stringify({
-    ingest_url: 'https://ingest.example.test',
-    dashboard_url: 'https://dashboard.example.test',
-    source: 'cache',
-    cached_at: new Date().toISOString(),
-    api_key_fingerprint: crypto.createHash('sha256').update(apiKey).digest('hex'),
-  }));
-
-  const result = runSessionStart(home, dataDir, {
-    session_id: 'uppercase-session',
-    source: 'startup',
-  }, {
-    PRISM_API_KEY: '',
-    PRISM_GCK_KEY: '',
-    PRISM_THRESHOLD: '',
-    CLAUDE_PLUGIN_OPTION_APIKEY: apiKey,
-    CLAUDE_PLUGIN_OPTION_apiKey: '',
-    CLAUDE_PLUGIN_OPTION_PRISMTHRESHOLD: '6.5',
-    CLAUDE_PLUGIN_OPTION_prismThreshold: '',
-    CLAUDE_ENV_FILE: envFile,
-  });
-
-  assert.equal(result.status, 0, result.stderr);
-  const written = fs.readFileSync(envFile, 'utf8');
-  assert.match(written, /export PRISM_API_KEY=prism_uppercase_session/);
-  assert.match(written, /export PRISM_THRESHOLD=6\.5/);
-});
-
-test('SessionStart advances lifecycle barriers before missing and invalid key exits', () => {
-  for (const [label, config] of [
-    ['missing', {}],
-    ['invalid', { CLAUDE_PLUGIN_OPTION_apiKey: 'invalid-key' }],
-  ]) {
-    const home = makeTempDir(`prism-session-start-${label}-home-`);
-    const dataDir = makeTempDir(`prism-session-start-${label}-data-`);
-    const sessionId = `${label}-key-session`;
-    seedActive(dataDir, sessionId);
-    const result = runSessionStart(home, dataDir, { session_id: sessionId, source: 'startup' }, config);
-    assert.equal(result.status, 0, result.stderr);
-    assertLifecycleInvalidated(dataDir, sessionId);
-  }
-});
-
-test('SessionStart advances lifecycle barriers before config auth rejection exit', () => {
-  const home = makeTempDir('prism-session-start-auth-home-');
-  const dataDir = makeTempDir('prism-session-start-auth-data-');
-  const sessionId = 'auth-rejected-session';
-  const apiKey = 'prism_auth_rejected_key';
+  const settingsFile = path.join(home, '.claude', 'settings.json');
+  const fetchMarker = path.join(home, 'fetch-called');
+  const fetchBlocker = path.join(home, 'block-fetch.js');
+  const apiKey = 'opaque-session-key-without-prefix';
+  const sessionId = 'config-session';
   seedActive(dataDir, sessionId);
-  fs.mkdirSync(path.join(home, '.prism'), { recursive: true });
+  writeRuntimeConfig(home, {
+    apiKey,
+    ingest_url: 'https://config-ingest.example',
+  });
   fs.writeFileSync(path.join(home, '.prism', 'config-cache.json'), JSON.stringify({
-    ingest_url: 'https://ingest.example.test',
-    cached_at: new Date().toISOString(),
+    ingest_url: 'https://stale-cache.example',
     source: 'auth-error',
     auth_status: 401,
-    api_key_fingerprint: crypto.createHash('sha256').update(apiKey).digest('hex'),
   }));
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+  fs.writeFileSync(settingsFile, '{"env":{"OTEL_EXPORTER_OTLP_ENDPOINT":"keep"}}\n');
+  fs.writeFileSync(envFile, 'export KEEP_ME=1\n');
+  fs.writeFileSync(fetchBlocker, [
+    "const fs = require('node:fs');",
+    'global.fetch = async () => {',
+    "  fs.writeFileSync(process.env.PRISM_FETCH_MARKER, 'called');",
+    "  throw new Error('fetch blocked');",
+    '};',
+  ].join('\n'));
+
+  const result = runSessionStart(home, dataDir, {
+    session_id: sessionId,
+    source: 'startup',
+  }, {
+    PRISM_API_KEY: 'hostile-env-key',
+    PRISM_INGEST_URL: 'https://hostile-ingest.invalid',
+    CLAUDE_PLUGIN_OPTION_APIKEY: 'hostile-option-key',
+    CLAUDE_PLUGIN_OPTION_PRISMTHRESHOLD: '99',
+    CLAUDE_ENV_FILE: envFile,
+    PRISM_FETCH_MARKER: fetchMarker,
+    NODE_OPTIONS: `--require=${fetchBlocker}`,
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /Session started/);
+  assert.match(result.stderr, /Ingest:\s+https:\/\/config-ingest\.example/);
+  assert.doesNotMatch(result.stderr, /rejected|invalid.*key/i);
+  assert.equal(result.stderr.includes(apiKey), false);
+  assert.equal(fs.readFileSync(envFile, 'utf8'), 'export KEEP_ME=1\n');
+  assert.equal(fs.readFileSync(settingsFile, 'utf8'), '{"env":{"OTEL_EXPORTER_OTLP_ENDPOINT":"keep"}}\n');
+  assert.equal(fs.existsSync(fetchMarker), false);
+  assertLifecycleInvalidated(dataDir, sessionId);
+});
+
+test('SessionStart ignores hostile API key env and advances the barrier before a missing-config exit', () => {
+  const home = makeTempDir('prism-session-start-missing-home-');
+  const dataDir = makeTempDir('prism-session-start-missing-data-');
+  const sessionId = 'missing-key-session';
+  seedActive(dataDir, sessionId);
 
   const result = runSessionStart(home, dataDir, { session_id: sessionId, source: 'startup' }, {
-    CLAUDE_PLUGIN_OPTION_apiKey: apiKey,
+    PRISM_API_KEY: 'prism_hostile_env_key',
+    PRISM_GCK_KEY: 'gck_hostile_env_key',
+    CLAUDE_PLUGIN_OPTION_APIKEY: 'prism_hostile_option_key',
+    CLAUDE_PLUGIN_OPTION_apiKey: 'prism_hostile_compat_key',
   });
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stderr, /rejected/);
+  assert.match(result.stderr, /No API key configured/);
+  assert.doesNotMatch(result.stderr, /Session started/);
+  assertLifecycleInvalidated(dataDir, sessionId);
+});
+
+test('SessionStart reports an unsupported config ingest URL without claiming startup success', () => {
+  const home = makeTempDir('prism-session-start-invalid-url-home-');
+  const dataDir = makeTempDir('prism-session-start-invalid-url-data-');
+  const sessionId = 'invalid-url-session';
+  seedActive(dataDir, sessionId);
+  writeRuntimeConfig(home, {
+    apiKey: 'opaque-key',
+    ingest_url: 'http://remote.example',
+  });
+
+  const result = runSessionStart(home, dataDir, { session_id: sessionId, source: 'startup' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /ingest_url .* is missing or unsupported/);
+  assert.doesNotMatch(result.stderr, /Session started/);
+  assertLifecycleInvalidated(dataDir, sessionId);
+});
+
+test('SessionStart reports a malformed config instead of claiming the key is missing', () => {
+  const home = makeTempDir('prism-session-start-malformed-home-');
+  const dataDir = makeTempDir('prism-session-start-malformed-data-');
+  const sessionId = 'malformed-config-session';
+  seedActive(dataDir, sessionId);
+  const configFile = path.join(home, '.prism', 'config.json');
+  fs.mkdirSync(path.dirname(configFile), { recursive: true });
+  fs.writeFileSync(configFile, '{ malformed json\n');
+
+  const result = runSessionStart(home, dataDir, { session_id: sessionId, source: 'startup' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /Unable to read ~\/\.prism\/config\.json/);
+  assert.doesNotMatch(result.stderr, /No API key configured|Session started/);
   assertLifecycleInvalidated(dataDir, sessionId);
 });
 
@@ -391,15 +440,13 @@ test('normal prompts bind the captured server id to an opaque frozen payload', (
       transcript_path: transcript,
       prompt_id: 'submit-host-prompt-id',
     }),
-    env: {
-      ...process.env,
-      HOME: home,
-      CLAUDE_PLUGIN_DATA: dataDir,
-      PRISM_API_KEY: 'prism_normal_capture',
-      PRISM_INGEST_URL: 'http://127.0.0.1:12345',
+    env: runtimeEnv(home, dataDir, {
+      apiKey: 'prism_normal_capture',
+      ingest_url: 'http://127.0.0.1:12345',
+    }, {
       PRISM_PROMPT_MARKER: marker,
       NODE_OPTIONS: `--require=${interceptor}`,
-    },
+    }),
     timeout: 3000,
   });
 
@@ -431,13 +478,10 @@ test('Stop without an exact captured prompt is a zero-effect skip', () => {
       session_id: 'uncorrelated-stop-session',
       last_assistant_message: 'unmatched response',
     }),
-    env: {
-      ...process.env,
-      HOME: home,
-      CLAUDE_PLUGIN_DATA: dataDir,
-      PRISM_API_KEY: 'prism_stop_handler_test',
-      PRISM_INGEST_URL: 'http://127.0.0.1:12345',
-    },
+    env: runtimeEnv(home, dataDir, {
+      apiKey: 'prism_stop_handler_test',
+      ingest_url: 'http://127.0.0.1:12345',
+    }),
     timeout: 3000,
   });
 
@@ -499,14 +543,12 @@ test('unexpected post-attach failures advance the same epoch to failed', () => {
     cwd: ROOT,
     encoding: 'utf8',
     input: JSON.stringify({ session_id: 'post-attach-session', prompt: 'a normal prompt for failure injection' }),
-    env: {
-      ...process.env,
-      HOME: home,
-      CLAUDE_PLUGIN_DATA: dataDir,
-      PRISM_API_KEY: 'prism_post_attach',
-      PRISM_INGEST_URL: 'http://127.0.0.1:9',
+    env: runtimeEnv(home, dataDir, {
+      apiKey: 'prism_post_attach',
+      ingest_url: 'http://127.0.0.1:9',
+    }, {
       NODE_OPTIONS: `--require=${hook}`,
-    },
+    }),
   });
   assert.equal(result.status, 0, result.stderr);
   const turn = JSON.parse(fs.readFileSync(turnFile(dataDir, 'post-attach-session'), 'utf8'));
@@ -549,14 +591,12 @@ test('submit refuses promotion when a successful response has no persisted serve
     cwd: ROOT,
     encoding: 'utf8',
     input: JSON.stringify({ session_id: 'nil-server-id', prompt_id: 'host-prompt', prompt: 'capture this' }),
-    env: {
-      ...process.env,
-      HOME: home,
-      CLAUDE_PLUGIN_DATA: dataDir,
-      PRISM_API_KEY: 'prism_submit_nil_id',
-      PRISM_INGEST_URL: 'http://127.0.0.1:9',
+    env: runtimeEnv(home, dataDir, {
+      apiKey: 'prism_submit_nil_id',
+      ingest_url: 'http://127.0.0.1:9',
+    }, {
       NODE_OPTIONS: `--require=${hook}`,
-    },
+    }),
   });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(assertJsonOrEmpty(result.stdout), null);
@@ -568,19 +608,34 @@ test('submit uses JSON system messages for missing configuration and suppresses 
   const home = makeTempDir('prism-submit-config-home-');
   const dataDir = makeTempDir('prism-submit-config-data-');
   const input = { session_id: 'missing-config', prompt: 'normal prompt' };
-  const env = { ...process.env, HOME: home, CLAUDE_PLUGIN_DATA: dataDir };
-  for (const key of ['PRISM_API_KEY', 'PRISM_GCK_KEY', 'CLAUDE_PLUGIN_OPTION_APIKEY', 'CLAUDE_PLUGIN_OPTION_apiKey', 'PRISM_DEBUG']) delete env[key];
 
   const shown = spawnSync(process.execPath, [SUBMIT_HANDLER], {
     cwd: ROOT,
     encoding: 'utf8',
     input: JSON.stringify(input),
-    env: { ...env, CLAUDE_PLUGIN_OPTION_SHOWREALTIMESUMMARY: 'true' },
+    env: runtimeEnv(home, dataDir, { showRealtimeSummary: true }),
   });
   assert.equal(shown.status, 0, shown.stderr);
   assert.equal(shown.stderr, '');
   assert.deepEqual(assertJsonOrEmpty(shown.stdout), {
-    systemMessage: '[Prism] API key not configured. Run /prism:setup prism_YOUR_KEY.',
+    systemMessage: '[Prism] API key not configured. Run /prism:setup YOUR_KEY.',
+  });
+
+  const missingUrl = spawnSync(process.execPath, [SUBMIT_HANDLER], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    input: JSON.stringify({ ...input, session_id: 'missing-ingest-url' }),
+    env: runtimeEnv(home, dataDir, {
+      apiKey: 'opaque-key',
+      ingest_url: null,
+      showRealtimeSummary: true,
+    }),
+  });
+  assert.equal(missingUrl.status, 0, missingUrl.stderr);
+  assert.equal(missingUrl.stderr, '');
+  assert.deepEqual(assertJsonOrEmpty(missingUrl.stdout), {
+    systemMessage:
+      '[Prism] ingest_url not configured. Run /prism:setup YOUR_KEY or /prism:config.',
   });
 
   // Opt-in default: without the option set, display output stays suppressed.
@@ -588,7 +643,7 @@ test('submit uses JSON system messages for missing configuration and suppresses 
     cwd: ROOT,
     encoding: 'utf8',
     input: JSON.stringify({ ...input, session_id: 'missing-config-default' }),
-    env,
+    env: runtimeEnv(home, dataDir, {}),
   });
   assert.equal(defaulted.status, 0, defaulted.stderr);
   assert.equal(defaulted.stderr, '');
@@ -598,7 +653,7 @@ test('submit uses JSON system messages for missing configuration and suppresses 
     cwd: ROOT,
     encoding: 'utf8',
     input: JSON.stringify({ ...input, session_id: 'missing-config-off' }),
-    env: { ...env, CLAUDE_PLUGIN_OPTION_SHOWREALTIMESUMMARY: 'false' },
+    env: runtimeEnv(home, dataDir, { showRealtimeSummary: false }),
   });
   assert.equal(hidden.status, 0, hidden.stderr);
   assert.equal(hidden.stderr, '');
@@ -613,15 +668,13 @@ test('submit emits no display output on a captured turn and retains capture', ()
     cwd: ROOT,
     encoding: 'utf8',
     input: JSON.stringify({ session_id: sessionId, prompt_id: 'host-nooutput', prompt: 'normal prompt' }),
-    env: {
-      ...process.env,
-      HOME: home,
-      CLAUDE_PLUGIN_DATA: dataDir,
-      PRISM_API_KEY: 'prism_nooutput_test',
-      PRISM_INGEST_URL: 'http://127.0.0.1:9',
-      CLAUDE_PLUGIN_OPTION_SHOWREALTIMESUMMARY: 'true',
+    env: runtimeEnv(home, dataDir, {
+      apiKey: 'prism_nooutput_test',
+      ingest_url: 'http://127.0.0.1:9',
+      showRealtimeSummary: true,
+    }, {
       NODE_OPTIONS: `--require=${writeSuccessfulIngestInterceptor(home)}`,
-    },
+    }),
   });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stderr, '');
@@ -642,15 +695,13 @@ test('real-host fixture completes submit-to-stop correlation without leaking pro
   fixture.stop.transcript_path = transcript;
   fixture.stop.cwd = ROOT;
   const interceptor = writeSuccessfulIngestInterceptor(home);
-  const env = {
-    ...process.env,
-    HOME: home,
-    CLAUDE_PLUGIN_DATA: dataDir,
-    PRISM_API_KEY: 'prism_host_fixture',
-    PRISM_INGEST_URL: 'http://127.0.0.1:9',
-    CLAUDE_PLUGIN_OPTION_SHOWREALTIMESUMMARY: 'true',
+  const env = runtimeEnv(home, dataDir, {
+    apiKey: 'prism_host_fixture',
+    ingest_url: 'http://127.0.0.1:9',
+    showRealtimeSummary: true,
+  }, {
     NODE_OPTIONS: `--require=${interceptor}`,
-  };
+  });
 
   const submit = spawnSync(process.execPath, [SUBMIT_HANDLER], {
     cwd: ROOT,

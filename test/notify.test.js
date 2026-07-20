@@ -19,6 +19,12 @@ function clearModules() {
   for (const modulePath of MODULE_PATHS) delete require.cache[require.resolve(modulePath)];
 }
 
+function writeConfig(value) {
+  const file = path.join(homeDir, '.prism', 'config.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
+}
+
 beforeEach(() => {
   homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-notify-test-'));
   originalEnv = new Map(ENV_KEYS.map((key) => [key, {
@@ -27,7 +33,7 @@ beforeEach(() => {
   }]));
   originalFetch = global.fetch;
   process.env.HOME = homeDir;
-  process.env.PRISM_INGEST_URL = 'https://local-ingest.example';
+  process.env.PRISM_INGEST_URL = 'https://ignored-env.example';
   clearModules();
 });
 
@@ -41,55 +47,60 @@ afterEach(() => {
   fs.rmSync(homeDir, { recursive: true, force: true });
 });
 
-for (const apiKey of ['prism_1234567890abcdef', 'gck_1234567890abcdef']) {
-  test(`setup notification accepts ${apiKey.split('_', 1)[0]} API keys`, async () => {
-    const requests = [];
-    global.fetch = async (url, options) => {
-      requests.push({ url, options });
-      if (url.endsWith('/v1/plugin/config')) {
-        return {
-          ok: true,
-          json: async () => ({
-            ingest_url: 'https://local-ingest.example',
-            dashboard_url: 'https://dashboard.example',
-            environment: 'test',
-          }),
-        };
-      }
-      return { ok: true };
-    };
+test('setup notification uses config.json and preserves an opaque non-empty key', async () => {
+  const apiKey = 'opaque notify key';
+  writeConfig({ ingest_url: 'https://config-ingest.example/base/' });
+  const requests = [];
+  global.fetch = async (url, options) => {
+    requests.push({ url, options });
+    return { ok: true, status: 204 };
+  };
 
-    const { notifySetupComplete } = require('../lib/notify');
-    assert.equal(await notifySetupComplete(apiKey), true);
-    assert.equal(requests.length, 2);
-    assert.equal(requests[0].url, 'https://local-ingest.example/v1/plugin/config');
-    assert.equal(requests[0].options.headers['x-api-key'], apiKey);
-    assert.equal(requests[1].url, 'https://local-ingest.example/v1/setup-complete');
-    assert.equal(requests[1].options.headers.Authorization, `Bearer ${apiKey}`);
-    assert.deepEqual(Object.keys(JSON.parse(requests[1].options.body)), ['plugin_version']);
+  const { notifySetupComplete } = require('../lib/notify');
+  assert.deepEqual(await notifySetupComplete(apiKey), {
+    ok: true,
+    httpStatus: 204,
+    error: null,
   });
-}
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, 'https://config-ingest.example/base/v1/setup-complete');
+  assert.equal(requests[0].options.headers.Authorization, `Bearer ${apiKey}`);
+  assert.deepEqual(Object.keys(JSON.parse(requests[0].options.body)), ['plugin_version']);
+});
 
-test('setup notification rejects unsupported API keys without a request', async () => {
+test('empty and non-string keys are rejected without a request', async () => {
+  writeConfig({ ingest_url: 'https://config-ingest.example' });
   let requests = 0;
   global.fetch = async () => {
     requests += 1;
     return { ok: true };
   };
-
   const { notifySetupComplete } = require('../lib/notify');
-  assert.equal(await notifySetupComplete('other_key'), false);
+
+  for (const value of ['', null, undefined, 123]) {
+    assert.deepEqual(await notifySetupComplete(value), {
+      ok: false,
+      httpStatus: null,
+      error: 'API key is missing',
+    });
+  }
   assert.equal(requests, 0);
 });
 
-test('setup notification stops after config authentication is rejected', async () => {
-  let requests = 0;
-  global.fetch = async () => {
-    requests += 1;
-    return { ok: false, status: 401 };
-  };
-
+test('notification preserves network and backend failure details', async () => {
+  writeConfig({ ingest_url: 'https://config-ingest.example' });
   const { notifySetupComplete } = require('../lib/notify');
-  assert.equal(await notifySetupComplete('prism_rejected'), false);
-  assert.equal(requests, 1);
+  global.fetch = async () => { throw new Error('DNS lookup failed'); };
+  assert.deepEqual(await notifySetupComplete('opaque'), {
+    ok: false,
+    httpStatus: null,
+    error: 'DNS lookup failed',
+  });
+
+  global.fetch = async () => ({ ok: false, status: 403 });
+  assert.deepEqual(await notifySetupComplete('opaque'), {
+    ok: false,
+    httpStatus: 403,
+    error: 'HTTP 403',
+  });
 });

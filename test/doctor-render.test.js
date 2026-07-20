@@ -1,71 +1,110 @@
 const test = require('node:test');
-const assert = require('node:assert');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 
 const { renderReport } = require('../lib/doctor');
+const ROOT = path.resolve(__dirname, '..');
 
-test('renders a mixed doctor report with auto-fixes and remediations', () => {
+test('doctor treats any non-empty config key as present without prefix validation', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-doctor-key-'));
+  const projectDir = path.join(home, 'project');
+  const configFile = path.join(home, '.prism', 'config.json');
+  fs.mkdirSync(path.dirname(configFile), { recursive: true });
+  fs.mkdirSync(projectDir, { recursive: true });
+  fs.writeFileSync(configFile, `${JSON.stringify({
+    apiKey: 'opaque-key-without-a-known-prefix',
+    ingest_url: 'http://127.0.0.1:1',
+  }, null, 2)}\n`);
+
+  try {
+    const result = spawnSync(process.execPath, [
+      path.join(ROOT, 'lib', 'doctor.js'),
+      '--json',
+      '--project-dir',
+      projectDir,
+    ], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        HOME: home,
+        PRISM_API_KEY: 'hostile-env-key',
+        CLAUDE_PLUGIN_OPTION_APIKEY: 'hostile-option-key',
+      },
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.checks.length, 3);
+    assert.deepEqual(
+      report.checks.find((check) => check.id === 'api-key'),
+      {
+        id: 'api-key',
+        name: 'API Key',
+        status: 'pass',
+        message: 'Prism API key present in ~/.prism/config.json',
+        remediation: null,
+      },
+    );
+    assert.equal(Object.hasOwn(report, 'autoFixed'), false);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('renders config, effective OTEL projection, and connectivity failures', () => {
   const output = renderReport({
     checks: [
-      { name: 'API Key', status: 'pass', message: 'Prism API key configured', remediation: null },
-      { name: 'OTEL Scope', status: 'warn', message: 'OTEL vars exist in both user and project scopes', remediation: 'Run /prism:setup to consolidate to one scope' },
-      { name: 'Config Cache', status: 'pass', message: 'Cache refreshed (was expired)', remediation: null },
-      { name: 'Ingest Connectivity', status: 'fail', message: 'ingest: fail', remediation: 'Check network connectivity and verify the effective ingest URL' },
-      { name: 'Process Env Sync', status: 'fail', message: '2 env var(s) out of sync', remediation: null },
+      { name: 'API Key', status: 'pass', message: 'Prism API key present in ~/.prism/config.json', remediation: null },
+      { name: 'OTEL Settings', status: 'fail', message: 'Out of sync: OTEL_EXPORTER_OTLP_LOGS_ENDPOINT', remediation: 'Run /prism:setup KEY, then restart Claude Code' },
+      { name: 'Ingest Health Endpoint', status: 'fail', message: 'https://ingest.example.test/health: unreachable', remediation: 'Check network connectivity and ~/.prism/config.json ingest_url' },
     ],
-    summary: { passed: 2, warnings: 1, failed: 2 },
-    autoFixed: ['Refreshed expired config cache'],
+    summary: { passed: 1, warnings: 0, failed: 2 },
   });
 
   assert.equal(output, [
-    '**Prism Doctor** — 2 passed, 1 warnings, 2 failed',
+    '**Prism Doctor** — 1 passed, 0 warnings, 2 failed',
     '',
     '| # | Check | Status | Details |',
     '|---|-------|--------|---------|',
-    '| 1 | API Key | PASS | Prism API key configured |',
-    '| 2 | OTEL Scope | WARN | OTEL vars exist in both user and project scopes |',
-    '| 3 | Config Cache | PASS | Cache refreshed (was expired) |',
-    '| 4 | Ingest Connectivity | FAIL | ingest: fail |',
-    '| 5 | Process Env Sync | FAIL | 2 env var(s) out of sync |',
-    '',
-    '**Auto-fixed:**',
-    '- Refreshed expired config cache',
+    '| 1 | API Key | PASS | Prism API key present in ~/.prism/config.json |',
+    '| 2 | OTEL Settings | FAIL | Out of sync: OTEL_EXPORTER_OTLP_LOGS_ENDPOINT |',
+    '| 3 | Ingest Health Endpoint | FAIL | https://ingest.example.test/health: unreachable |',
     '',
     '**Issues:**',
-    '1. **OTEL Scope:** OTEL vars exist in both user and project scopes',
-    '   **Fix:** Run /prism:setup to consolidate to one scope',
-    '2. **Ingest Connectivity:** ingest: fail',
-    '   **Fix:** Check network connectivity and verify the effective ingest URL',
-    '3. **Process Env Sync:** 2 env var(s) out of sync',
+    '1. **OTEL Settings:** Out of sync: OTEL_EXPORTER_OTLP_LOGS_ENDPOINT',
+    '   **Fix:** Run /prism:setup KEY, then restart Claude Code',
+    '2. **Ingest Health Endpoint:** https://ingest.example.test/health: unreachable',
+    '   **Fix:** Check network connectivity and ~/.prism/config.json ingest_url',
     '',
     'Run `/prism:help` for all commands.',
   ].join('\n'));
+  assert.doesNotMatch(output, /cache|auto-fixed|process env|key format/i);
 });
 
-test('renders the all-healthy doctor report', () => {
+test('renders the three-check all-healthy doctor report', () => {
   const output = renderReport({
     checks: [
-      { name: 'API Key', status: 'pass', message: 'Prism API key configured', remediation: null },
-      { name: 'OTEL Scope', status: 'pass', message: 'user scope (install: user)', remediation: null },
-      { name: 'Config Cache', status: 'pass', message: 'Valid (env: production)', remediation: null },
-      { name: 'Ingest Connectivity', status: 'pass', message: 'ingest: pass', remediation: null },
-      { name: 'Process Env Sync', status: 'pass', message: 'All 10 OTEL env vars in sync', remediation: null },
+      { name: 'API Key', status: 'pass', message: 'Prism API key present in ~/.prism/config.json', remediation: null },
+      { name: 'OTEL Settings', status: 'pass', message: 'All 10 expected values match effective Claude settings on disk', remediation: null },
+      { name: 'Ingest Health Endpoint', status: 'pass', message: 'https://ingest.example.test/health: connected', remediation: null },
     ],
-    summary: { passed: 5, warnings: 0, failed: 0 },
-    autoFixed: [],
+    summary: { passed: 3, warnings: 0, failed: 0 },
   });
 
   assert.equal(output, [
-    '**Prism Doctor** — 5 passed, 0 warnings, 0 failed',
+    '**Prism Doctor** — 3 passed, 0 warnings, 0 failed',
     '',
     '| # | Check | Status | Details |',
     '|---|-------|--------|---------|',
-    '| 1 | API Key | PASS | Prism API key configured |',
-    '| 2 | OTEL Scope | PASS | user scope (install: user) |',
-    '| 3 | Config Cache | PASS | Valid (env: production) |',
-    '| 4 | Ingest Connectivity | PASS | ingest: pass |',
-    '| 5 | Process Env Sync | PASS | All 10 OTEL env vars in sync |',
+    '| 1 | API Key | PASS | Prism API key present in ~/.prism/config.json |',
+    '| 2 | OTEL Settings | PASS | All 10 expected values match effective Claude settings on disk |',
+    '| 3 | Ingest Health Endpoint | PASS | https://ingest.example.test/health: connected |',
     '',
-    'All checks passed. Your Prism configuration is healthy.',
+    'All local configuration and health endpoint checks passed.',
+    'Authentication and capture result are not checked.',
     '',
     'Run `/prism:help` for all commands.',
   ].join('\n'));

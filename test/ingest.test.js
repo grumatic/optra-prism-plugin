@@ -13,10 +13,21 @@ const { readPluginVersion } = require('../lib/plugin-version');
 
 const API_KEY = 'prism_ingest_test_key';
 const LEGACY_API_KEY = 'gck_ingest_test_key';
-const ENV_KEYS = ['HOME', 'PRISM_INGEST_URL', 'PRISM_API_KEY', 'PRISM_GCK_KEY'];
+const ENV_KEYS = [
+  'HOME',
+  'PRISM_INGEST_URL',
+  'PRISM_API_KEY',
+  'PRISM_GCK_KEY',
+  'PRISM_THRESHOLD',
+  'CLAUDE_PLUGIN_OPTION_APIKEY',
+  'CLAUDE_PLUGIN_OPTION_apiKey',
+  'CLAUDE_PLUGIN_OPTION_PRISMTHRESHOLD',
+  'CLAUDE_PLUGIN_OPTION_SHOWREALTIMESUMMARY',
+];
 const MODULE_PATHS = [
   '../lib/config',
   '../lib/debug',
+  '../lib/engine',
   '../lib/env',
   '../lib/ingest',
   '../lib/plugin-version',
@@ -42,7 +53,13 @@ function closeServer() {
   });
 }
 
-async function loadIngestWithCapture(apiKey = API_KEY, envName = 'PRISM_API_KEY', responseBody = 'accepted') {
+function writeRuntimeConfig(value) {
+  const configFile = path.join(homeDir, '.prism', 'config.json');
+  fs.mkdirSync(path.dirname(configFile), { recursive: true });
+  fs.writeFileSync(configFile, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+async function loadIngestWithCapture(apiKey = API_KEY, responseBody = 'accepted', trailingSlash = false) {
   let resolveRequest;
   const requestReceived = new Promise((resolve) => { resolveRequest = resolve; });
 
@@ -68,10 +85,20 @@ async function loadIngestWithCapture(apiKey = API_KEY, envName = 'PRISM_API_KEY'
   });
 
   const address = server.address();
-  process.env.PRISM_INGEST_URL = `http://127.0.0.1:${address.port}`;
-  delete process.env.PRISM_API_KEY;
-  delete process.env.PRISM_GCK_KEY;
-  process.env[envName] = apiKey;
+  writeRuntimeConfig({
+    apiKey,
+    ingest_url: `http://127.0.0.1:${address.port}${trailingSlash ? '/' : ''}`,
+  });
+  Object.assign(process.env, {
+    PRISM_INGEST_URL: 'https://hostile-ingest.invalid',
+    PRISM_API_KEY: 'hostile-prism-key',
+    PRISM_GCK_KEY: 'hostile-gck-key',
+    PRISM_THRESHOLD: '99',
+    CLAUDE_PLUGIN_OPTION_APIKEY: 'hostile-official-key',
+    CLAUDE_PLUGIN_OPTION_apiKey: 'hostile-compat-key',
+    CLAUDE_PLUGIN_OPTION_PRISMTHRESHOLD: '88',
+    CLAUDE_PLUGIN_OPTION_SHOWREALTIMESUMMARY: 'true',
+  });
   clearTestModules();
 
   return {
@@ -105,9 +132,9 @@ beforeEach(() => {
   }));
 
   process.env.HOME = homeDir;
-  delete process.env.PRISM_INGEST_URL;
-  delete process.env.PRISM_API_KEY;
-  delete process.env.PRISM_GCK_KEY;
+  for (const key of ENV_KEYS) {
+    if (key !== 'HOME') delete process.env[key];
+  }
   server = null;
 });
 
@@ -127,7 +154,7 @@ afterEach(async () => {
 });
 
 test('sendPrompt preserves the Hook prompt request and adds plugin provenance', async () => {
-  const { ingest, requestReceived } = await loadIngestWithCapture();
+  const { ingest, requestReceived } = await loadIngestWithCapture(API_KEY, 'accepted', true);
   const input = {
     prompt_text: '안녕 Prism',
     source: 'claude-code-test',
@@ -152,6 +179,37 @@ test('sendPrompt preserves the Hook prompt request and adds plugin provenance', 
 
   assert.deepEqual(result, { status: 202, body: 'accepted' });
   assertRequest(request, '/v1/prompts', expectedBody);
+});
+
+test('engine report requests use one slash after a trailing-slash ingest URL', async () => {
+  const { requestReceived } = await loadIngestWithCapture(API_KEY, '{}', true);
+  const engine = require('../lib/engine');
+
+  const [result, request] = await Promise.all([
+    engine.quickReport(),
+    requestReceived,
+  ]);
+
+  assert.deepEqual(result, { ok: true, reason: null, data: {} });
+  assert.equal(request.path, '/v1/insights/report/quick');
+  assert.equal(request.headers['x-api-key'], API_KEY);
+});
+
+test('healthCheck returns the HTTP evidence used by status and doctor', async () => {
+  const { ingest, requestReceived } = await loadIngestWithCapture();
+  const [health, request] = await Promise.all([
+    ingest.healthCheck(),
+    requestReceived,
+  ]);
+
+  assert.deepEqual(health, {
+    ok: true,
+    reachable: true,
+    httpStatus: 202,
+    error: null,
+  });
+  assert.equal(request.method, 'GET');
+  assert.equal(request.path, '/health');
 });
 
 test('sendResponse preserves the Hook response request and adds plugin provenance', async () => {
@@ -212,11 +270,8 @@ test('sendResponse rejects incomplete or invalid dual correlation before network
   );
 });
 
-test('sendPrompt preserves a legacy API key in the request header', async () => {
-  const { ingest, requestReceived } = await loadIngestWithCapture(
-    LEGACY_API_KEY,
-    'PRISM_GCK_KEY',
-  );
+test('sendPrompt preserves a legacy API key from config in the request header', async () => {
+  const { ingest, requestReceived } = await loadIngestWithCapture(LEGACY_API_KEY);
   const input = {
     prompt_text: 'legacy key',
     source: 'claude-code-test',
@@ -237,7 +292,6 @@ test('debug logging records response metadata without echoing response contents'
   const sentinel = 'prism_response_secret_sentinel';
   const { ingest, requestReceived } = await loadIngestWithCapture(
     API_KEY,
-    'PRISM_API_KEY',
     JSON.stringify({ id: 'opaque-response-id', echoed_prompt: sentinel }),
   );
 

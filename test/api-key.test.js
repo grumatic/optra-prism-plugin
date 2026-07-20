@@ -1,34 +1,22 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 
-const {
-  fingerprintApiKey,
-  isSupportedApiKey,
-} = require('../lib/api-key');
+const { hasApiKey } = require('../lib/api-key');
 
-test('accepts Prism and legacy API key formats', () => {
-  assert.equal(isSupportedApiKey('prism_1234567890abcdef'), true);
-  assert.equal(isSupportedApiKey('gck_1234567890abcdef'), true);
-});
-
-test('rejects unsupported API key values', () => {
-  for (const value of [null, undefined, 123, '', 'prism', 'gck', 'other_key']) {
-    assert.equal(isSupportedApiKey(value), false, String(value));
+test('accepts every non-empty string as an opaque API key', () => {
+  for (const value of [
+    'prism_1234567890abcdef',
+    'gck_1234567890abcdef',
+    'other_key',
+    '  whitespace is opaque  ',
+    'key\nwith\nnewlines',
+  ]) {
+    assert.equal(hasApiKey(value), true, JSON.stringify(value));
   }
 });
 
-test('fingerprints the full API key without retaining credential material', () => {
-  const apiKey = 'prism_1234567890abcdef';
-  const fingerprint = fingerprintApiKey(apiKey);
-
-  assert.match(fingerprint, /^[a-f0-9]{64}$/);
-  assert.equal(fingerprint, fingerprintApiKey(apiKey));
-  assert.notEqual(fingerprint, fingerprintApiKey('prism_different_key'));
-  assert.equal(fingerprint.includes(apiKey), false);
-});
-
-test('returns null when a key cannot be fingerprinted', () => {
-  for (const value of [null, undefined, 123, '']) {
-    assert.equal(fingerprintApiKey(value), null, String(value));
+test('rejects only empty and non-string API key values', () => {
+  for (const value of ['', null, undefined, 0, 123, {}, []]) {
+    assert.equal(hasApiKey(value), false, String(value));
   }
 });

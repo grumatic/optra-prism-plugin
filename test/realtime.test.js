@@ -30,6 +30,22 @@ function temp(prefix) {
   dirs.push(dir);
   return dir;
 }
+function runtimeEnv(home, dataDir, config, extra = {}) {
+  const configFile = path.join(home, '.prism', 'config.json');
+  fs.mkdirSync(path.dirname(configFile), { recursive: true });
+  fs.writeFileSync(configFile, `${JSON.stringify(config, null, 2)}\n`);
+  return {
+    ...process.env,
+    HOME: home,
+    CLAUDE_PLUGIN_DATA: dataDir,
+    PRISM_API_KEY: 'hostile-prism-key',
+    PRISM_GCK_KEY: 'hostile-gck-key',
+    PRISM_INGEST_URL: 'https://hostile-ingest.invalid',
+    CLAUDE_PLUGIN_OPTION_APIKEY: 'hostile-option-key',
+    CLAUDE_PLUGIN_OPTION_SHOWREALTIMESUMMARY: config.showRealtimeSummary ? 'false' : 'true',
+    ...extra,
+  };
+}
 function active(
   sessionId,
   promptId,
@@ -126,7 +142,14 @@ test('exact Stop consumes one proven multi-assistant turn and separates totals f
     cwd: ROOT,
     encoding: 'utf8',
     input: JSON.stringify({ session_id: 'exact-stop', prompt_id: promptId, transcript_path: file, last_assistant_message: text }),
-    env: { ...process.env, HOME: home, CLAUDE_PLUGIN_DATA: data, PRISM_API_KEY: 'prism_test', PRISM_INGEST_URL: 'http://127.0.0.1:9', RESPONSE_MARKER: marker, CLAUDE_PLUGIN_OPTION_SHOWREALTIMESUMMARY: 'true', NODE_OPTIONS: `--require=${interceptor(home)}` },
+    env: runtimeEnv(home, data, {
+      apiKey: 'prism_test',
+      ingest_url: 'http://127.0.0.1:9',
+      showRealtimeSummary: true,
+    }, {
+      RESPONSE_MARKER: marker,
+      NODE_OPTIONS: `--require=${interceptor(home)}`,
+    }),
   });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /"systemMessage":"\[Prism\] B live · refactor \(t1\) · /);
@@ -158,16 +181,14 @@ test('failed response capture retains accounting after the active turn is consum
     cwd: ROOT,
     encoding: 'utf8',
     input: JSON.stringify({ session_id: 'failed-response', prompt_id: promptId, transcript_path: file, last_assistant_message: text }),
-    env: {
-      ...process.env,
-      HOME: home,
-      CLAUDE_PLUGIN_DATA: data,
-      PRISM_API_KEY: 'prism_test',
-      PRISM_INGEST_URL: 'http://127.0.0.1:9',
-      CLAUDE_PLUGIN_OPTION_SHOWREALTIMESUMMARY: 'true',
+    env: runtimeEnv(home, data, {
+      apiKey: 'prism_test',
+      ingest_url: 'http://127.0.0.1:9',
+      showRealtimeSummary: true,
+    }, {
       RESPONSE_MARKER: marker,
       NODE_OPTIONS: `--require=${interceptor(home, 503)}`,
-    },
+    }),
   });
 
   assert.equal(result.status, 0, result.stderr);
@@ -322,7 +343,14 @@ test('showRealtimeSummary off suppresses stdout but retains exact capture and su
     cwd: ROOT,
     encoding: 'utf8',
     input: JSON.stringify({ session_id: 'summary-off', prompt_id: promptId, transcript_path: file, last_assistant_message: text }),
-    env: { ...process.env, HOME: home, CLAUDE_PLUGIN_DATA: data, PRISM_API_KEY: 'prism_test', PRISM_INGEST_URL: 'http://127.0.0.1:9', RESPONSE_MARKER: marker, CLAUDE_PLUGIN_OPTION_SHOWREALTIMESUMMARY: 'false', NODE_OPTIONS: `--require=${interceptor(home)}` },
+    env: runtimeEnv(home, data, {
+      apiKey: 'prism_test',
+      ingest_url: 'http://127.0.0.1:9',
+      showRealtimeSummary: false,
+    }, {
+      RESPONSE_MARKER: marker,
+      NODE_OPTIONS: `--require=${interceptor(home)}`,
+    }),
   });
   assert.equal(result.stdout, '');
   assert.equal(session.readTurn('summary-off').active.status, 'consumed');
@@ -388,10 +416,11 @@ test('concurrent Stop hooks have exactly one compare-and-swap winner', async () 
   fs.writeFileSync(file, transcript(promptId, text, [{ input: 1, output: 1, model: 'claude-sonnet-4-6' }]));
   process.env.CLAUDE_PLUGIN_DATA = data;
   active('concurrent-stop', promptId, file);
-  const env = { ...process.env, HOME: home, CLAUDE_PLUGIN_DATA: data, CLAUDE_PLUGIN_OPTION_SHOWREALTIMESUMMARY: 'true' };
-  delete env.PRISM_API_KEY;
-  delete env.PRISM_GCK_KEY;
-  delete env.PRISM_INGEST_URL;
+  const env = runtimeEnv(home, data, {
+    apiKey: '',
+    ingest_url: 'http://127.0.0.1:1',
+    showRealtimeSummary: true,
+  });
   const invoke = () => new Promise((resolve) => {
     const child = spawn(process.execPath, [STOP], { cwd: ROOT, env });
     let stdout = '';

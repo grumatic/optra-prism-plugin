@@ -74,3 +74,12 @@ test('no packaged runtime file references development-only paths', () => {
   }
   assert.deepEqual(offenders, []);
 });
+
+test('config command entrypoint is included by the package projection', () => {
+  const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+
+  assert.ok(pkg.files.includes('lib/'));
+  assert.ok(pkg.files.includes('commands/'));
+  assert.equal(fs.existsSync(path.join(ROOT, 'lib', 'config-command.js')), true);
+  assert.equal(fs.existsSync(path.join(ROOT, 'commands', 'config.md')), true);
+});

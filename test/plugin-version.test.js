@@ -112,6 +112,13 @@ test('builds the API-key-only OTLP header for explicit missing or invalid versio
   }
 });
 
+test('encodes opaque API keys for the OTLP header list', () => {
+  assert.equal(
+    buildOtelHeaders('opaque,key=value', 'v1.2.3'),
+    'x-api-key=opaque%2Ckey%3Dvalue,x-prism-plugin-version=v1.2.3',
+  );
+});
+
 test('preserves a legacy API key in the OTLP header string', () => {
   assert.equal(
     buildOtelHeaders('gck_test', 'v1.2.3'),
