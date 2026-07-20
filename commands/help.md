@@ -12,9 +12,14 @@ Display the following:
 Prism Plugin Commands
 
 Setup & Config
-  /prism:setup [prism_KEY] Register Prism API key and enable telemetry
-  /prism:status            Connection health, realtime score summary, exact correlation info
-  /prism:uninstall         Remove plugin, clear all settings
+  /prism:setup KEY                     Register Prism API key and enable telemetry
+  /prism:config                        Show Prism runtime configuration
+  /prism:config <key> <value>          Set showRealtimeSummary or ingest_url
+  /prism:config <key> --unset          Remove a Prism runtime configuration value
+  /prism:status                        Read-only config, connection, and session status
+  /prism:doctor                        Diagnose local config, OTEL projection, and ingest health
+  /prism:help                          Show this command list
+  /prism:uninstall                     Remove plugin, clear all settings
 
 Review
   /prism:realtime           Current server-side PRISM grade on demand — cost and turns
@@ -27,9 +32,9 @@ Automatic (hooks — no command needed)
   Terminal status line  Not supported; showStatusLine is deprecated
 
 Getting started:
-  1. /prism:setup prism_YOUR_KEY  Set up your Prism API key
-  2. Start coding                 Telemetry activates automatically
-  3. /prism:report                Compare this week vs last week
+  1. /prism:setup YOUR_KEY  Set up your Prism API key
+  2. Start coding           Telemetry activates automatically
+  3. /prism:report          Compare this week vs last week
 
 Dashboard:         https://dashboard.optra-prism.com/
 Get your API key:  https://dashboard.optra-prism.com/setup

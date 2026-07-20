@@ -3,15 +3,13 @@
 # Installs via Claude Code marketplace (preferred) or manual clone (fallback).
 #
 # Usage:
-#   curl -sL https://optra-ai.com/install-plugin.sh | bash -s -- prism_YOUR_KEY
+#   curl -sL https://optra-ai.com/install-plugin.sh | bash -s -- YOUR_KEY
 #   curl -sL https://optra-ai.com/install-plugin.sh | bash   # configure key later
 
 set -euo pipefail
 
 MARKETPLACE_REPO="grumatic/optra-prism-plugin"
 INSTALL_DIR="${HOME}/.prism/claude-code-plugin"
-CONFIG_DIR="${HOME}/.prism"
-CONFIG_FILE="${CONFIG_DIR}/config.json"
 MIN_NODE_VERSION=18
 
 API_KEY="${1:-}"
@@ -103,86 +101,27 @@ else
   echo "  claude config add plugins ${INSTALL_DIR}"
 fi
 
-# ─── Save API key if provided ───
+# ─── Configure Prism if a key was provided ───
 
 if [ -n "$API_KEY" ]; then
-  case "$API_KEY" in
-    prism_*|gck_*)
-      mkdir -p "$CONFIG_DIR"
-      chmod 700 "$CONFIG_DIR"
-      # Wipe stale config cache so the new key fetches fresh URLs.
-      rm -f "${CONFIG_DIR}/config-cache.json"
-      CONFIG_PATH="$CONFIG_FILE" PRISM_API_KEY="$API_KEY" node <<'NODE'
-const fs = require('fs');
-const configPath = process.env.CONFIG_PATH;
-let existing = {};
-try {
-  const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) existing = parsed;
-} catch {}
+  PLUGIN_ROOT="${INSTALL_DIR}"
+  # Marketplace installs live in the Claude Code plugin cache.
+  if [ ! -f "$PLUGIN_ROOT/lib/setup.js" ]; then
+    for p in "${HOME}/.claude/plugins/cache/optra-prism/prism"/*/; do
+      if [ -f "$p/lib/setup.js" ]; then PLUGIN_ROOT="${p%/}"; break; fi
+    done
+  fi
 
-const config = { ...existing, apiKey: process.env.PRISM_API_KEY };
-if (!Object.prototype.hasOwnProperty.call(config, 'prismThreshold')) {
-  config.prismThreshold = 4;
-}
-fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
-NODE
-      chmod 600 "$CONFIG_FILE"
-      info "Prism API key saved"
-
-      # Sync OTEL settings — respect the existing scope if Prism was already
-      # set up via /prism:setup --project, so we don't duplicate vars.
-      PLUGIN_ROOT="${INSTALL_DIR}"
-      # Marketplace install lands in the cache, not INSTALL_DIR — fall back to it.
-      if [ ! -f "$PLUGIN_ROOT/lib/settings.js" ]; then
-        for p in "${HOME}/.claude/plugins/cache/optra-prism/prism"/*/; do
-          if [ -f "$p/lib/settings.js" ]; then PLUGIN_ROOT="${p%/}"; break; fi
-        done
-      fi
-      if [ -f "$PLUGIN_ROOT/lib/settings.js" ]; then
-        # resolve-scope output: action:targetScope:removeScopes (colon-delimited)
-        RESOLVE_RAW=$(node "$PLUGIN_ROOT/lib/settings.js" resolve-scope 2>/dev/null) || true
-        if [ -z "$RESOLVE_RAW" ]; then
-          info "WARNING: scope detection failed — OTEL will be configured on next Claude Code session start."
-        else
-          RESOLVE_ACTION="${RESOLVE_RAW%%:*}"
-          RESOLVE_REST="${RESOLVE_RAW#*:}"
-          TARGET_SCOPE="${RESOLVE_REST%%:*}"
-          REMOVE_SCOPES_CSV="${RESOLVE_REST#*:}"
-
-          case "$RESOLVE_ACTION" in
-            sync|repair)
-              if [ "$RESOLVE_ACTION" = "repair" ]; then
-                IFS=',' read -ra RSCOPES <<< "$REMOVE_SCOPES_CSV"
-                for RSCOPE in "${RSCOPES[@]}"; do
-                  [ -n "$RSCOPE" ] && node "$PLUGIN_ROOT/lib/settings.js" remove --scope "$RSCOPE" 2>/dev/null || true
-                done
-              fi
-              node "$PLUGIN_ROOT/lib/settings.js" sync --scope "$TARGET_SCOPE" 2>/dev/null && \
-                info "OTEL telemetry configured (scope=${TARGET_SCOPE})" || \
-                info "WARNING: Could not write OTEL settings — will be configured on next Claude Code session"
-              ;;
-            skip)
-              info "OTEL scope could not be determined — telemetry will be configured on next Claude Code session start."
-              ;;
-          esac
-        fi
-      fi
-
-      echo ""
-      echo "Start Claude Code — the plugin activates automatically."
-      ;;
-    *)
-      echo ""
-      echo "[prism] WARNING: Invalid Prism API key format. Key not saved."
-      echo "Run /prism:setup inside Claude Code to configure."
-      ;;
-  esac
+  if [ -f "$PLUGIN_ROOT/lib/setup.js" ] && node "$PLUGIN_ROOT/lib/setup.js" apply "$API_KEY"; then
+    info "Prism configured"
+  else
+    info "Configuration deferred. Run /prism:setup YOUR_KEY inside Claude Code."
+  fi
 else
   echo ""
-  echo "No API key provided. You'll be prompted for it when installing the plugin."
+  echo "No API key provided."
   echo ""
-  echo "  Or reinstall with your key:"
-  echo "  curl -sL https://optra-ai.com/install-plugin.sh | bash -s -- prism_YOUR_KEY"
+  echo "  Configure it inside Claude Code:"
+  echo "  /prism:setup YOUR_KEY"
 fi
 echo ""
