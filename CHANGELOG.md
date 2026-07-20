@@ -5,6 +5,12 @@ All notable changes to the Prism plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- Response costs now use an ingest-provided model catalog cached per resolved environment instead of a plugin-local price table. Stop hooks price exact model IDs at each usage record's timestamp from the last-known-good catalog without network I/O.
+- Cost reporting fails closed for unknown, ambiguous, or unpriced models, invalid timestamps, unproven cache-write TTLs, and incomplete usage. Numeric costs are sent only with their catalog revision and public-list-price provenance; unavailable costs render as `cost n/a`.
+
 ## [0.6.2] - 2026-07-20
 
 ### Added
