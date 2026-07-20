@@ -220,7 +220,7 @@ test('falls back to the most recent session with data and annotates it', async (
   assert.match(output.split('\n')[0], /^\[Prism\] no score · \$0\.900 · 7 turns \(latest session\)$/);
 });
 
-test('reports no data and flags approximate local costs', async () => {
+test('reports no data and renders unknown local aggregate costs as unavailable', async () => {
   const emptyDir = makeDataDir();
   const { status } = freshModules(emptyDir);
   assert.match(await status.realtimeStatus([], {}), /^No realtime data yet/);
@@ -229,6 +229,8 @@ test('reports no data and flags approximate local costs', async () => {
   const { session, status: status2 } = freshModules(dataDir);
   seedSummary(session, 'realtime-status-approx', { turnCount: 1, cost: 0.05, input: 1500, unknownCost: true });
   const output = await status2.realtimeStatus(['--session', 'realtime-status-approx'], {});
-  assert.match(output.split('\n')[0], /~\$0\.05/);
-  assert.match(output, /cost is approximate/);
+  assert.match(output.split('\n')[0], /cost n\/a/);
+  assert.match(output, /  cost n\/a · 1 turns/);
+  assert.match(output, /cost is unavailable/);
+  assert.doesNotMatch(output, /~\$/);
 });

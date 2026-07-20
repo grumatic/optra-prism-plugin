@@ -223,13 +223,15 @@ test('sendResponse preserves the Hook response request and adds plugin provenanc
     elapsed_ms: 125,
     input_tokens: 10,
     output_tokens: 20,
-    model: 'claude-test',
-    cost_usd: 0.001,
     cache_read_tokens: 5,
     cache_creation_tokens: 3,
+    model: 'claude-test',
+    cost_usd: 0.001,
     response_operation_id: 'response-operation-test',
     response_content_hash: 'a'.repeat(64),
     host_prompt_id: 'host-prompt-test',
+    cost_catalog_revision: 42,
+    cost_kind: 'public_list_price_estimate',
   };
   const expectedBody = {
     tool_session_id: input.tool_session_id,
@@ -245,6 +247,8 @@ test('sendResponse preserves the Hook response request and adds plugin provenanc
     host_prompt_id: input.host_prompt_id,
     model: input.model,
     cost_usd: input.cost_usd,
+    cost_catalog_revision: input.cost_catalog_revision,
+    cost_kind: input.cost_kind,
   };
 
   const [result, request] = await Promise.all([
@@ -255,6 +259,43 @@ test('sendResponse preserves the Hook response request and adds plugin provenanc
   assert.deepEqual(result, { status: 202, body: 'accepted' });
   assertRequest(request, '/v1/prompts/response', expectedBody);
   assert.equal(Object.hasOwn(JSON.parse(request.body), 'response_content_hash'), false);
+});
+test('sendResponse omits incomplete cost provenance, including legacy cost-only payloads', async () => {
+  const base = {
+    tool_session_id: 'session-response',
+    client_event_id: 'client-event-response',
+    prompt_id: '44444444-4444-4444-8444-444444444444',
+    response_operation_id: 'response-operation-partial-cost-test',
+    response_text: 'completed',
+    input_tokens: 10,
+    output_tokens: 20,
+    model: 'claude-test',
+  };
+  const partials = [
+    ['legacy cost-only payload', { cost_usd: 0.001 }],
+    ['revision only', { cost_catalog_revision: 42 }],
+    ['kind only', { cost_kind: 'public_list_price_estimate' }],
+    ['cost and revision', { cost_usd: 0.001, cost_catalog_revision: 42 }],
+    ['cost and kind', { cost_usd: 0.001, cost_kind: 'public_list_price_estimate' }],
+    ['revision and kind', { cost_catalog_revision: 42, cost_kind: 'public_list_price_estimate' }],
+    ['invalid provenance values', { cost_usd: NaN, cost_catalog_revision: 0, cost_kind: 'estimated' }],
+    ['negative cost', { cost_usd: -0.001, cost_catalog_revision: 42, cost_kind: 'public_list_price_estimate' }],
+    ['infinite cost', { cost_usd: Infinity, cost_catalog_revision: 42, cost_kind: 'public_list_price_estimate' }],
+  ];
+  for (const [name, provenance] of partials) {
+    await closeServer();
+    const { ingest, requestReceived } = await loadIngestWithCapture();
+    const [, request] = await Promise.all([
+      ingest.sendResponse({ ...base, ...provenance }),
+      requestReceived,
+    ]);
+    const body = JSON.parse(request.body);
+    assert.equal(body.model, base.model, name);
+    assert.equal(body.input_tokens, base.input_tokens, name);
+    for (const key of ['cost_usd', 'cost_catalog_revision', 'cost_kind']) {
+      assert.equal(Object.hasOwn(body, key), false, `${name}: ${key}`);
+    }
+  }
 });
 test('sendResponse rejects incomplete or invalid dual correlation before network I/O', async () => {
   const { ingest } = await loadIngestWithCapture();
