@@ -5,6 +5,29 @@ All notable changes to the Prism plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.2] - 2026-07-20
+
+### Added
+- `/prism:config` for displaying and updating the two user-editable runtime values: `showRealtimeSummary` and `ingest_url`. Removing `ingest_url` also removes Prism-managed OTEL values from the installed plugin scope and reports any values still owned by another settings layer.
+- Source-aware `/prism:status` diagnostics for config values and effective on-disk OTEL settings, including the owning `user`, `project`, or `local` layer and the HTTP evidence returned by the ingest health endpoint.
+
+### Changed
+- `~/.prism/config.json` is the sole Prism runtime configuration authority. Prism environment overrides, native plugin Configure options, and the legacy config cache no longer participate in runtime resolution.
+- `/prism:setup KEY` treats every non-empty key as opaque and lets backend `401`/`403` responses determine authentication failure. Successful setup stores the resolved service URLs and projects OTEL settings only to the detected install scope.
+- Claude settings are resolved per key in `user → project → local` order. Setup and config writes do not move, delete, or repair another scope automatically.
+- SessionStart reads and reports config state without fetching config, rewriting Claude settings, or exporting Prism environment variables.
+- Users updating from v0.6.1 or earlier must run `/prism:setup KEY` once when `/prism:status` reports a missing `apiKey` or `ingest_url`, including installations whose service URLs existed only in the legacy cache.
+
+### Fixed
+- `/prism:status` no longer reports OTEL logs or metrics as `not set` merely because the slash-command process did not inherit them; it reads the effective settings files directly.
+- Setup, config, notification, health, and SessionStart failures retain their concrete HTTP, network, JSON, scope, or projection evidence instead of collapsing into generic configuration messages or false success.
+- Ingest base URLs preserve a configured trailing slash without generating double-slash prompt, realtime, or report endpoints. Unsafe remote plaintext HTTP destinations, credentials, query strings, and fragments are rejected before credentials or captured data are sent; loopback HTTP remains supported for development.
+- Opaque API keys are safely encoded in OTLP header lists, and settings overlay cannot treat inherited object properties as effective OTEL values.
+
+### Removed
+- Native plugin `userConfig`, Prism runtime environment overrides, config-cache routing, and the public `prismThreshold` no-op setting.
+- SessionStart config refresh and `CLAUDE_ENV_FILE` mutation, plus automatic OTEL repair and cross-scope cleanup during setup or session startup.
+
 ## [0.6.1] - 2026-07-17
 
 ### Fixed
