@@ -15,7 +15,6 @@ Claude Code 2.1.161+ is required for core telemetry and Score v3 support. Claude
 | Capability | Claude Code boundary | Fallback when unavailable |
 |------------|----------------------|---------------------------|
 | Stop response capture | 2.1.47+ | Skip Hook response capture |
-| Native Plugin `userConfig` | 2.1.83+ | Use environment or local config |
 | Working-directory change hook | 2.1.83+ (conservative changelog-inferred floor) | Runtime shape-gate and submit-time refresh |
 | OTEL tool correlation | 2.1.119+ | Disable direct tool correlation |
 | Numeric OTEL attributes | Format changes in 2.1.122 | Accept both string and number values |
@@ -33,7 +32,7 @@ Claude Code 2.1.161+ is required for core telemetry and Score v3 support. Claude
 /plugin install prism@optra-prism
 
 # 3. Configure your API key
-/prism:setup prism_YOUR_API_KEY
+/prism:setup YOUR_API_KEY
 
 # 4. Restart Claude Code for OTEL telemetry to take effect
 ```
@@ -41,7 +40,7 @@ Claude Code 2.1.161+ is required for core telemetry and Score v3 support. Claude
 ### Alternative: Shell installer
 
 ```bash
-curl -sL https://optra-ai.com/install-plugin.sh | bash -s -- prism_YOUR_KEY
+curl -sL https://optra-ai.com/install-plugin.sh | bash -s -- YOUR_KEY
 ```
 
 ## What It Does
@@ -50,7 +49,7 @@ Four hooks run automatically:
 
 | Hook | Purpose |
 |------|---------|
-| **SessionStart** | Validates API key and configures OTEL telemetry |
+| **SessionStart** | Loads Prism runtime configuration without modifying Claude settings |
 | **UserPromptSubmit** | Reviews prompts for specificity/scope and captures them to ingest for scoring |
 | **CwdChanged** | Refreshes sanitized Git repository metadata when the runtime supplies a valid working-directory change |
 | **Stop** | Captures prompt/response pairs for analytics, tracks turns, and relays the server-side PRISM realtime score |
@@ -59,43 +58,42 @@ Four hooks run automatically:
 
 | Command | Description |
 |---------|-------------|
-| `/prism:setup` | Configure API key, enable telemetry |
-| `/prism:status` | Connection health, realtime summary setting, session info |
+| `/prism:setup KEY` | Configure API key and enable telemetry in the installed plugin scope |
+| `/prism:config` | Show or update Prism runtime configuration |
+| `/prism:status` | Show read-only configuration, connection, and session status |
 | `/prism:report` | Weekly review — this week vs last week, PRISM grade, habits, worst prompts |
 | `/prism:help` | List all available commands |
 | `/prism:uninstall` | Remove plugin config and OTEL settings |
 
 ## Configuration
 
-Service URLs are resolved automatically from your API key via the config endpoint (`https://ingest.optra-prism.com/v1/plugin/config`). For local development, the ingest URL can be overridden with `PRISM_INGEST_URL`:
+`~/.prism/config.json` is the sole authority for Prism runtime configuration. Prism does not read runtime values from environment variables or plugin Configure options.
 
-```bash
-PRISM_INGEST_URL=http://localhost:9005 claude
-```
-### Realtime summary
+`/prism:setup KEY` sends the non-empty key to the config endpoint, stores the key and resolved service URLs in that file, and projects OTEL values to the settings file for the installed plugin scope:
 
-`showRealtimeSummary` is disabled by default — the Stop-hook score line is opt-in. Enable it by setting one of the sources below to `true`. The effective value is resolved in this order:
+- user: `~/.claude/settings.json`
+- project: `<project>/.claude/settings.json`
+- local: `<project>/.claude/settings.local.json`
 
-1. `CLAUDE_PLUGIN_OPTION_SHOWREALTIMESUMMARY`
-2. `CLAUDE_PLUGIN_OPTION_showRealtimeSummary` (compatibility name)
-3. Own-property `showRealtimeSummary` in `~/.prism/config.json`
-4. Default `false`
+Settings are read in user → project → local order, with later values taking precedence. Setup writes only the installed scope and does not move or delete values from another settings layer.
 
-Only boolean values and the exact strings `true` / `false` are accepted. An invalid selected source uses the safe default instead of falling through. A legacy config change is masked by either environment source and must not be treated as changing the active setting. `showStatusLine` is deprecated and has no effect on this setting.
+Use `/prism:config` to display configuration or set/unset `showRealtimeSummary` and `ingest_url`. A realtime summary change applies on the next hook invocation. An ingest URL change also updates the installed-scope OTEL settings and requires a Claude Code restart.
+
+After updating from v0.6.1 or earlier, run `/prism:setup KEY` once when `/prism:status` shows `apiKey` or `ingest_url` as missing. This includes installations whose service URLs existed only in the legacy config cache, environment variables, or plugin Configure options.
 
 ## How It Works
 
 ```
-/prism:setup prism_KEY
+/prism:setup KEY
     │
     ├─→ Calls config endpoint → resolves URLs from API key
-    ├─→ Caches config locally
-    └─→ Syncs OTEL env vars to ~/.claude/settings.json (global)
+    ├─→ Writes ~/.prism/config.json
+    └─→ Syncs OTEL values to the installed-scope settings file
 
 Claude Code starts
     │
-    ├─→ Reads ~/.claude/settings.json → OTEL env vars set at process init
-    ├─→ SessionStart hook → validates key and checks OTEL settings
+    ├─→ Reads installed-scope settings → OTEL env vars set at process init
+    ├─→ SessionStart hook → reads ~/.prism/config.json
     │
     ├─→ User types prompt
     │   └─→ UserPromptSubmit hook → captures prompt to ingest
@@ -125,13 +123,7 @@ Each developer runs `/prism:setup` with their own API key.
 
 ## Debugging
 
-```bash
-# Tail debug log
-tail -f ~/.claude/plugins/data/prism-inline/debug.log
-
-# Enable debug output in session
-PRISM_DEBUG=1 claude
-```
+Debug output is written to `$CLAUDE_PLUGIN_DATA/debug.log` when Claude Code provides that storage context. Otherwise, it is written to `~/.prism/logs/debug.log`.
 
 ## Auto-Updates
 

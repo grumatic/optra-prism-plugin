@@ -6,28 +6,18 @@ user-invocable: true
 
 Configure Prism with a Prism API key.
 
-**Usage:**
-- `/prism:setup prism_YOUR_KEY`
-- `/prism:setup prism_YOUR_KEY --user`
-- `/prism:setup prism_YOUR_KEY --project`
+**Usage:** `/prism:setup KEY`
 
 No API key? Get one at: https://dashboard.optra-prism.com/setup
 
-**Scope rules:**
-- OTEL environment variables, including the Prism API key, live in exactly one scope.
-- User scope applies to every project; project scope applies only to this project.
-- Prism never uses `$CLAUDE_PROJECT_DIR/.claude/settings.json` because it may be shared or committed. Switching scopes moves variables rather than duplicating them.
+Parse `$ARGUMENTS` as exactly one non-empty key. Scope flags are not supported. Treat the key as opaque: do not validate its prefix or modify it; the backend response determines whether it is accepted. When no key was given, show the usage above and do not run the script.
 
-Extract the API key and optional `--user` or `--project` flag from the user's command arguments. Run this single command, translating `--user` to `--scope user` and `--project` to `--scope project`:
+Run this single command:
 
 ```bash
-PRISM_API_KEY="$KEY" node "${CLAUDE_PLUGIN_ROOT}/lib/setup.js" apply [--scope user|project] --project-dir "${CLAUDE_PROJECT_DIR}"
+node "${CLAUDE_PLUGIN_ROOT}/lib/setup.js" apply "$KEY" --project-dir "${CLAUDE_PROJECT_DIR}"
 ```
 
-Pass the key only through `PRISM_API_KEY`; never interpolate it anywhere else. Do not read or write Prism configuration files yourself. Display the script's stdout verbatim.
-
-When the script exits 3, show its `CONFIRM_REQUIRED` reason and ask: `Continue? [y/N]`. On yes, rerun the same command with `--confirm`; otherwise stop.
-
-When no key argument was given, run `node "${CLAUDE_PLUGIN_ROOT}/lib/setup.js" apply --check-existing`. State `Prism API key configured` only when it prints `KEY_PRESENT`; otherwise ask for a key.
+Pass the key only as the positional argument shown above. The script detects the installed plugin scope and writes only its corresponding settings file. Do not read or write Prism configuration files yourself. Display the script's stdout and stderr verbatim.
 
 > 🚀 **Next:** open https://dashboard.optra-prism.com/ for realtime coaching, PRISM scores, and insights.
