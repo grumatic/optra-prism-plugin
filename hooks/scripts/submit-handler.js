@@ -144,10 +144,18 @@ async function main() {
   const { API_KEY, INGEST_URL, SHOW_REALTIME_SUMMARY } = require('../../lib/env');
   debug = require('../../lib/debug').createDebug('submit-handler');
   ({ sendPrompt } = require('../../lib/ingest'));
-  if (!API_KEY || !INGEST_URL) {
+  if (!API_KEY) {
     failBarrier(data.session_id, barrier.epoch);
     emitSystemMessage(
-      '[Prism] API key not configured. Run /prism:setup prism_YOUR_KEY.',
+      '[Prism] API key not configured. Run /prism:setup YOUR_KEY.',
+      SHOW_REALTIME_SUMMARY,
+    );
+    return;
+  }
+  if (!INGEST_URL) {
+    failBarrier(data.session_id, barrier.epoch);
+    emitSystemMessage(
+      '[Prism] ingest_url not configured. Run /prism:setup YOUR_KEY or /prism:config.',
       SHOW_REALTIME_SUMMARY,
     );
     return;
