@@ -15,13 +15,14 @@ const PREFLIGHT_FIXTURE = JSON.parse(fs.readFileSync(
 ));
 const {
   proveTranscriptTurn,
+  usageFromRecord,
   consumeUsage,
   selectScoreRow,
   mapTurnRange,
   renderScoreLine,
   MAX_TRANSCRIPT_BYTES,
-  pricingFor,
 } = require('../lib/realtime');
+const { cachePathFor } = require('../lib/model-catalog');
 
 const SERVER_PROMPT_ID = '11111111-1111-4111-8111-111111111111';
 const dirs = [];
@@ -44,6 +45,25 @@ function runtimeEnv(home, dataDir, config, extra = {}) {
     CLAUDE_PLUGIN_OPTION_APIKEY: 'hostile-option-key',
     CLAUDE_PLUGIN_OPTION_SHOWREALTIMESUMMARY: config.showRealtimeSummary ? 'false' : 'true',
     ...extra,
+  };
+}
+function catalog(revision = 42) {
+  return {
+    schema_version: 1,
+    catalog_revision: revision,
+    checksum_sha256: 'a'.repeat(64),
+    exact_lookups: [{
+      external_model_id: 'claude-sonnet-4-6',
+      list_rates: [{
+        effective_from: '2026-01-01T00:00:00Z',
+        effective_to: '2026-07-01T00:00:00Z',
+        rate: { input: 3, output: 15, cache_read: 0.3, cache_write_5m: 3.75 },
+      }, {
+        effective_from: '2026-07-01T00:00:00Z',
+        effective_to: null,
+        rate: { input: 4, output: 20, cache_read: 0.4, cache_write_5m: 5 },
+      }],
+    }],
   };
 }
 function active(
@@ -73,6 +93,7 @@ function transcript(promptId, content, usages) {
     ...usages.map((usage, index) => JSON.stringify({
       type: 'assistant',
       uuid: `assistant-${index}`,
+      timestamp: usage.occurredAt || '2026-07-02T00:00:00.000Z',
       message: { role: 'assistant', stop_reason: 'end_turn', content: index === usages.length - 1 ? content : `tool ${index}`, model: usage.model, usage: {
         input_tokens: usage.input,
         cache_read_input_tokens: usage.cacheRead || 0,
@@ -136,6 +157,7 @@ test('exact Stop consumes one proven multi-assistant turn and separates totals f
     { input: 20_000, output: 10, model: 'claude-sonnet-4-6' },
     { input: 30_000, output: 10, model: 'claude-sonnet-4-6' },
   ]));
+  fs.writeFileSync(cachePathFor(data, 'http://127.0.0.1:9', 42), JSON.stringify(catalog()));
   process.env.CLAUDE_PLUGIN_DATA = data;
   active('exact-stop', promptId, file);
   const result = spawnSync(process.execPath, [STOP], {
@@ -164,7 +186,67 @@ test('exact Stop consumes one proven multi-assistant turn and separates totals f
   const response = JSON.parse(fs.readFileSync(marker, 'utf8'));
   assert.equal(response.prompt_id, SERVER_PROMPT_ID);
   assert.equal(response.client_event_id, 'event-exact-stop');
+  assert.equal(response.cache_read_tokens, 0);
+  assert.equal(response.cache_creation_tokens, 0);
+  assert.equal(response.cost_catalog_revision, 42);
+  assert.equal(response.cost_kind, 'public_list_price_estimate');
+  assert.ok(Math.abs(response.cost_usd - 0.2406) < Number.EPSILON);
   assert.equal(session.readTurn('exact-stop').active.status, 'consumed');
+});
+test('proven usage prices only strict RFC3339 transcript timestamps', async () => {
+  const dir = temp('prism-realtime-timestamps-');
+  const file = path.join(dir, 'timestamps.jsonl');
+  const cases = [
+    [123, null],
+    ['2026-07-02', null],
+    ['2026-07-02T00:00:00', null],
+    ['2026-02-30T00:00:00Z', null],
+    ['2026-07-02T09:00:00+09:00', Date.parse('2026-07-02T00:00:00Z')],
+    ['2026-07-02T00:00:00.123Z', Date.parse('2026-07-02T00:00:00.123Z')],
+  ];
+  for (const [occurredAt, expected] of cases) {
+    fs.writeFileSync(file, transcript('timestamp-prompt', 'answer', [{
+      input: 1, output: 1, model: 'claude-sonnet-4-6', occurredAt,
+    }]));
+    const proof = await proveTranscriptTurn({
+      transcriptPath: file, boundary: { byteOffset: 0 }, promptId: 'timestamp-prompt',
+    });
+    assert.equal(proof.usage[0].occurredAt, expected);
+  }
+});
+
+test('incomplete proven usage omits all response token totals while preserving the raw assistant model', () => {
+  const home = temp('prism-realtime-incomplete-home-');
+  const data = temp('prism-realtime-incomplete-data-');
+  const file = path.join(home, 'turn.jsonl');
+  const marker = path.join(home, 'response.json');
+  const promptId = 'incomplete-prompt';
+  const text = 'incomplete reply';
+  fs.writeFileSync(file, transcript(promptId, text, [
+    { input: 10, output: 1, model: 'claude-sonnet-4-6' },
+    { input: 'invalid', output: 1, model: 'raw-unpriced-model' },
+  ]));
+  process.env.CLAUDE_PLUGIN_DATA = data;
+  active('incomplete-usage', promptId, file);
+  const result = spawnSync(process.execPath, [STOP], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    input: JSON.stringify({ session_id: 'incomplete-usage', prompt_id: promptId, transcript_path: file, last_assistant_message: text }),
+    env: runtimeEnv(home, data, {
+      apiKey: 'prism_test',
+      ingest_url: 'http://127.0.0.1:9',
+      showRealtimeSummary: true,
+    }, {
+      RESPONSE_MARKER: marker,
+      NODE_OPTIONS: `--require=${interceptor(home)}`,
+    }),
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const response = JSON.parse(fs.readFileSync(marker, 'utf8'));
+  for (const key of ['input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_creation_tokens', 'cost_usd', 'cost_catalog_revision', 'cost_kind']) {
+    assert.equal(Object.hasOwn(response, key), false);
+  }
+  assert.equal(response.model, 'raw-unpriced-model');
 });
 test('failed response capture retains accounting after the active turn is consumed', () => {
   const home = temp('prism-realtime-failed-response-home-');
@@ -226,16 +308,80 @@ test('control, stale, expired, prompt mismatch, and transcript lag leave active 
   assert.equal(await proveTranscriptTurn({ transcriptPath: file, boundary: { byteOffset: 0 }, promptId }), null);
 });
 
-test('usage dedupe and unknown pricing preserve specified boundaries', () => {
+test('consumeUsage totals tokens while failing closed for unknown models', () => {
   const usage = [
-    { id: 'a'.repeat(64), input: 10, cacheRead: 0, cacheCreation: 0, output: 1, model: 'unknown' },
-    { id: 'b'.repeat(64), input: 20, cacheRead: 0, cacheCreation: 0, output: 1, model: 'claude-sonnet-4-6' },
+    { id: 'a'.repeat(64), input: 10, cacheRead: 0, cacheCreation: 0, output: 1, model: 'unknown', occurredAt: Date.parse('2026-07-02T00:00:00Z') },
+    { id: 'b'.repeat(64), input: 20, cacheRead: 0, cacheCreation: 0, output: 1, model: 'claude-sonnet-4-6', occurredAt: Date.parse('2026-07-02T00:00:00Z') },
   ];
-  const first = consumeUsage(usage, []);
+  const first = consumeUsage(usage, [], catalog());
   assert.equal(first.totals.input, 30);
   assert.equal(first.totals.unknownCost, true);
-  const deduped = consumeUsage(usage, first.addedIds);
+  assert.equal(first.totals.costCatalogRevision, undefined);
+  const deduped = consumeUsage(usage, first.addedIds, catalog());
   assert.equal(deduped.totals.input, 0);
+});
+test('usageFromRecord fails closed unless cache creation is proven all-5m', () => {
+  const base = {
+    type: 'assistant',
+    uuid: 'cache-creation',
+    timestamp: '2026-06-30T00:00:00Z',
+    message: {
+      role: 'assistant',
+      model: 'claude-sonnet-4-6',
+      usage: {
+        input_tokens: 0,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 10,
+        output_tokens: 0,
+      },
+    },
+  };
+  const cases = [
+    ['all-5m snake case', {
+      cache_creation: { ephemeral_5m_input_tokens: 10, ephemeral_1h_input_tokens: 0 },
+    }, true],
+    ['positive aggregate without breakdown', {}, false],
+    ['mixed 5m and 1h', {
+      cache_creation: { ephemeral_5m_input_tokens: 5, ephemeral_1h_input_tokens: 5 },
+    }, false],
+    ['inconsistent breakdown sum', {
+      cache_creation: { ephemeral_5m_input_tokens: 9, ephemeral_1h_input_tokens: 0 },
+    }, false],
+    ['negative breakdown tokens', {
+      cache_creation: { ephemeral_5m_input_tokens: -1, ephemeral_1h_input_tokens: 11 },
+    }, false],
+    ['NaN breakdown tokens', {
+      cache_creation: { ephemeral_5m_input_tokens: NaN, ephemeral_1h_input_tokens: 0 },
+    }, false],
+    ['camel case', {
+      cacheCreation: { ephemeral5mInputTokens: 10, ephemeral1hInputTokens: 0 },
+    }, true],
+  ];
+  for (const [name, breakdown, proven] of cases) {
+    const item = usageFromRecord({
+      ...base,
+      message: { ...base.message, usage: { ...base.message.usage, ...breakdown } },
+    }, 0);
+    assert.equal(item.cacheCreation5mProven, proven, name);
+    const result = consumeUsage([item], [], catalog());
+    assert.equal(result.totals.cacheCreation, 10, name);
+    assert.equal(result.totals.unknownCost, !proven, name);
+    assert.equal(result.totals.cost, proven ? 37.5 / 1_000_000 : 0, name);
+    assert.equal(result.totals.costCatalogRevision, proven ? 42 : undefined, name);
+  }
+
+  const zero = usageFromRecord({
+    ...base,
+    message: {
+      ...base.message,
+      usage: { ...base.message.usage, cache_creation_input_tokens: 0 },
+    },
+  }, 0);
+  const zeroResult = consumeUsage([zero], [], catalog());
+  assert.equal(zero.cacheCreation5mProven, true);
+  assert.equal(zeroResult.totals.unknownCost, false);
+  assert.equal(zeroResult.totals.cost, 0);
+  assert.equal(zeroResult.totals.costCatalogRevision, 42);
 });
 
 test('selectScoreRow prefers graded previews, skips trivia, and falls back to settled grades', () => {
@@ -280,7 +426,7 @@ test('renderScoreLine renders live, settled, scoring, and no-score states', () =
     state: 'settled', grade: 'A', intent: null, turnStart: 3, turnEnd: 3,
   }, 0.1, false, 2), '[Prism] A · (t3) · $0.100 · 2 turns');
   assert.equal(renderScoreLine({ state: 'scoring' }, 0.1, false, 2), '[Prism] scoring… · $0.100 · 2 turns');
-  assert.equal(renderScoreLine({ state: 'no score' }, 0.4, false, 12), '[Prism] no score · $0.400 · 12 turns');
+  assert.equal(renderScoreLine({ state: 'no score' }, 0.4, true, 12), '[Prism] no score · cost n/a · 12 turns');
 });
 test('exact authorization skips malformed prompt ids, expired records, and compact or failed barriers', () => {
   const home = temp('prism-realtime-guards-home-');
@@ -385,26 +531,30 @@ test('oversized boundaries fail closed, while structural proof rejects later use
   assert.equal(await proveTranscriptTurn({ transcriptPath: structural, boundary: { byteOffset: 0 }, promptId: 'host' }), null);
 });
 
-test('usage identities ignore mutable values and pricing charges all four token buckets', async () => {
+test('usage identities ignore mutable values and consumeUsage prices all four proven token buckets', async () => {
   const cached = consumeUsage([{
-    id: 'a'.repeat(64), input: 100, cacheRead: 50, cacheCreation: 25, output: 10, model: 'claude-sonnet-4-6',
-  }], []);
+    id: 'a'.repeat(64), input: 100, cacheRead: 50, cacheCreation: 25, cacheCreation5mProven: true, output: 10,
+    model: 'claude-sonnet-4-6', occurredAt: Date.parse('2026-06-30T00:00:00Z'),
+  }], [], catalog());
   assert.equal(cached.totals.cost, (100 * 3 + 50 * 0.3 + 25 * 3.75 + 10 * 15) / 1_000_000);
-  const unlisted = consumeUsage([{
-    id: 'b'.repeat(64), input: 1, cacheRead: 0, cacheCreation: 0, output: 1, model: 'claude-opus-experimental',
-  }], []);
-  assert.equal(unlisted.totals.unknownCost, true);
-  assert.equal(unlisted.totals.cost, 0);
+  assert.equal(cached.totals.costCatalogRevision, 42);
+  const missingTimestamp = consumeUsage([{
+    id: 'b'.repeat(64), input: 1, cacheRead: 0, cacheCreation: 0, output: 1, model: 'claude-sonnet-4-6', occurredAt: null,
+  }], [], catalog());
+  assert.equal(missingTimestamp.totals.unknownCost, true);
+  assert.equal(consumeUsage([{
+    id: 'c'.repeat(64), input: 1, cacheRead: 0, cacheCreation: 0, output: 1, model: 'claude-sonnet-4-6', occurredAt: Date.parse('2026-07-02T00:00:00Z'),
+  }], [], null).totals.unknownCost, true);
 
   const dir = temp('prism-realtime-identity-');
   const file = path.join(dir, 'identity.jsonl');
-  const record = (output) => `${JSON.stringify({ type: 'user', message: { role: 'user' } })}\n${JSON.stringify({ type: 'assistant', uuid: 'mutable-uuid', message: { id: 'verified-message-id', role: 'assistant', stop_reason: 'end_turn', model: 'claude-sonnet-4-6', usage: { input_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: output } } })}\n`;
+  const record = (output) => `${JSON.stringify({ type: 'user', message: { role: 'user' } })}\n${JSON.stringify({ type: 'assistant', timestamp: '2026-07-02T00:00:00Z', uuid: 'mutable-uuid', message: { id: 'verified-message-id', role: 'assistant', stop_reason: 'end_turn', model: 'claude-sonnet-4-6', usage: { input_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: output } } })}\n`;
   fs.writeFileSync(file, record(1));
   const first = await proveTranscriptTurn({ transcriptPath: file, boundary: { byteOffset: 0 } });
   fs.writeFileSync(file, record(999));
   const replay = await proveTranscriptTurn({ transcriptPath: file, boundary: { byteOffset: 0 } });
-  const consumed = consumeUsage(first.usage, []);
-  assert.equal(consumeUsage(replay.usage, consumed.addedIds).totals.output, 0);
+  const consumed = consumeUsage(first.usage, [], catalog());
+  assert.equal(consumeUsage(replay.usage, consumed.addedIds, catalog()).totals.output, 0);
 });
 
 test('concurrent Stop hooks have exactly one compare-and-swap winner', async () => {
@@ -434,42 +584,15 @@ test('concurrent Stop hooks have exactly one compare-and-swap winner', async () 
   assert.equal(session.readTurn('concurrent-stop').active.status, 'consumed');
 });
 
-test('the pricing allowlist matches the official per-model four-bucket rates', () => {
-  const expected = {
-    'claude-fable-5': [10, 12.5, 1, 50],
-    'claude-mythos-5': [10, 12.5, 1, 50],
-    'claude-opus-4-8': [5, 6.25, 0.5, 25],
-    'claude-opus-4-7': [5, 6.25, 0.5, 25],
-    'claude-opus-4-6': [5, 6.25, 0.5, 25],
-    'claude-opus-4-5': [5, 6.25, 0.5, 25],
-    'claude-opus-4-5-20251101': [5, 6.25, 0.5, 25],
-    'claude-sonnet-5': [2, 2.5, 0.2, 10],
-    'claude-sonnet-4-6': [3, 3.75, 0.3, 15],
-    'claude-sonnet-4-5': [3, 3.75, 0.3, 15],
-    'claude-sonnet-4-5-20250929': [3, 3.75, 0.3, 15],
-    'claude-haiku-4-5': [1, 1.25, 0.1, 5],
-    'claude-haiku-4-5-20251001': [1, 1.25, 0.1, 5],
-    'claude-opus-4-1-20250805': [15, 18.75, 1.5, 75],
-  };
-  for (const [model, [input, cacheWrite, cacheRead, output]] of Object.entries(expected)) {
-    const pricing = pricingFor(model, () => Date.UTC(2026, 7, 31, 23, 59, 59, 999));
-    assert.ok(pricing, `missing pricing for ${model}`);
-    assert.deepEqual(
-      [pricing.input, pricing.cacheWrite, pricing.cacheRead, pricing.output],
-      [input, cacheWrite, cacheRead, output],
-      model,
-    );
-  }
-  assert.deepEqual(
-    pricingFor('claude-sonnet-5', () => Date.UTC(2026, 8, 1)),
-    { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
-  );
-  // Long-context marker normalizes to the same standard rates.
-  assert.deepEqual(pricingFor('claude-opus-4-8[1m]'), pricingFor('claude-opus-4-8'));
-  // No family fallback for unlisted snapshots.
-  assert.equal(pricingFor('claude-opus-4-5-20250514'), null);
-  assert.equal(pricingFor('claude-opus-9'), null);
-
+test('consumeUsage prices records by their transcript timestamp and propagates the catalog revision', () => {
+  const usage = [
+    { id: 'before', input: 1_000_000, cacheRead: 0, cacheCreation: 0, output: 0, model: 'claude-sonnet-4-6', occurredAt: Date.parse('2026-06-30T23:59:59.999Z') },
+    { id: 'after', input: 1_000_000, cacheRead: 0, cacheCreation: 0, output: 0, model: 'claude-sonnet-4-6', occurredAt: Date.parse('2026-07-01T00:00:00.000Z') },
+  ];
+  const result = consumeUsage(usage, [], catalog(88));
+  assert.equal(result.totals.cost, 7);
+  assert.equal(result.totals.costCatalogRevision, 88);
+  assert.equal(result.totals.unknownCost, false);
 });
 
 
