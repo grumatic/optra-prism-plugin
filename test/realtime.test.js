@@ -54,6 +54,8 @@ function catalog(revision = 42) {
     checksum_sha256: 'a'.repeat(64),
     exact_lookups: [{
       external_model_id: 'claude-sonnet-4-6',
+      model: { status: 'known', canonical_model_id: 'claude-sonnet-4-6', display_name: 'Claude Sonnet 4.6' },
+      provider: { status: 'catalog_inferred', provider: 'anthropic' },
       list_rates: [{
         effective_from: '2026-01-01T00:00:00Z',
         effective_to: '2026-07-01T00:00:00Z',

@@ -31,6 +31,8 @@ function snapshot(revision = 7) {
     checksum_sha256: 'a'.repeat(64),
     exact_lookups: [{
       external_model_id: 'claude-test',
+      model: { status: 'known', canonical_model_id: 'claude-test', display_name: 'Claude Test' },
+      provider: { status: 'catalog_inferred', provider: 'anthropic' },
       list_rates: [{
         effective_from: '2026-01-01T00:00:00Z',
         effective_to: '2026-07-01T00:00:00Z',
@@ -164,7 +166,7 @@ test('rateFor uses exact IDs, timestamp boundaries, open segments, and unpriced 
   assert.deepEqual(before, { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0.2, revision: 19 });
   assert.deepEqual(atBoundary, { input: 3, output: 4, cacheRead: 0.3, cacheWrite: 0.4, revision: 19 });
   assert.deepEqual(rateFor(value, 'claude-test[1m]', Date.parse('2027-01-01T00:00:00Z')), atBoundary);
-  value.exact_lookups.push({ external_model_id: 'unpriced', list_rates: [{ effective_from: '2026-01-01T00:00:00Z', effective_to: null, unpriced_reason: 'ambiguous' }] });
+  value.exact_lookups.push({ external_model_id: 'unpriced', model: { status: 'ambiguous' }, provider: { status: 'ambiguous' }, list_rates: [{ effective_from: '2026-01-01T00:00:00Z', effective_to: null, unpriced_reason: 'ambiguous' }] });
   assert.equal(rateFor(value, 'unpriced', Date.now()), null);
   assert.equal(rateFor(value, 'CLAUDE-test', Date.now()), null);
   assert.equal(rateFor(value, 'claude-test', undefined), null);
@@ -473,4 +475,36 @@ test('superseded revisions are garbage collected only after the reader grace per
   } finally {
     await api.close();
   }
+});
+
+test('validateSnapshot rejects lookups missing model or provider resolution', () => {
+  const missingModel = snapshot();
+  delete missingModel.exact_lookups[0].model;
+  assert.equal(validateSnapshot(missingModel), null);
+
+  const missingProvider = snapshot();
+  delete missingProvider.exact_lookups[0].provider;
+  assert.equal(validateSnapshot(missingProvider), null);
+
+  const badKnown = snapshot();
+  badKnown.exact_lookups[0].model = { status: 'known' };
+  assert.equal(validateSnapshot(badKnown), null);
+
+  const badProvider = snapshot();
+  badProvider.exact_lookups[0].provider = { status: 'catalog_inferred' };
+  assert.equal(validateSnapshot(badProvider), null);
+
+  const unknownProviderStatus = snapshot();
+  unknownProviderStatus.exact_lookups[0].provider = { status: 'nonsense' };
+  assert.equal(validateSnapshot(unknownProviderStatus), null);
+});
+
+test('rateFor never prices an ambiguous model even when its segment carries a rate', () => {
+  const value = snapshot(31);
+  // A valid engine snapshot can mark a shared external ID ambiguous while its
+  // compiled rate segment still carries a numeric vector; pricing it would
+  // diverge from the engine resolver and dashboard, so it must be null.
+  value.exact_lookups[0].model = { status: 'ambiguous' };
+  assert.equal(validateSnapshot(value), value);
+  assert.equal(rateFor(value, 'claude-test', Date.parse('2026-06-30T23:59:59.999Z')), null);
 });
