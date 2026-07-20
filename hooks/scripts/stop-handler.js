@@ -6,10 +6,11 @@
  */
 
 const crypto = require('crypto');
-const { API_KEY, INGEST_URL, SHOW_REALTIME_SUMMARY } = require('../../lib/env');
+const { API_KEY, INGEST_URL, SHOW_REALTIME_SUMMARY, DATA_DIR } = require('../../lib/env');
 const { readStdin } = require('../../lib/stdin');
 const { sendResponse, fetchRealtimeSubSessions } = require('../../lib/ingest');
 const { readTurn, consumeActive, updateSummary } = require('../../lib/session');
+const { loadCatalog } = require('../../lib/model-catalog');
 const {
   validPromptId,
   proveTranscriptTurn,
@@ -38,10 +39,10 @@ function activeIsEligible(turn, data) {
   return Number.isFinite(submittedAt) && Date.now() - submittedAt >= 0 && Date.now() - submittedAt <= ACTIVE_TTL_MS;
 }
 
-function summaryUpdate(summary, proof) {
+function summaryUpdate(summary, proof, catalog) {
   const validUsage = proof.usage.filter(Boolean);
   const invalidUsage = validUsage.length !== proof.usage.length;
-  const { totals, addedIds } = consumeUsage(validUsage, summary.processedUsageIds);
+  const { totals, addedIds } = consumeUsage(validUsage, summary.processedUsageIds, catalog);
   const last = proof.usage.at(-1);
   const previous = summary.contextHealth;
   const contextHealth = last ? {
@@ -63,7 +64,14 @@ function summaryUpdate(summary, proof) {
   };
 }
 
+function assistantModel(record) {
+  const message = record && record.message;
+  if (message && typeof message.model === 'string') return message.model;
+  return record && typeof record.model === 'string' ? record.model : undefined;
+}
+
 async function main() {
+  const catalog = loadCatalog(DATA_DIR, INGEST_URL);
   const data = await readStdin();
   if (!data || typeof data.session_id !== 'string' || !validPromptId(data.prompt_id)) return;
   const turn = readTurn(data.session_id);
@@ -91,7 +99,7 @@ async function main() {
   // `processedUsageIds` keeps this safe if state is replayed.
   const completedAt = new Date().toISOString();
   const summary = updateSummary(data.session_id, (current) => {
-    const updated = summaryUpdate(current, proof);
+    const updated = summaryUpdate(current, proof, catalog);
     return {
       ...updated,
       turnLog: [
@@ -106,7 +114,8 @@ async function main() {
   }
 
   const validUsage = proof.usage.filter(Boolean);
-  const { totals } = consumeUsage(validUsage, []);
+  const usageComplete = validUsage.length === proof.usage.length;
+  const { totals } = consumeUsage(validUsage, [], catalog);
   const realtimeRequest = fetchRealtimeSubSessions({ claudeSessionId: data.session_id, limit: 5 });
   let response;
   let rows;
@@ -117,9 +126,18 @@ async function main() {
         prompt_id: active.serverPromptId,
         client_event_id: active.clientEventId,
         response_text: typeof data.last_assistant_message === 'string' ? data.last_assistant_message : '',
-        input_tokens: totals.input,
-        output_tokens: totals.output,
-        cost_usd: totals.unknownCost || validUsage.length !== proof.usage.length ? undefined : totals.cost,
+        model: assistantModel(proof.assistants.at(-1)),
+        ...(usageComplete ? {
+          input_tokens: totals.input,
+          output_tokens: totals.output,
+          cache_read_tokens: totals.cacheRead,
+          cache_creation_tokens: totals.cacheCreation,
+        } : {}),
+        ...(usageComplete && !totals.unknownCost ? {
+          cost_usd: totals.cost,
+          cost_catalog_revision: totals.costCatalogRevision,
+          cost_kind: 'public_list_price_estimate',
+        } : {}),
       }),
       realtimeRequest,
     ]);
