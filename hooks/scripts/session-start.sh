@@ -145,6 +145,55 @@ PRISM_PLUGIN_ROOT="$PLUGIN_ROOT" node <<'NODE' || true
     };
   }, { limit: 32, maxElapsedMs: 2000 }).catch(() => {});
 NODE
+
+# ─── Refresh model catalog cache (detached, fail-open) ───
+#
+# The cache feeds *future* Stop hooks, so SessionStart never waits on it: the
+# fetch runs as a detached background process with all stdio closed (an
+# inherited pipe would keep the hook alive). Atomic temp-file + rename
+# publication means a killed or failed refresh can never leave partial state;
+# every failure keeps the existing last-known-good cache. The process
+# self-limits with a hard guard above the request timeout. With config debug
+# enabled, the outcome is appended to model-catalog-refresh.debug.log in DATA_DIR.
+if [ -n "$INGEST_URL" ] && [ -n "$DATA_DIR" ]; then
+  (
+    PRISM_CATALOG_INGEST_URL="$INGEST_URL" PRISM_CATALOG_DATA_DIR="$DATA_DIR" PRISM_PLUGIN_ROOT="$PLUGIN_ROOT" node -e '
+      const fs = require("fs");
+      const path = require("path");
+      const { getConfig } = require(path.join(process.env.PRISM_PLUGIN_ROOT, "lib", "config"));
+      const config = getConfig();
+      const report = (status) => {
+        if (config.debug !== true) return;
+        try {
+          fs.appendFileSync(
+            path.join(process.env.PRISM_CATALOG_DATA_DIR, "model-catalog-refresh.debug.log"),
+            `${new Date().toISOString()} ${status}\n`,
+          );
+        } catch {}
+      };
+      const guard = setTimeout(() => {
+        report("kept-cache hook-time-budget");
+        process.exit(0);
+      }, 1300);
+      const { refreshCatalog } = require(path.join(process.env.PRISM_PLUGIN_ROOT, "lib", "model-catalog"));
+      refreshCatalog({
+        ingestUrl: process.env.PRISM_CATALOG_INGEST_URL,
+        apiKey: config.apiKey,
+        dataDir: process.env.PRISM_CATALOG_DATA_DIR,
+        timeoutMs: 1000,
+      }).then((status) => {
+        clearTimeout(guard);
+        report(status);
+        process.exit(0);
+      }).catch(() => {
+        clearTimeout(guard);
+        report("kept-cache request-failed");
+        process.exit(0);
+      });
+    ' >/dev/null 2>&1 </dev/null &
+  ) || true
+fi
+
 # ─── Version update notification ───
 
 if [ -n "$DATA_DIR" ]; then
