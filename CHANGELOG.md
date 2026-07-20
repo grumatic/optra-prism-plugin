@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Prompt responses are delivered through a durable on-disk outbox that retries until the server confirms receipt, so a response is no longer lost when a single delivery attempt fails (network error, restart, or an interrupted hook). Delivery is idempotent, so retries never record a response more than once.
 
+### Changed
+- Response costs now use an ingest-provided model catalog cached per resolved environment instead of a plugin-local price table. Stop hooks price exact model IDs at each usage record's timestamp from the last-known-good catalog without network I/O.
+- Cost reporting fails closed for unknown, ambiguous, or unpriced models, invalid timestamps, unproven cache-write TTLs, and incomplete usage. Numeric costs are sent only with their catalog revision and public-list-price provenance; unavailable costs render as `cost n/a`.
+
 ## [0.6.2] - 2026-07-20
 
 ### Added
