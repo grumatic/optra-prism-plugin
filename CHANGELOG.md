@@ -5,6 +5,11 @@ All notable changes to the Prism plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- Prompt responses are delivered through a durable on-disk outbox that retries until the server confirms receipt, so a response is no longer lost when a single delivery attempt fails (network error, restart, or an interrupted hook). Delivery is idempotent, so retries never record a response more than once.
+
 ## [0.6.2] - 2026-07-20
 
 ### Added
@@ -161,9 +166,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `lib/settings.js` reads ingest URL from config cache instead of `URL_DEFAULTS`
 - `session-start.sh` resolves URLs from config cache instead of `case PRISM_ENV` block
 - Only `PRISM_INGEST_URL` env var override allowed; gateway/dashboard URLs always from config endpoint
-
-### Fixed
-- Prompt responses are delivered through a durable on-disk outbox that retries until the server confirms receipt, so a response is no longer lost when a single delivery attempt fails (network error, restart, or an interrupted hook). Delivery is idempotent, so retries never record a response more than once.
 
 ## [0.1.0] - 2026-04-02
 
