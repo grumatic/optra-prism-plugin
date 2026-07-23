@@ -77,9 +77,16 @@ Four hooks run automatically:
 
 Settings are read in user → project → local order, with later values taking precedence. Setup writes only the installed scope and does not move or delete values from another settings layer.
 
-Use `/prism:config` to display configuration or set/unset `showRealtimeSummary` and `ingest_url`. A realtime summary change applies on the next hook invocation. An ingest URL change also updates the installed-scope OTEL settings and requires a Claude Code restart.
+Use `/prism:config` to list the user-editable fields, their current values, accepted values, and apply behavior. The public configuration fields are:
 
-After updating from v0.6.1 or earlier, run `/prism:setup KEY` once when `/prism:status` shows `apiKey` or `ingest_url` as missing. This includes installations whose service URLs existed only in the legacy config cache, environment variables, or plugin Configure options.
+| Field | Type | Default | Applies |
+|-------|------|---------|---------|
+| `show_realtime_summary` | boolean (`true` or `false`) | `false` | Next hook invocation |
+| `ingest_url` | HTTPS URL, or HTTP on loopback | unset | Claude Code restart |
+
+Use `/prism:config set <field> <value>` to update a field, `/prism:config unset <field>` to remove it, and `/prism:config help` for the complete field reference. The API key is managed separately with `/prism:setup KEY`.
+
+After updating from v0.6.1 or earlier, run `/prism:setup KEY` once when `/prism:status` shows the API key or `ingest_url` as missing. This includes installations whose service URLs existed only in the legacy config cache, environment variables, or plugin Configure options.
 
 ## How It Works
 
