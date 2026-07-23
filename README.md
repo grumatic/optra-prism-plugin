@@ -6,7 +6,7 @@ PRISM intelligence plugin for Claude Code. Reviews prompts in real-time, capture
 
 - **Node.js 18+** (required for native `fetch`)
 - **Claude Code** with plugin support
-- A Prism API key — sign up at [optra-ai.com](https://optra-ai.com)
+- A Prism API key — sign up at [Optra Prism](https://www.optra-prism.com)
 
 ### Claude Code compatibility
 
@@ -35,12 +35,6 @@ Claude Code 2.1.161+ is required for core telemetry and Score v3 support. Claude
 /prism:setup YOUR_API_KEY
 
 # 4. Restart Claude Code for OTEL telemetry to take effect
-```
-
-### Alternative: Shell installer
-
-```bash
-curl -sL https://optra-ai.com/install-plugin.sh | bash -s -- YOUR_KEY
 ```
 
 ## What It Does
