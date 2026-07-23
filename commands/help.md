@@ -4,41 +4,8 @@ description: Show all available Prism plugin commands and how to use them
 user-invocable: true
 ---
 
-Show the user all available Prism plugin commands grouped by category.
+Prism plugin help:
 
-Display the following:
+!`node "${CLAUDE_PLUGIN_ROOT}/lib/help.js"`
 
-```
-Prism Plugin Commands
-
-Setup & Config
-  /prism:setup KEY                     Register Prism API key and enable telemetry
-  /prism:config                        Show Prism runtime configuration
-  /prism:config <key> <value>          Set showRealtimeSummary or ingest_url
-  /prism:config <key> --unset          Remove a Prism runtime configuration value
-  /prism:status                        Read-only config, connection, and session status
-  /prism:doctor                        Diagnose local config, OTEL projection, and ingest health
-  /prism:help                          Show this command list
-  /prism:uninstall                     Remove plugin, clear all settings
-
-Review
-  /prism:realtime           Current server-side PRISM grade on demand — cost and turns
-  /prism:report            Weekly review — this week vs last week, PRISM grade, habits, worst prompts
-
-Automatic (hooks — no command needed)
-  Prompt/response capture Uses exact host prompt_id correlation; unmatched turns are skipped
-  Realtime score summary   Shows the server-side PRISM grade, cost, and turn count when enabled
-  Realtime score (VS Code) Panel does not render hook messages; use /prism:realtime
-  Terminal status line  Not supported; showStatusLine is deprecated
-
-Getting started:
-  1. /prism:setup YOUR_KEY  Set up your Prism API key
-  2. Start coding           Telemetry activates automatically
-  3. /prism:report          Compare this week vs last week
-
-Dashboard:         https://dashboard.optra-prism.com/
-Get your API key:  https://dashboard.optra-prism.com/setup
-Documentation:     https://optra-prism.com/docs
-```
-
-Do not add any extra commentary beyond what is shown above. Display it exactly as formatted.
+Display the output above verbatim.
