@@ -44,7 +44,7 @@ function runtimeEnv(home, dataDir, config, extra = {}) {
     CLAUDE_PLUGIN_OPTION_APIKEY: 'hostile-option-key',
     CLAUDE_PLUGIN_OPTION_apiKey: 'hostile-compat-key',
     CLAUDE_PLUGIN_OPTION_PRISMTHRESHOLD: '88',
-    CLAUDE_PLUGIN_OPTION_SHOWREALTIMESUMMARY: config.showRealtimeSummary === true ? 'false' : 'true',
+    CLAUDE_PLUGIN_OPTION_SHOWREALTIMESUMMARY: config.show_realtime_summary === true ? 'false' : 'true',
     ...extra,
   };
 }
@@ -613,7 +613,7 @@ test('submit uses JSON system messages for missing configuration and suppresses 
     cwd: ROOT,
     encoding: 'utf8',
     input: JSON.stringify(input),
-    env: runtimeEnv(home, dataDir, { showRealtimeSummary: true }),
+    env: runtimeEnv(home, dataDir, { show_realtime_summary: true }),
   });
   assert.equal(shown.status, 0, shown.stderr);
   assert.equal(shown.stderr, '');
@@ -628,7 +628,7 @@ test('submit uses JSON system messages for missing configuration and suppresses 
     env: runtimeEnv(home, dataDir, {
       apiKey: 'opaque-key',
       ingest_url: null,
-      showRealtimeSummary: true,
+      show_realtime_summary: true,
     }),
   });
   assert.equal(missingUrl.status, 0, missingUrl.stderr);
@@ -653,7 +653,7 @@ test('submit uses JSON system messages for missing configuration and suppresses 
     cwd: ROOT,
     encoding: 'utf8',
     input: JSON.stringify({ ...input, session_id: 'missing-config-off' }),
-    env: runtimeEnv(home, dataDir, { showRealtimeSummary: false }),
+    env: runtimeEnv(home, dataDir, { show_realtime_summary: false }),
   });
   assert.equal(hidden.status, 0, hidden.stderr);
   assert.equal(hidden.stderr, '');
@@ -671,7 +671,7 @@ test('submit emits no display output on a captured turn and retains capture', ()
     env: runtimeEnv(home, dataDir, {
       apiKey: 'prism_nooutput_test',
       ingest_url: 'http://127.0.0.1:9',
-      showRealtimeSummary: true,
+      show_realtime_summary: true,
     }, {
       NODE_OPTIONS: `--require=${writeSuccessfulIngestInterceptor(home)}`,
     }),
@@ -698,7 +698,7 @@ test('real-host fixture completes submit-to-stop correlation without leaking pro
   const env = runtimeEnv(home, dataDir, {
     apiKey: 'prism_host_fixture',
     ingest_url: 'http://127.0.0.1:9',
-    showRealtimeSummary: true,
+    show_realtime_summary: true,
   }, {
     NODE_OPTIONS: `--require=${interceptor}`,
   });

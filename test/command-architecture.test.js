@@ -6,6 +6,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const { test } = require('node:test');
+const { renderHelp } = require('../lib/help');
 
 const ROOT = path.join(__dirname, '..');
 
@@ -58,7 +59,7 @@ test('mutating and static commands keep the permission gate', () => {
 });
 
 test('deterministic commands are a single entrypoint call plus verbatim display', () => {
-  for (const name of ['doctor', 'report']) {
+  for (const name of ['doctor', 'report', 'help']) {
     const contents = readCommand(name);
     assert.equal(nodeInvocations(contents), 1, `${name}.md must call exactly one entrypoint`);
     assert.match(contents, /verbatim/i, `${name}.md must display output verbatim`);
@@ -86,7 +87,7 @@ test('config is a thin relay to the deterministic config entrypoint', () => {
 });
 
 test('help lists every user-invocable Prism command', () => {
-  const contents = readCommand('help');
+  const contents = renderHelp();
   for (const name of ['setup', 'config', 'status', 'doctor', 'help', 'uninstall', 'realtime', 'report']) {
     assert.match(contents, new RegExp(`/prism:${name}\\b`));
   }

@@ -111,7 +111,8 @@ test('setup persists remote config and writes only the detected install scope', 
   assert.equal(fetchedKey, API_KEY);
   assert.equal(notifiedKey, undefined);
   assert.deepEqual(readJson(configFile()), {
-    ...existing,
+    customField: { preserved: true },
+    show_realtime_summary: true,
     apiKey: API_KEY,
     ingest_url: 'https://remote-ingest.example/base',
     dashboard_url: 'https://remote-dashboard.example',

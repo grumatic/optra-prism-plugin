@@ -39,7 +39,7 @@ test('status is read-only and resolves effective settings user to project to loc
     apiKey: 'prism_status_readonly',
     ingest_url: 'http://127.0.0.1:1',
     dashboard_url: 'https://dashboard.example.test',
-    showRealtimeSummary: false,
+    show_realtime_summary: false,
   });
   writeJson(path.join(home, '.claude', 'settings.json'), {
     env: {
@@ -90,13 +90,13 @@ test('renders config authority and effective on-disk OTEL sources', () => {
       apiKey: 'opaque-config-key',
       ingest_url: 'https://ingest.example.test',
       dashboard_url: 'https://dashboard.example.test',
-      showRealtimeSummary: true,
+      show_realtime_summary: true,
     },
     rawConfig: {
       apiKey: 'opaque-config-key',
       ingest_url: 'https://ingest.example.test',
       dashboard_url: 'https://dashboard.example.test',
-      showRealtimeSummary: true,
+      show_realtime_summary: true,
     },
     installScope: 'project',
     effectiveSettings: {
@@ -138,7 +138,7 @@ test('renders config authority and effective on-disk OTEL sources', () => {
     '**Effective OTEL Metrics:** https://ingest.example.test/v1/metrics (source: local (/workspace/project/.claude/settings.local.json))',
     '**Expected OTEL Metrics:** https://ingest.example.test/v1/metrics',
     '**OTEL settings:** configured on disk.',
-    '**Restart:** Restart Claude Code if apiKey or ingest_url changed since launch.',
+    '**Restart:** Restart Claude Code if the API key or ingest_url changed since launch.',
     '',
     '**Ingest health endpoint:** reachable (HTTP 200)',
     '**Prompt capture:** prerequisites present; authentication and capture result not checked',
@@ -155,7 +155,7 @@ test('renders missing config and disk projection drift without process-env claim
   const output = renderStatus({
     config: {
       apiKey: '',
-      showRealtimeSummary: false,
+      show_realtime_summary: false,
     },
     rawConfig: {},
     installScope: null,
@@ -198,7 +198,7 @@ test('renders an unsupported stored ingest URL without claiming capture readines
     config: {
       apiKey: 'opaque-key',
       ingest_url: 'http://remote.example',
-      showRealtimeSummary: false,
+      show_realtime_summary: false,
     },
     rawConfig: {
       apiKey: 'opaque-key',

@@ -83,7 +83,8 @@ test('config.json is the sole runtime authority and env/userConfig values are ig
 
   assert.equal(config.apiKey, OPAQUE_KEY);
   assert.equal(config.ingest_url, 'https://config-ingest.example/base');
-  assert.equal(config.showRealtimeSummary, true);
+  assert.equal(config.show_realtime_summary, true);
+  assert.equal(Object.hasOwn(config, 'showRealtimeSummary'), false);
   assert.equal(config.legacyField, 'preserved');
   assert.equal(runtime.API_KEY, OPAQUE_KEY);
   assert.equal(runtime.INGEST_URL, 'https://config-ingest.example/base');
@@ -101,7 +102,8 @@ test('missing config has no implicit runtime route even when legacy inputs are p
   const { getConfig } = require('../lib/config');
   assert.deepEqual(getConfig(), {
     apiKey: '',
-    showRealtimeSummary: false,
+    show_realtime_summary: false,
+    ingest_url: null,
   });
 });
 
@@ -109,22 +111,23 @@ test('runtime config preserves stored values without URL or boolean reinterpreta
   writeJson(configFile(), {
     apiKey: OPAQUE_KEY,
     ingest_url: 'https://config-ingest.example/base/',
-    showRealtimeSummary: 'false',
+    show_realtime_summary: 'false',
   });
 
   const configModule = require('../lib/config');
   assert.equal(configModule.getConfig().ingest_url, 'https://config-ingest.example/base/');
-  assert.equal(configModule.getConfig().showRealtimeSummary, 'false');
+  assert.equal(configModule.getConfig().show_realtime_summary, 'false');
   const runtime = require('../lib/env');
   assert.equal(runtime.INGEST_URL, 'https://config-ingest.example/base/');
   assert.equal(runtime.SHOW_REALTIME_SUMMARY, false);
 
   writeJson(configFile(), { showRealtimeSummary: 'true', ingest_url: 'http://remote.example' });
-  assert.equal(configModule.getConfig().showRealtimeSummary, 'true');
+  assert.equal(configModule.getConfig().show_realtime_summary, 'true');
+  assert.equal(Object.hasOwn(configModule.getConfig(), 'showRealtimeSummary'), false);
   assert.equal(configModule.getConfig().ingest_url, 'http://remote.example');
 
-  writeJson(configFile(), { showRealtimeSummary: 'invalid' });
-  assert.equal(configModule.getConfig().showRealtimeSummary, 'invalid');
+  writeJson(configFile(), { show_realtime_summary: 'invalid' });
+  assert.equal(configModule.getConfig().show_realtime_summary, 'invalid');
 
   for (const ingestUrl of ['https://host.example?', 'https://host.example#']) {
     writeJson(configFile(), { ingest_url: ingestUrl });
@@ -148,16 +151,35 @@ test('an unsafe stored URL remains visible but is not used as a runtime route', 
 
 test('read, patch, and write preserve config fields and secure the authority file', () => {
   const config = require('../lib/config');
-  config.writeConfig({ custom: { preserved: true }, prismThreshold: 2 });
-  config.patchConfig({ showRealtimeSummary: true });
+  config.writeConfig({
+    custom: { preserved: true },
+    prismThreshold: 2,
+    showRealtimeSummary: false,
+  });
+  config.patchConfig({ show_realtime_summary: true });
 
   assert.deepEqual(config.readConfig(), {
     custom: { preserved: true },
     prismThreshold: 2,
-    showRealtimeSummary: true,
+    show_realtime_summary: true,
   });
   assert.equal(fs.statSync(path.dirname(configFile())).mode & 0o777, 0o700);
   assert.equal(fs.statSync(configFile()).mode & 0o777, 0o600);
+});
+
+test('canonical summary setting wins over legacy and unset removes both names', () => {
+  writeJson(configFile(), {
+    show_realtime_summary: false,
+    showRealtimeSummary: true,
+    marker: 'preserve',
+  });
+  const config = require('../lib/config');
+
+  assert.equal(config.getConfig().show_realtime_summary, false);
+  config.removeConfigField('show_realtime_summary', ['showRealtimeSummary']);
+
+  assert.deepEqual(config.readConfig(), { marker: 'preserve' });
+  assert.equal(config.getConfig().show_realtime_summary, false);
 });
 
 test('fetch sends an opaque key to the configured bootstrap and keeps only used remote fields', async () => {

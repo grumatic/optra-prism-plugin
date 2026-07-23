@@ -48,7 +48,7 @@ test('runtime exports use config.json and ignore stale cache, Prism env, and plu
   writeJson(path.join(home, '.prism', 'config.json'), {
     apiKey: API_KEY,
     ingest_url: 'https://config-ingest.example',
-    showRealtimeSummary: false,
+    show_realtime_summary: false,
     enableGateway: true,
   });
   writeJson(path.join(home, '.prism', 'config-cache.json'), {

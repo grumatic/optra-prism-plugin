@@ -42,7 +42,7 @@ function runtimeEnv(home, dataDir, config, extra = {}) {
     PRISM_GCK_KEY: 'hostile-gck-key',
     PRISM_INGEST_URL: 'https://hostile-ingest.invalid',
     CLAUDE_PLUGIN_OPTION_APIKEY: 'hostile-option-key',
-    CLAUDE_PLUGIN_OPTION_SHOWREALTIMESUMMARY: config.showRealtimeSummary ? 'false' : 'true',
+    CLAUDE_PLUGIN_OPTION_SHOWREALTIMESUMMARY: config.show_realtime_summary ? 'false' : 'true',
     ...extra,
   };
 }
@@ -145,7 +145,7 @@ test('exact Stop consumes one proven multi-assistant turn and separates totals f
     env: runtimeEnv(home, data, {
       apiKey: 'prism_test',
       ingest_url: 'http://127.0.0.1:9',
-      showRealtimeSummary: true,
+      show_realtime_summary: true,
     }, {
       RESPONSE_MARKER: marker,
       NODE_OPTIONS: `--require=${interceptor(home)}`,
@@ -184,7 +184,7 @@ test('failed response capture retains accounting after the active turn is consum
     env: runtimeEnv(home, data, {
       apiKey: 'prism_test',
       ingest_url: 'http://127.0.0.1:9',
-      showRealtimeSummary: true,
+      show_realtime_summary: true,
     }, {
       RESPONSE_MARKER: marker,
       NODE_OPTIONS: `--require=${interceptor(home, 503)}`,
@@ -329,7 +329,7 @@ test('exact authorization skips malformed prompt ids, expired records, and compa
   assert.equal(session.advanceBarrier('failed-new-normal', 'normal-pending').kind, 'normal-pending');
 });
 
-test('showRealtimeSummary off suppresses stdout but retains exact capture and summary', () => {
+test('show_realtime_summary off suppresses stdout but retains exact capture and summary', () => {
   const home = temp('prism-realtime-off-home-');
   const data = temp('prism-realtime-off-data-');
   const file = path.join(home, 'turn.jsonl');
@@ -346,7 +346,7 @@ test('showRealtimeSummary off suppresses stdout but retains exact capture and su
     env: runtimeEnv(home, data, {
       apiKey: 'prism_test',
       ingest_url: 'http://127.0.0.1:9',
-      showRealtimeSummary: false,
+      show_realtime_summary: false,
     }, {
       RESPONSE_MARKER: marker,
       NODE_OPTIONS: `--require=${interceptor(home)}`,
@@ -419,7 +419,7 @@ test('concurrent Stop hooks have exactly one compare-and-swap winner', async () 
   const env = runtimeEnv(home, data, {
     apiKey: '',
     ingest_url: 'http://127.0.0.1:1',
-    showRealtimeSummary: true,
+    show_realtime_summary: true,
   });
   const invoke = () => new Promise((resolve) => {
     const child = spawn(process.execPath, [STOP], { cwd: ROOT, env });

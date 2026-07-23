@@ -72,7 +72,7 @@ afterEach(() => {
 test('show emits only the two user-editable keys and never apiKey', () => {
   writeJson(configFile(), {
     apiKey: API_KEY,
-    showRealtimeSummary: true,
+    show_realtime_summary: true,
     prismThreshold: 7,
     ingest_url: 'https://ingest.example',
     internalField: 'hidden',
@@ -81,12 +81,12 @@ test('show emits only the two user-editable keys and never apiKey', () => {
   const { main } = require('../lib/config-command');
 
   assert.equal(main(['show'], captured.output), 0);
-  assert.deepEqual(JSON.parse(captured.logs[0]), {
-    showRealtimeSummary: true,
-    ingest_url: 'https://ingest.example',
-  });
+  assert.match(captured.logs[0], /show_realtime_summary\n  Current: true/);
+  assert.match(captured.logs[0], /ingest_url\n  Current: "https:\/\/ingest\.example"/);
+  assert.match(captured.logs[0], /Type: boolean/);
+  assert.match(captured.logs[0], /Values: HTTPS URL or loopback HTTP URL/);
   assert.equal(captured.logs.join('\n').includes(API_KEY), false);
-  assert.doesNotMatch(captured.logs[0], /apiKey|internalField/);
+  assert.doesNotMatch(captured.logs[0], /apiKey|internalField|showRealtimeSummary/);
 });
 
 test('show renders a missing ingest_url explicitly', () => {
@@ -94,10 +94,9 @@ test('show renders a missing ingest_url explicitly', () => {
   const { main } = require('../lib/config-command');
 
   assert.equal(main(['show'], captured.output), 0);
-  assert.deepEqual(JSON.parse(captured.logs[0]), {
-    showRealtimeSummary: false,
-    ingest_url: null,
-  });
+  assert.match(captured.logs[0], /show_realtime_summary\n  Current: false/);
+  assert.match(captured.logs[0], /ingest_url\n  Current: not set/);
+  assert.match(captured.logs[0], /\/prism:config help/);
 });
 
 test('set and unset persist the boolean value while preserving unrelated config', () => {
@@ -105,15 +104,29 @@ test('set and unset persist the boolean value while preserving unrelated config'
   const { main } = require('../lib/config-command');
 
   let captured = captureOutput();
-  assert.equal(main(['set', 'showRealtimeSummary', 'true'], captured.output), 0);
-  assert.equal(readJson(configFile()).showRealtimeSummary, true);
+  assert.equal(main(['set', 'show_realtime_summary', 'true'], captured.output), 0);
+  assert.equal(readJson(configFile()).show_realtime_summary, true);
   assert.match(captured.logs.at(-1), /next Hook invocation/);
 
   captured = captureOutput();
-  assert.equal(main(['unset', 'showRealtimeSummary'], captured.output), 0);
-  assert.equal(Object.hasOwn(readJson(configFile()), 'showRealtimeSummary'), false);
+  assert.equal(main(['unset', 'show_realtime_summary'], captured.output), 0);
+  assert.equal(Object.hasOwn(readJson(configFile()), 'show_realtime_summary'), false);
   assert.match(captured.logs[0], /effective value is false/);
   assert.equal(readJson(configFile()).custom, 'preserve');
+});
+
+test('help describes every field, accepted value, and apply behavior', () => {
+  const captured = captureOutput();
+  const { main } = require('../lib/config-command');
+
+  assert.equal(main(['help'], captured.output), 0);
+  assert.match(captured.logs[0], /show_realtime_summary/);
+  assert.match(captured.logs[0], /Values: true \| false/);
+  assert.match(captured.logs[0], /ingest_url/);
+  assert.match(captured.logs[0], /HTTPS URL or loopback HTTP URL/);
+  assert.match(captured.logs[0], /Restart Claude Code/);
+  assert.match(captured.logs[0], /\/prism:setup KEY/);
+  assert.doesNotMatch(captured.logs[0], /showRealtimeSummary/);
 });
 
 test('rejects apiKey, unsupported keys, and invalid values without mutation', () => {
@@ -126,7 +139,8 @@ test('rejects apiKey, unsupported keys, and invalid values without mutation', ()
     ['unset', 'apiKey'],
     ['set', 'environment', 'test'],
     ['set', 'prismThreshold', '4'],
-    ['set', 'showRealtimeSummary', 'yes'],
+    ['set', 'showRealtimeSummary', 'true'],
+    ['set', 'show_realtime_summary', 'yes'],
     ['set', 'ingest_url', '/relative/path'],
     ['set', 'ingest_url', 'ftp://ingest.example'],
     ['set', 'ingest_url', 'http://remote.example/path'],
