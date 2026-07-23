@@ -5,6 +5,17 @@ All notable changes to the Prism plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.3] - 2026-07-23
+
+### Added
+- `/prism:config` and `/prism:help` now enumerate every user-editable field with its current or default value, type, accepted values, apply behavior, and exact `set`/`unset` usage from one shared field registry.
+- Unsupported config fields now report the available field names, while API-key changes direct users to `/prism:setup KEY`.
+
+### Changed
+- The public realtime-summary field is now consistently named `show_realtime_summary` alongside `ingest_url`. Existing `showRealtimeSummary` values remain readable and migrate to the canonical field on the next config write.
+- `/prism:config` now uses explicit `show`, `help`, `set <field> <value>`, and `unset <field>` actions.
+- The README now links to the official Optra Prism website and removes the unavailable domain-hosted shell installer instructions.
+
 ## [0.6.2] - 2026-07-20
 
 ### Added
