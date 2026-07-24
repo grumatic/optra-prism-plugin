@@ -43,7 +43,7 @@ The development-to-release flow is fixed. Steps 1–3 are mandatory agent work r
 
 - Use conventional commits with subjects that state implementation facts only.
 - Split main-bound changes into one commit per feature unit; keep each separate from release metadata and from development-only changes.
-- Never mix distribution files (`lib/`, `hooks/`, `commands/`, `.claude-plugin/`, `README.md`, `install.sh`, distribution fields of `package.json`) and development-only files (`test/`, `.github/`, `AGENTS.md`, `CLAUDE.md`, dev tooling in `package.json`) in one commit. Commit-level separation is what makes release projection auditable.
+- Never mix distribution files (`lib/`, `hooks/`, `commands/`, `agents/`, `.claude-plugin/`, `README.md`, `install.sh`, distribution fields of `package.json`) and development-only files (`test/`, `.github/`, `AGENTS.md`, `CLAUDE.md`, dev tooling in `package.json`) in one commit. Commit-level separation is what makes release projection auditable.
 - Commit development-only changes (tests, workflows, agent docs, dev tooling) with as little splitting as possible: batch them rather than pairing one development commit per feature. Add or update tests for behavior changes on the development branch.
 - Never commit agent or editor runtime state (`.omc/`, `.omx/`, `.gjc/`, `.claude/`, session or memory files). If such files appear as untracked, leave them untracked.
 - Preserve backward-compatible behavior unless the user explicitly approves a breaking change.

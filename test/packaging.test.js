@@ -18,6 +18,7 @@ const DISTRIBUTION_PREFIXES = [
   'lib' + path.sep,
   'hooks' + path.sep,
   'commands' + path.sep,
+  'agents' + path.sep,
   '.claude-plugin' + path.sep,
 ];
 const DISTRIBUTION_FILES = new Set([
@@ -75,11 +76,16 @@ test('no packaged runtime file references development-only paths', () => {
   assert.deepEqual(offenders, []);
 });
 
-test('config command entrypoint is included by the package projection', () => {
+test('commands and their dedicated agents are included by the package projection', () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 
   assert.ok(pkg.files.includes('lib/'));
   assert.ok(pkg.files.includes('commands/'));
+  assert.ok(pkg.files.includes('agents/'));
   assert.equal(fs.existsSync(path.join(ROOT, 'lib', 'config-command.js')), true);
+  assert.equal(fs.existsSync(path.join(ROOT, 'lib', 'uninstall.js')), true);
   assert.equal(fs.existsSync(path.join(ROOT, 'commands', 'config.md')), true);
+  for (const agent of ['prism-config', 'prism-output', 'prism-setup', 'prism-uninstall']) {
+    assert.equal(fs.existsSync(path.join(ROOT, 'agents', `${agent}.md`)), true, agent);
+  }
 });
