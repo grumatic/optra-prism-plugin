@@ -57,7 +57,7 @@ Four hooks run automatically:
 | `/prism:status` | Show read-only configuration, connection, and session status |
 | `/prism:report` | Weekly review — this week vs last week, PRISM grade, habits, worst prompts |
 | `/prism:help` | List all available commands |
-| `/prism:uninstall` | Remove plugin config and OTEL settings |
+| `/prism:uninstall` | Preview and remove the current install scope |
 
 ## Configuration
 

@@ -2,11 +2,15 @@
 name: prism:status
 description: Show Prism connection status and session information
 user-invocable: true
-allowed-tools: Bash(node:*)
+disable-model-invocation: true
+context: fork
+background: false
+agent: prism:prism-output
+allowed-tools:
+  - Bash(node "${CLAUDE_PLUGIN_ROOT}/lib/status.js" --project-dir "${CLAUDE_PROJECT_DIR}" 2>&1 || true)
 ---
 
-Prism status:
+!`node "${CLAUDE_PLUGIN_ROOT}/lib/status.js" --project-dir "${CLAUDE_PROJECT_DIR}" 2>&1 || true`
 
-!`node "${CLAUDE_PLUGIN_ROOT}/lib/status.js" --project-dir "${CLAUDE_PROJECT_DIR}"`
-
-Display the output above verbatim.
+Return only the complete inline command output above, reproduced verbatim and
+character-for-character. Do not summarize, explain, label, or add commentary.
