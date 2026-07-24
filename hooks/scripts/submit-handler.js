@@ -11,7 +11,11 @@ let advanceBarrier;
 let attachActive;
 let failBarrier;
 let promoteActive;
+let readTurn;
 let sendPrompt;
+let sendResponse;
+let enqueue;
+let drain;
 let readGit;
 let writeGit;
 let collectGitContext;
@@ -39,6 +43,47 @@ function persistedServerPromptId(body) {
   } catch {
     return null;
   }
+}
+function isTerminalDroppedPromptAck(body) {
+  try {
+    return JSON.parse(body).id === '00000000-0000-0000-0000-000000000000';
+  } catch {
+    return false;
+  }
+}
+
+function promptIsPromoted(entry, serverPromptId) {
+  const promotion = entry.promotion;
+  if (!promotion || !serverPromptId) return !promotion;
+  const promoted = promoteActive(
+    promotion.sessionId,
+    promotion.clientEventId,
+    promotion.hostPromptId,
+    serverPromptId,
+  );
+  if (promoted) return true;
+  const turn = readTurn(promotion.sessionId);
+  return Boolean(
+    turn
+    && turn.epoch === promotion.epoch
+    && turn.active
+    && turn.active.clientEventId === promotion.clientEventId
+    && turn.active.submitPromptId === promotion.hostPromptId
+    && turn.active.serverPromptId === serverPromptId
+    && ['captured', 'consumed'].includes(turn.active.status),
+  );
+}
+
+async function deliverOutboxEntry(entry, options) {
+  const result = await (entry.kind === 'prompt' ? sendPrompt(entry.payload, options) : sendResponse(entry.payload, options));
+  if (entry.kind !== 'prompt' || !result || result.status < 200 || result.status >= 300) return result;
+  return {
+    ...result,
+    // Ingest uses 200 plus the nil UUID for intentionally dropped internal
+    // utility prompts. It is terminal, but must not promote a server prompt id.
+    ack: isTerminalDroppedPromptAck(result.body)
+      || promptIsPromoted(entry, persistedServerPromptId(result.body)),
+  };
 }
 
 
@@ -120,7 +165,7 @@ async function main() {
   }
   const normalizedPrompt = prompt.trim();
 
-  ({ advanceBarrier, attachActive, failBarrier, promoteActive, readGit, writeGit } = require('../../lib/session'));
+  ({ advanceBarrier, attachActive, failBarrier, promoteActive, readTurn, readGit, writeGit } = require('../../lib/session'));
   const barrier = advanceBarrier(data.session_id, 'normal-pending');
   if (!barrier) return;
   activeBarrier = barrier;
@@ -143,7 +188,8 @@ async function main() {
 
   const { API_KEY, INGEST_URL, SHOW_REALTIME_SUMMARY } = require('../../lib/env');
   debug = require('../../lib/debug').createDebug('submit-handler');
-  ({ sendPrompt } = require('../../lib/ingest'));
+  ({ sendPrompt, sendResponse } = require('../../lib/ingest'));
+  ({ enqueue, drain } = require('../../lib/response-outbox'));
   if (!API_KEY) {
     failBarrier(data.session_id, barrier.epoch);
     emitSystemMessage(
@@ -161,21 +207,27 @@ async function main() {
     return;
   }
 
-  try {
-    const result = await sendPrompt(payload);
-    const serverPromptId = persistedServerPromptId(result.body);
-    if (
-      !(result.status >= 200 && result.status < 300)
-      || !serverPromptId
-      || !validPromptId(data.prompt_id)
-      || !promoteActive(data.session_id, clientEventId, data.prompt_id, serverPromptId)
-    ) {
-      failBarrier(data.session_id, barrier.epoch);
-    }
-  } catch (err) {
+  const outboxId = `prompt-${clientEventId}`;
+  if (!enqueue({
+    id: outboxId,
+    kind: 'prompt',
+    payload,
+    promotion: {
+      sessionId: data.session_id,
+      epoch: barrier.epoch,
+      clientEventId,
+      hostPromptId: data.prompt_id,
+    },
+  })) {
     failBarrier(data.session_id, barrier.epoch);
-    debug(`INGEST FAILED: ${err.message || err}`);
+    return;
   }
+
+  await drain(deliverOutboxEntry, {
+    limit: 32,
+    maxElapsedMs: 2000,
+    prioritizeIds: [outboxId],
+  });
 }
 
 main().catch((err) => {
