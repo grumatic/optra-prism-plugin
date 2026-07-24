@@ -1,7 +1,7 @@
 {
   "name": "prism",
   "description": "AI vibe coding intelligence for Claude Code — realtime coaching, PRISM scoring, and insights. Pairs with dashboard.optra-prism.com",
-  "version": "0.6.3",
+  "version": "0.7.0",
   "author": {
     "name": "Optra",
     "url": "https://optra-prism.com"
