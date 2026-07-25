@@ -13,52 +13,11 @@ if [ -z "$PRISM_PLUGIN_ROOT" ]; then
   PRISM_PLUGIN_ROOT="${SCRIPT_DIR:+$(cd "$SCRIPT_DIR/../.." >/dev/null 2>&1 && pwd)}"
 fi
 #
-# This is the only consumer of hook stdin. It validates session identity and
-# source, then independently refreshes only sanitized Git context from cwd.
-PRISM_PLUGIN_ROOT="$PRISM_PLUGIN_ROOT" node -e '
-  const path = require("path");
-  let input = "";
-  process.stdin.setEncoding("utf8");
-  process.stdin.on("data", (chunk) => { input += chunk; });
-  process.stdin.on("end", async () => {
-    let debug = false;
-    try {
-      const { getConfig } = require(path.join(process.env.PRISM_PLUGIN_ROOT, "lib", "config"));
-      debug = getConfig().debug === true;
-    } catch {}
-    const report = (reason) => {
-      if (debug) process.stderr.write(`[Prism debug] SessionStart barrier skipped: ${reason}\n`);
-    };
-    try {
-      const session = require(path.join(process.env.PRISM_PLUGIN_ROOT, "lib", "session"));
-      session.cleanupStaleSessions();
-      const data = JSON.parse(input);
-      const sessionId = data && data.session_id;
-      const source = data && data.source;
-      if (typeof sessionId !== "string" || sessionId.length === 0 || sessionId.length > 1024) {
-        report("invalid session identity");
-        return;
-      }
-      if (typeof source !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(source)) {
-        report("invalid source");
-        return;
-      }
-      if (!session.advanceBarrier(sessionId, "lifecycle")) report("lock unavailable");
-      const cwd = data && data.cwd;
-      if (typeof cwd === "string" && cwd.length > 0) {
-        try {
-          const { collectGitContext } = require(path.join(process.env.PRISM_PLUGIN_ROOT, "lib", "git"));
-          const context = await collectGitContext(cwd);
-          session.writeGit(sessionId, context);
-        } catch {
-          report("git context refresh failed");
-        }
-      }
-    } catch {
-      report("helper failure");
-    }
-  });
-' || true
+# This is the only consumer of hook stdin. It advances the lifecycle barrier
+# before any version activation or update check, then emits at most one JSON
+# system message.
+PRISM_PLUGIN_ROOT="$PRISM_PLUGIN_ROOT" \
+  node "$PRISM_PLUGIN_ROOT/hooks/scripts/session-start-handler.js" || true
 set -euo pipefail
 
 PLUGIN_ROOT="$PRISM_PLUGIN_ROOT"
@@ -192,23 +151,6 @@ if [ -n "$INGEST_URL" ] && [ -n "$DATA_DIR" ]; then
       });
     ' >/dev/null 2>&1 </dev/null &
   ) || true
-fi
-
-# ─── Version update notification ───
-
-if [ -n "$DATA_DIR" ]; then
-  PLUGIN_VERSION=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('${PLUGIN_ROOT}/.claude-plugin/plugin.json','utf8')).version)" 2>/dev/null || true)
-  LAST_VERSION_FILE="${DATA_DIR}/last-version.txt"
-  LAST_VERSION=""
-  if [ -f "$LAST_VERSION_FILE" ]; then
-    LAST_VERSION=$(cat "$LAST_VERSION_FILE" 2>/dev/null || true)
-  fi
-  if [ -n "$PLUGIN_VERSION" ]; then
-    if [ -n "$LAST_VERSION" ] && [ "$LAST_VERSION" != "$PLUGIN_VERSION" ]; then
-      echo "[Prism] Updated to v${PLUGIN_VERSION} (was v${LAST_VERSION})" >&2
-    fi
-    echo -n "$PLUGIN_VERSION" > "$LAST_VERSION_FILE"
-  fi
 fi
 
 echo "[Prism] Session started — Prism API key present" >&2
