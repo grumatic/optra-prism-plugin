@@ -43,8 +43,8 @@ Four hooks run automatically:
 
 | Hook | Purpose |
 |------|---------|
-| **SessionStart** | Loads Prism runtime configuration without modifying Claude settings |
-| **UserPromptSubmit** | Reviews prompts for specificity/scope and captures them to ingest for scoring |
+| **SessionStart** | Activates version metadata, checks for a newer stable release, and loads Prism runtime configuration |
+| **UserPromptSubmit** | Detects a reloaded plugin version, then reviews and captures prompts for scoring |
 | **CwdChanged** | Refreshes sanitized Git repository metadata when the runtime supplies a valid working-directory change |
 | **Stop** | Captures prompt/response pairs for analytics, tracks turns, and relays the server-side PRISM realtime score |
 
@@ -71,6 +71,13 @@ Four hooks run automatically:
 
 Settings are read in user → project → local order, with later values taking precedence. Setup writes only the installed scope and does not move or delete values from another settings layer.
 
+Setup also installs a self-contained OTEL headers helper under the plugin data
+directory and records its absolute path in the same settings scope. The static
+OTEL header remains the immediate restart path. The helper refreshes the API key
+and plugin-version headers on Claude Code's helper schedule for users who defer
+the restart. Prism preserves an unrelated `otelHeadersHelper` instead of
+overwriting it; `/prism:status` and `/prism:doctor` report that conflict.
+
 Use `/prism:config` to list the user-editable fields, their current values, accepted values, and apply behavior. The public configuration fields are:
 
 | Field | Type | Default | Applies |
@@ -89,12 +96,13 @@ After updating from v0.6.1 or earlier, run `/prism:setup KEY` once when `/prism:
     │
     ├─→ Calls config endpoint → resolves URLs from API key
     ├─→ Writes ~/.prism/config.json
-    └─→ Syncs OTEL values to the installed-scope settings file
+    ├─→ Syncs OTEL values to the installed-scope settings file
+    └─→ Installs the stable OTEL headers helper in plugin data
 
 Claude Code starts
     │
     ├─→ Reads installed-scope settings → OTEL env vars set at process init
-    ├─→ SessionStart hook → reads ~/.prism/config.json
+    ├─→ SessionStart hook → activates version metadata and checks for updates
     │
     ├─→ User types prompt
     │   └─→ UserPromptSubmit hook → captures prompt to ingest
@@ -128,7 +136,16 @@ Debug output is written to `$CLAUDE_PLUGIN_DATA/debug.log` when Claude Code prov
 
 ## Auto-Updates
 
-When installed via marketplace, the plugin updates automatically when a new version is released. You'll see a notification on session start when an update is applied.
+On `SessionStart(startup)`, Prism checks the public marketplace metadata at most
+once every 24 hours and reuses a last-known-good cache on network or parse
+failure. When a newer stable version is available, the session message tells
+you to update the plugin, run `/reload-plugins`, and restart Claude Code.
+
+After a new plugin version is activated, the first SessionStart or subsequent
+UserPromptSubmit updates the static plugin-version header and, when no unrelated
+helper conflicts, the stable helper before showing the restart message.
+Restarting is still the immediate, deterministic way to apply the new OTEL
+metadata; the helper is an eventual fallback when the restart is deferred.
 
 ## License
 
