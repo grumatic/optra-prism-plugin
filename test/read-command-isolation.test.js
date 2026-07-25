@@ -78,6 +78,19 @@ test('read commands pre-authorize exactly one invocation and preserve failure ou
   }
 });
 
+test('status and doctor receive the host project and plugin data directories exactly once', () => {
+  for (const commandName of ['status', 'doctor']) {
+    const invocation = inlineShellInvocations(read(`commands/${commandName}.md`))[0];
+    assert.match(
+      invocation,
+      / --project-dir "\$\{CLAUDE_PROJECT_DIR\}" --data-dir "\$\{CLAUDE_PLUGIN_DATA\}" 2>&1 \|\| true$/,
+      commandName,
+    );
+    assert.equal((invocation.match(/--project-dir/g) || []).length, 1, commandName);
+    assert.equal((invocation.match(/--data-dir/g) || []).length, 1, commandName);
+  }
+});
+
 test('realtime command delegates all conditional output to its script', () => {
   const commandBody = body(read('commands/realtime.md'));
   const realtimeSource = read('lib/realtime-status.js');

@@ -42,7 +42,7 @@ test('setup maps a key to exactly one apply invocation without inline shell expa
   const command = read('commands/setup.md');
   const agent = read('agents/prism-setup.md');
   const commandBody = body(command);
-  const invocation = 'node "${CLAUDE_PLUGIN_ROOT}/lib/setup.js" apply "$KEY" --project-dir "${CLAUDE_PROJECT_DIR}"';
+  const invocation = 'node "${CLAUDE_PLUGIN_ROOT}/lib/setup.js" apply "$KEY" --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}"';
 
   assert.equal(commandBody.split(invocation).length - 1, 1);
   assert.equal((commandBody.match(/lib\/setup\.js/g) || []).length, 1);

@@ -225,6 +225,48 @@ function runConfirmed(fx, args, env = {}) {
   return run(fx, ['apply', '--confirm', token, ...args], env);
 }
 
+function expectedOtelHeadersHelperPath(fx) {
+  return path.join(fx.dataDir, 'bin', 'prism-otel-headers-helper.js');
+}
+
+function runWithOtelHeadersHelperMetadata(fx) {
+  const source = [
+    'const uninstall = require(process.argv[1]);',
+    'const plan = uninstall.buildPlan({',
+    '  projectDir: process.argv[2],',
+    '  dataDir: process.argv[3],',
+    '  pluginRoot: process.argv[4],',
+    '});',
+    'const preview = uninstall.renderPreview(plan);',
+    'const result = uninstall.applyPlan(plan);',
+    'const applied = uninstall.renderApplied(plan, result);',
+    'process.stdout.write(JSON.stringify({',
+    '  plan: plan.otelHeadersHelper,',
+    '  preview,',
+    '  result: result.otelHeadersHelper,',
+    '  applied,',
+    '}));',
+  ].join('\n');
+
+  return spawnSync(process.execPath, [
+    '-e',
+    source,
+    SCRIPT,
+    fx.projectDir,
+    fx.dataDir,
+    fx.pluginRoot,
+  ], {
+    cwd: fx.projectDir,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      HOME: fx.homeDir,
+      CLAUDE_PROJECT_DIR: fx.projectDir,
+      CLAUDE_PLUGIN_DATA: fx.dataDir,
+    },
+  });
+}
+
 function cleanup(fx) {
   fs.rmSync(fx.root, { recursive: true, force: true });
 }
@@ -755,6 +797,40 @@ test('settings drift after preview rejects the old token with zero apply mutatio
   }
 });
 
+test('otelHeadersHelper drift after preview invalidates the plan token with zero mutation', () => {
+  const fx = fixture();
+  try {
+    const helperPath = expectedOtelHeadersHelperPath(fx);
+    const settings = readJson(fx.localSettings);
+    settings.otelHeadersHelper = helperPath;
+    writeJson(fx.localSettings, settings);
+    const args = [
+      '--project-dir',
+      fx.projectDir,
+      '--data-dir',
+      fx.dataDir,
+    ];
+    const preview = run(fx, ['preview', ...args]);
+    const token = extractPlanToken(preview);
+    assert.match(preview.stdout, /Remove otelHeadersHelper because it exactly matches/);
+
+    const driftedSettings = readJson(fx.localSettings);
+    driftedSettings.otelHeadersHelper = {
+      command: path.join(fx.root, 'company-helper.js'),
+    };
+    writeJson(fx.localSettings, driftedSettings);
+    const drifted = snapshotTree(fx.root);
+
+    const result = run(fx, ['apply', '--confirm', token, ...args]);
+
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /plan token does not match/);
+    assert.deepEqual(snapshotTree(fx.root), drifted);
+  } finally {
+    cleanup(fx);
+  }
+});
+
 test('plan tokens canonicalize JSON formatting while preserving semantic drift detection', () => {
   const fx = fixture();
   try {
@@ -770,6 +846,47 @@ test('plan tokens canonicalize JSON formatting while preserving semantic drift d
     const second = extractPlanToken(run(fx, ['preview', ...args]));
 
     assert.equal(second, first);
+  } finally {
+    cleanup(fx);
+  }
+});
+
+test('exact otelHeadersHelper cleanup is explicit in plan/apply metadata and uses dataDir removal', () => {
+  const fx = fixture();
+  try {
+    const helperPath = expectedOtelHeadersHelperPath(fx);
+    writeJson(fx.localSettings, {
+      otelHeadersHelper: helperPath,
+      unrelated: 'preserve',
+    });
+    writeFile(helperPath, '#!/usr/bin/env node\n');
+
+    const result = runWithOtelHeadersHelperMetadata(fx);
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stderr, '');
+    const metadata = JSON.parse(result.stdout);
+    assert.deepEqual(metadata.plan, {
+      expectedPath: helperPath,
+      settingPresent: true,
+      decision: 'remove',
+      reason: 'exact-path-match',
+      referencesPluginData: true,
+    });
+    assert.deepEqual(metadata.result, {
+      expectedPath: helperPath,
+      settingPresent: true,
+      decision: 'remove',
+      reason: 'exact-path-match',
+      referencesPluginData: true,
+      removed: true,
+      preserved: false,
+    });
+    assert.match(metadata.preview, /Remove otelHeadersHelper because it exactly matches/);
+    assert.match(metadata.preview, new RegExp(helperPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    assert.match(metadata.applied, /otelHeadersHelper removed after exact path match/);
+    assert.deepEqual(readJson(fx.localSettings), { unrelated: 'preserve' });
+    assert.equal(fs.existsSync(fx.dataDir), false);
   } finally {
     cleanup(fx);
   }
@@ -851,6 +968,112 @@ test('diverged OTEL values are preserved with a warning instead of claimed as Pr
     }
     assert.match(result.stdout, /OTEL values were preserved because they do not exactly match/);
     assert.equal(Object.hasOwn(cleaned.enabledPlugins, PLUGIN_ID), false);
+  } finally {
+    cleanup(fx);
+  }
+});
+
+test('divergent string and non-string otelHeadersHelper values are preserved and reported', () => {
+  const cases = [
+    {
+      label: 'different absolute path',
+      value: (fx) => path.join(fx.root, 'company-data', 'bin', 'prism-otel-headers-helper.js'),
+    },
+    {
+      label: 'non-string object',
+      value: (fx) => ({ command: path.join(fx.root, 'company-helper.js') }),
+    },
+  ];
+
+  for (const entry of cases) {
+    const fx = fixture();
+    try {
+      const divergentValue = entry.value(fx);
+      const settings = readJson(fx.localSettings);
+      settings.otelHeadersHelper = divergentValue;
+      writeJson(fx.localSettings, settings);
+      if (typeof divergentValue === 'string') writeFile(divergentValue, 'external helper\n');
+      const args = [
+        '--project-dir',
+        fx.projectDir,
+        '--data-dir',
+        fx.dataDir,
+      ];
+      const preview = run(fx, ['preview', ...args]);
+      const token = extractPlanToken(preview);
+
+      assert.match(
+        preview.stdout,
+        /Preserve otelHeadersHelper because its value does not exactly match/,
+        entry.label,
+      );
+
+      const result = run(fx, ['apply', '--confirm', token, ...args]);
+
+      assert.equal(result.status, 0, `${entry.label}: ${result.stderr}`);
+      assert.deepEqual(
+        readJson(fx.localSettings).otelHeadersHelper,
+        divergentValue,
+        entry.label,
+      );
+      assert.match(
+        result.stdout,
+        /otelHeadersHelper preserved because it did not exactly match/,
+        entry.label,
+      );
+      assert.match(
+        result.stdout,
+        /Warning: otelHeadersHelper was preserved because its value does not exactly match/,
+        entry.label,
+      );
+      if (typeof divergentValue === 'string') {
+        assert.equal(fs.existsSync(divergentValue), true, entry.label);
+      }
+    } finally {
+      cleanup(fx);
+    }
+  }
+});
+
+test('divergent otelHeadersHelper inside plugin data preserves its referenced file and directory', () => {
+  const fx = fixture();
+  try {
+    const divergentHelperPath = path.join(
+      fx.dataDir,
+      'custom',
+      'company-otel-headers-helper.js',
+    );
+    const settings = readJson(fx.localSettings);
+    settings.otelHeadersHelper = divergentHelperPath;
+    writeJson(fx.localSettings, settings);
+    writeFile(divergentHelperPath, 'company helper\n');
+    const args = [
+      '--project-dir',
+      fx.projectDir,
+      '--data-dir',
+      fx.dataDir,
+    ];
+    const preview = run(fx, ['preview', ...args]);
+    const token = extractPlanToken(preview);
+
+    assert.match(
+      preview.stdout,
+      /Preserve otelHeadersHelper because its value does not exactly match/,
+    );
+    assert.match(
+      preview.stdout,
+      /Preserve marketplace plugin data .* because the preserved otelHeadersHelper setting still references it/,
+    );
+
+    const result = run(fx, ['apply', '--confirm', token, ...args]);
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(
+      readJson(fx.localSettings).otelHeadersHelper,
+      divergentHelperPath,
+    );
+    assert.equal(fs.readFileSync(divergentHelperPath, 'utf8'), 'company helper\n');
+    assert.equal(fs.existsSync(fx.dataDir), true);
   } finally {
     cleanup(fx);
   }
@@ -1011,6 +1234,117 @@ test('an unclassified remaining install conservatively preserves config, data, a
   }
 });
 
+test('local uninstall preserves shared settings for a kept legacy local install', () => {
+  const fx = fixture();
+  try {
+    const legacyPluginRoot = path.join(fx.pluginCacheDir, '0.6.9');
+    writeFile(path.join(legacyPluginRoot, 'lib', 'settings.js'));
+    const installed = readJson(fx.installedPlugins);
+    installed.plugins[PLUGIN_ID].push({
+      projectPath: fx.projectDir,
+      installPath: legacyPluginRoot,
+      version: '0.6.9',
+    });
+    writeJson(fx.installedPlugins, installed);
+    const helperPath = expectedOtelHeadersHelperPath(fx);
+    const settings = readJson(fx.localSettings);
+    settings.otelHeadersHelper = helperPath;
+    writeJson(fx.localSettings, settings);
+    writeFile(helperPath, '#!/usr/bin/env node\n');
+    const settingsBefore = fs.readFileSync(fx.localSettings, 'utf8');
+    const args = [
+      '--project-dir',
+      fx.projectDir,
+      '--data-dir',
+      fx.dataDir,
+    ];
+
+    const preview = run(fx, ['preview', ...args]);
+    const token = extractPlanToken(preview);
+
+    assert.match(
+      preview.stdout,
+      /Preserve the shared settings file because a remaining Prism install still uses it/,
+    );
+    assert.match(
+      preview.stdout,
+      /Preserve otelHeadersHelper with the entire shared settings file/,
+    );
+
+    const result = run(fx, ['apply', '--confirm', token, ...args]);
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(fs.readFileSync(fx.localSettings, 'utf8'), settingsBefore);
+    assert.equal(readJson(fx.localSettings).otelHeadersHelper, helperPath);
+    assert.equal(fs.existsSync(helperPath), true);
+    assert.equal(fs.existsSync(fx.dataDir), true);
+    assert.deepEqual(readJson(fx.installedPlugins).plugins[PLUGIN_ID], [{
+      projectPath: fx.projectDir,
+      installPath: legacyPluginRoot,
+      version: '0.6.9',
+    }]);
+  } finally {
+    cleanup(fx);
+  }
+});
+
+test('marketplace uninstall preserves its data when kept inline install shares settings', () => {
+  const fx = fixture();
+  try {
+    const installed = readJson(fx.installedPlugins);
+    installed.plugins[PLUGIN_ID].push({
+      scope: 'local',
+      projectPath: fx.projectDir,
+      installPath: fx.inlinePluginRoot,
+      version: '0.7.0',
+    });
+    writeJson(fx.installedPlugins, installed);
+    const helperPath = expectedOtelHeadersHelperPath(fx);
+    const settings = readJson(fx.localSettings);
+    settings.otelHeadersHelper = helperPath;
+    writeJson(fx.localSettings, settings);
+    writeFile(helperPath, '#!/usr/bin/env node\n');
+    const settingsBefore = fs.readFileSync(fx.localSettings, 'utf8');
+    const dataBefore = snapshotTree(fx.dataDir);
+    const args = [
+      '--project-dir',
+      fx.projectDir,
+      '--data-dir',
+      fx.dataDir,
+    ];
+
+    const preview = run(fx, ['preview', ...args]);
+    const token = extractPlanToken(preview);
+
+    assert.match(
+      preview.stdout,
+      /Preserve marketplace plugin data .*because a preserved settings file may still reference it/,
+    );
+    assert.match(
+      preview.stdout,
+      /Preserve otelHeadersHelper with the entire shared settings file/,
+    );
+
+    const result = run(fx, ['apply', '--confirm', token, ...args]);
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(fs.readFileSync(fx.localSettings, 'utf8'), settingsBefore);
+    assert.deepEqual(snapshotTree(fx.dataDir), dataBefore);
+    assert.equal(fs.existsSync(helperPath), true);
+    assert.deepEqual(readJson(fx.installedPlugins).plugins[PLUGIN_ID], [{
+      scope: 'local',
+      projectPath: fx.projectDir,
+      installPath: fx.inlinePluginRoot,
+      version: '0.7.0',
+    }]);
+    assert.equal(fs.existsSync(fx.pluginCacheDir), false);
+    assert.equal(fs.existsSync(path.join(fx.siblingCacheDir, 'keep')), true);
+    assert.match(result.stdout, /shared settings file was preserved/);
+  } finally {
+    cleanup(fx);
+  }
+});
+
 test('local uninstall preserves a project-scope install for the same project', () => {
   const fx = fixture();
   try {
@@ -1126,6 +1460,11 @@ test('project uninstall preserves shared user settings when the project is home'
       },
     ];
     writeJson(fx.installedPlugins, installed);
+    const helperPath = expectedOtelHeadersHelperPath(fx);
+    const sharedSettings = readJson(fx.userSettings);
+    sharedSettings.otelHeadersHelper = helperPath;
+    writeJson(fx.userSettings, sharedSettings);
+    writeFile(helperPath, '#!/usr/bin/env node\n');
     const settingsBefore = fs.readFileSync(fx.userSettings, 'utf8');
     const sharedBefore = {
       prism: snapshotTree(path.join(fx.homeDir, '.prism')),
@@ -1146,6 +1485,10 @@ test('project uninstall preserves shared user settings when the project is home'
     );
     assert.doesNotMatch(preview.stdout, /Remove Prism-managed OTEL values/);
     assert.doesNotMatch(preview.stdout, /Remove the current scope enabledPlugins registration/);
+    assert.match(
+      preview.stdout,
+      /Preserve otelHeadersHelper with the entire shared settings file/,
+    );
 
     const token = extractPlanToken(preview);
     const result = run(homeProject, [
@@ -1160,6 +1503,8 @@ test('project uninstall preserves shared user settings when the project is home'
 
     assert.equal(result.status, 0, result.stderr);
     assert.equal(fs.readFileSync(fx.userSettings, 'utf8'), settingsBefore);
+    assert.equal(readJson(fx.userSettings).otelHeadersHelper, helperPath);
+    assert.equal(fs.existsSync(helperPath), true);
     assert.deepEqual(readJson(fx.installedPlugins).plugins[PLUGIN_ID].map((entry) => ({
       scope: entry.scope,
       projectPath: entry.projectPath,
@@ -1172,6 +1517,10 @@ test('project uninstall preserves shared user settings when the project is home'
     assert.match(result.stdout, /OTEL projection preserved for remaining installs: user/);
     assert.match(result.stdout, /shared settings file was preserved/);
     assert.match(result.stdout, /shared enabledPlugins registration was preserved/);
+    assert.match(
+      result.stdout,
+      /otelHeadersHelper was not inspected or removed because the entire shared settings file was preserved/,
+    );
   } finally {
     cleanup(fx);
   }

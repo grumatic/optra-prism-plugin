@@ -31,10 +31,17 @@ test('status is read-only and resolves effective settings user to project to loc
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-status-readonly-'));
   const projectDir = path.join(home, 'project');
   const pluginData = path.join(home, 'plugin-data-must-not-be-created');
+  const configuredHelper = path.join(home, 'configured-helper-must-not-run.js');
+  const executionMarker = path.join(home, 'helper-was-executed');
   const writeJson = (file, value) => {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
   };
+  fs.writeFileSync(
+    configuredHelper,
+    `#!/usr/bin/env node\nrequire('fs').writeFileSync(${JSON.stringify(executionMarker)}, 'executed');\n`,
+    { mode: 0o700 },
+  );
   writeJson(path.join(home, '.prism', 'config.json'), {
     apiKey: 'prism_status_readonly',
     ingest_url: 'http://127.0.0.1:1',
@@ -42,15 +49,18 @@ test('status is read-only and resolves effective settings user to project to loc
     show_realtime_summary: false,
   });
   writeJson(path.join(home, '.claude', 'settings.json'), {
+    otelHeadersHelper: '/user/helper',
     env: {
       OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: 'https://user.example/v1/logs',
       OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: 'https://user.example/v1/metrics',
     },
   });
   writeJson(path.join(projectDir, '.claude', 'settings.json'), {
+    otelHeadersHelper: '/project/helper',
     env: { OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: 'https://project.example/v1/logs' },
   });
   writeJson(path.join(projectDir, '.claude', 'settings.local.json'), {
+    otelHeadersHelper: configuredHelper,
     env: { OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: 'https://local.example/v1/logs' },
   });
   const before = snapshotTree(home);
@@ -60,6 +70,8 @@ test('status is read-only and resolves effective settings user to project to loc
       path.join(ROOT, 'lib', 'status.js'),
       '--project-dir',
       projectDir,
+      '--data-dir',
+      pluginData,
     ], {
       encoding: 'utf8',
       env: {
@@ -76,11 +88,59 @@ test('status is read-only and resolves effective settings user to project to loc
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /Effective OTEL Logs:\*\* https:\/\/local\.example\/v1\/logs \(source: local/);
     assert.match(result.stdout, /Effective OTEL Metrics:\*\* https:\/\/user\.example\/v1\/metrics \(source: user/);
+    assert.match(
+      result.stdout,
+      new RegExp(
+        `Disk-effective OTEL Headers Helper:\\*\\* ${configuredHelper.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} ` +
+        '\\(source: local ',
+      ),
+    );
+    assert.match(
+      result.stdout,
+      new RegExp(
+        `Expected Prism OTEL Headers Helper:\\*\\* ${path.join(pluginData, 'bin', 'prism-otel-headers-helper.js')
+          .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`,
+      ),
+    );
+    assert.match(
+      result.stdout,
+      /Prism-managed helper artifact:\*\* exists=no, regular file=unknown, not symlink=unknown, safe path=no/,
+    );
+    assert.match(
+      result.stdout,
+      /Prism-managed helper path chain:\*\* data dir: exists=no, directory=unknown, not symlink=unknown/,
+    );
+    assert.match(result.stdout, /Helper setting conflict:\*\* Prism preserved the effective OTEL headers helper from local/);
+    assert.match(result.stdout, /`\/prism:setup` will not overwrite that setting/);
+    assert.match(result.stdout, /reproject non-helper OTEL values; Prism will preserve the conflicting helper/);
+    assert.match(result.stdout, /managed settings and CLI overrides are outside this reader/);
     assert.doesNotMatch(result.stdout, /hostile-(?:env|ingest|process)/);
+    assert.equal(fs.existsSync(executionMarker), false);
     assert.deepEqual(snapshotTree(home), before);
     assert.equal(fs.existsSync(pluginData), false);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('status rejects unknown, duplicate, incomplete, and relative data-dir arguments', () => {
+  const cases = [
+    ['--unknown'],
+    ['--project-dir'],
+    ['--data-dir'],
+    ['--data-dir', 'relative/plugin-data'],
+    ['--data-dir', '/one', '--data-dir', '/two'],
+  ];
+
+  for (const args of cases) {
+    const result = spawnSync(process.execPath, [
+      path.join(ROOT, 'lib', 'status.js'),
+      ...args,
+    ], { encoding: 'utf8' });
+
+    assert.equal(result.status, 2, args.join(' '));
+    assert.match(result.stderr, /^\[prism:status\] /, args.join(' '));
+    assert.doesNotMatch(result.stderr, /\n\s+at |Node\.js v/, args.join(' '));
   }
 });
 
@@ -149,6 +209,67 @@ test('renders config authority and effective on-disk OTEL sources', () => {
     '**Next:** open https://dashboard.example.test/ for realtime coaching, PRISM scores, and insights.',
   ].join('\n'));
   assert.doesNotMatch(output, /process env|source: env/i);
+});
+
+test('does not claim OTEL is configured when the managed helper is tampered', () => {
+  const helperPath = '/home/test/plugin-data/bin/prism-otel-headers-helper.js';
+  const output = renderStatus({
+    config: {
+      apiKey: 'opaque-config-key',
+      ingest_url: 'https://ingest.example.test',
+      show_realtime_summary: false,
+    },
+    rawConfig: {
+      apiKey: 'opaque-config-key',
+      ingest_url: 'https://ingest.example.test',
+    },
+    installScope: 'user',
+    effectiveSettings: {
+      env: {},
+      sources: {},
+      files: {
+        user: '/home/test/.claude/settings.json',
+        project: '/workspace/.claude/settings.json',
+        local: '/workspace/.claude/settings.local.json',
+      },
+    },
+    expectedOtel: null,
+    otelStatus: { ok: true, mismatches: [] },
+    helperDiagnostic: {
+      expectedPath: helperPath,
+      expectedPathError: null,
+      effective: {
+        value: helperPath,
+        source: 'user',
+        files: {
+          user: '/home/test/.claude/settings.json',
+        },
+      },
+      configuredPath: helperPath,
+      exists: true,
+      regularFile: true,
+      notSymlink: true,
+      safePath: true,
+      ownedByCurrentUser: true,
+      exactMode: true,
+      executable: true,
+      matchesBundledSource: false,
+      dataDirExists: true,
+      dataDirDirectory: true,
+      dataDirNotSymlink: true,
+      binDirExists: true,
+      binDirDirectory: true,
+      binDirNotSymlink: true,
+      ok: false,
+      reason: 'managed helper differs from bundled source',
+    },
+    health: { ok: true, reachable: true, httpStatus: 200, error: null },
+  });
+
+  assert.match(output, /bundled bytes=no/);
+  assert.match(output, /OTEL settings:\*\* out of sync \(1 value\(s\)\)/);
+  assert.match(output, /otelHeadersHelper \(effective source: user/);
+  assert.doesNotMatch(output, /OTEL settings:\*\* configured on disk/);
 });
 
 test('renders missing config and disk projection drift without process-env claims', () => {

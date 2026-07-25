@@ -5,6 +5,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { afterEach, beforeEach, test } = require('node:test');
 
+const ROOT = path.join(__dirname, '..');
 const MODULE_PATHS = ['../lib/setup', '../lib/settings', '../lib/config', '../lib/notify'];
 
 let homeDir;
@@ -15,6 +16,10 @@ let originalEnvKey;
 function writeJson(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function readJson(file) {
+  return JSON.parse(fs.readFileSync(file, 'utf8'));
 }
 
 function clearModules() {
@@ -58,7 +63,11 @@ test('setup CLI requires one positional opaque KEY and auto-detects scope', asyn
   const opaqueKey = 'key with spaces and no prefix';
   writeJson(path.join(homeDir, '.claude', 'plugins', 'installed_plugins.json'), {
     plugins: {
-      'prism@optra-prism': [{ scope: 'local', projectPath: projectDir }],
+      'prism@optra-prism': [{
+        scope: 'local',
+        projectPath: projectDir,
+        installPath: ROOT,
+      }],
     },
   });
 
@@ -83,24 +92,47 @@ test('setup CLI requires one positional opaque KEY and auto-detects scope', asyn
     opaqueKey,
     '--project-dir',
     projectDir,
+    '--data-dir',
+    path.join(homeDir, 'plugin-data'),
   ], captured.output), 0);
   assert.equal(fetchedKey, opaqueKey);
   assert.equal(notifiedKey, opaqueKey);
   assert.equal(config.readConfig().apiKey, opaqueKey);
   assert.match(captured.logs.join('\n'), /Scope: local/);
+  const localSettings = path.join(projectDir, '.claude', 'settings.local.json');
+  assert.equal(
+    readJson(localSettings).otelHeadersHelper,
+    path.join(homeDir, 'plugin-data', 'bin', 'prism-otel-headers-helper.js'),
+  );
+  assert.equal(
+    fs.readFileSync(path.join(homeDir, 'plugin-data', 'last-version.txt'), 'utf8'),
+    require('../lib/plugin-update').readCurrentPluginVersion(),
+  );
 });
 
 test('setup CLI does not fall back to env or accept legacy scope flags', async () => {
   const { APPLY_USAGE, main, parseApplyArgs } = require('../lib/setup');
-  assert.deepEqual(parseApplyArgs([]), { projectDir: null });
-  assert.deepEqual(parseApplyArgs(['--project-dir', projectDir]), { projectDir });
+  assert.deepEqual(parseApplyArgs([]), { projectDir: null, dataDir: null });
+  assert.deepEqual(parseApplyArgs(['--project-dir', projectDir]), {
+    projectDir,
+    dataDir: null,
+  });
+  assert.deepEqual(parseApplyArgs([
+    '--data-dir', path.join(homeDir, 'data'),
+    '--project-dir', projectDir,
+  ]), {
+    projectDir,
+    dataDir: path.join(homeDir, 'data'),
+  });
   assert.equal(parseApplyArgs(['--scope', 'user']), null);
   assert.equal(parseApplyArgs(['--project-dir']), null);
+  assert.equal(parseApplyArgs(['--data-dir', '/one', '--data-dir', '/two']), null);
 
   for (const argv of [
     ['apply'],
     ['apply', 'key', '--scope', 'user'],
     ['apply', 'key', '--project-dir'],
+    ['apply', 'key', '--data-dir'],
     ['apply', 'key', 'extra'],
   ]) {
     const captured = captureOutput();
@@ -147,7 +179,86 @@ test('shell installer delegates an opaque key to the installed setup entrypoint'
   });
 
   assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(JSON.parse(fs.readFileSync(setupCall, 'utf8')), ['apply', opaqueKey]);
+  assert.deepEqual(JSON.parse(fs.readFileSync(setupCall, 'utf8')), [
+    'apply',
+    opaqueKey,
+    '--data-dir',
+    path.join(homeDir, '.claude', 'plugins', 'data', 'prism-optra-prism'),
+  ]);
   assert.match(result.stdout, /Prism configured/);
   assert.doesNotMatch(result.stdout, /invalid.*key|config-cache|scope repair/i);
+});
+
+test('shell marketplace reinstall preserves durable plugin data when install and setup are deferred', () => {
+  const binDir = path.join(homeDir, 'bin');
+  const dataDir = path.join(
+    homeDir,
+    '.claude',
+    'plugins',
+    'data',
+    'prism-optra-prism',
+  );
+  const helperPath = path.join(dataDir, 'bin', 'prism-otel-headers-helper.js');
+  const cacheDir = path.join(homeDir, '.claude', 'plugins', 'cache', 'optra-prism');
+  const installedPlugins = path.join(
+    homeDir,
+    '.claude',
+    'plugins',
+    'installed_plugins.json',
+  );
+  fs.mkdirSync(binDir, { recursive: true });
+  fs.mkdirSync(path.dirname(helperPath), { recursive: true });
+  fs.writeFileSync(helperPath, '#!/usr/bin/env node\n');
+  fs.writeFileSync(path.join(dataDir, 'last-version.txt'), '0.7.0\n');
+  fs.writeFileSync(path.join(dataDir, 'update-check.json'), '{"checkedAt":1}\n');
+  fs.mkdirSync(path.join(cacheDir, 'prism', '0.7.0'), { recursive: true });
+  fs.writeFileSync(path.join(cacheDir, 'prism', '0.7.0', 'stale'), 'remove\n');
+  writeJson(installedPlugins, {
+    plugins: {
+      'prism@optra-prism': [{
+        scope: 'local',
+        projectPath: projectDir,
+        installPath: path.join(cacheDir, 'prism', '0.7.0'),
+      }],
+      'other@example': [{ scope: 'user' }],
+    },
+  });
+  writeJson(path.join(homeDir, '.claude', 'settings.json'), {
+    otelHeadersHelper: helperPath,
+  });
+
+  const claude = path.join(binDir, 'claude');
+  fs.writeFileSync(claude, [
+    '#!/bin/sh',
+    'if [ "$1" = "plugin" ] && [ "$2" = "install" ]; then',
+    '  exit 1',
+    'fi',
+    'exit 0',
+    '',
+  ].join('\n'));
+  fs.chmodSync(claude, 0o755);
+
+  const result = spawnSync('bash', [path.join(__dirname, '..', 'install.sh')], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      HOME: homeDir,
+      PATH: `${binDir}:${process.env.PATH}`,
+    },
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Plugin install deferred/);
+  assert.match(result.stdout, /No API key provided/);
+  assert.equal(fs.readFileSync(helperPath, 'utf8'), '#!/usr/bin/env node\n');
+  assert.equal(fs.readFileSync(path.join(dataDir, 'last-version.txt'), 'utf8'), '0.7.0\n');
+  assert.equal(
+    fs.readFileSync(path.join(dataDir, 'update-check.json'), 'utf8'),
+    '{"checkedAt":1}\n',
+  );
+  assert.equal(readJson(path.join(homeDir, '.claude', 'settings.json')).otelHeadersHelper, helperPath);
+  assert.equal(fs.existsSync(cacheDir), false);
+  assert.deepEqual(readJson(installedPlugins).plugins, {
+    'other@example': [{ scope: 'user' }],
+  });
 });

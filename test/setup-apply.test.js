@@ -4,6 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { afterEach, beforeEach, test } = require('node:test');
 
+const ROOT = path.resolve(__dirname, '..');
 const API_KEY = 'opaque setup key';
 const MODULE_PATHS = ['../lib/setup', '../lib/settings', '../lib/config', '../lib/notify'];
 
@@ -42,7 +43,7 @@ function configFile() {
 }
 
 function installAt(scope) {
-  const entry = { scope };
+  const entry = { scope, installPath: ROOT };
   if (scope !== 'user') entry.projectPath = projectDir;
   writeJson(path.join(homeDir, '.claude', 'plugins', 'installed_plugins.json'), {
     plugins: { 'prism@optra-prism': [entry] },
@@ -127,6 +128,40 @@ test('setup persists remote config and writes only the detected install scope', 
   assert.match(captured.errors.join('\n'), /effective OTEL settings are overridden/);
   assert.doesNotMatch(captured.logs.join('\n'), /Restart Claude Code/);
   assert.equal(captured.logs.join('\n').includes(API_KEY), false);
+});
+
+test('setup binds scope detection to the plugin root executing setup', async () => {
+  const otherRoot = path.join(homeDir, 'other-plugin-root');
+  fs.mkdirSync(otherRoot);
+  writeJson(path.join(homeDir, '.claude', 'plugins', 'installed_plugins.json'), {
+    plugins: {
+      'prism@optra-prism': [
+        { scope: 'local', projectPath: projectDir, installPath: otherRoot },
+        { scope: 'user', installPath: ROOT },
+      ],
+    },
+  });
+  const captured = captureOutput();
+  const { applySetup } = require('../lib/setup');
+
+  assert.equal(await applySetup({
+    apiKey: API_KEY,
+    projectDir,
+    pluginRoot: ROOT,
+    output: captured.output,
+    fetchConfigFn: async () => ({
+      status: 'server',
+      config: { ingest_url: 'https://remote-ingest.example' },
+    }),
+    notifyDashboardFn: async () => ({ ok: true, httpStatus: 200, error: null }),
+  }), 0);
+
+  assert.match(captured.logs.join('\n'), /Scope: user/);
+  assert.equal(fs.existsSync(path.join(homeDir, '.claude', 'settings.json')), true);
+  assert.equal(
+    fs.existsSync(path.join(projectDir, '.claude', 'settings.local.json')),
+    false,
+  );
 });
 
 test('backend authentication rejection leaves config and settings unchanged', async () => {
@@ -218,4 +253,37 @@ test('unavailable remote config leaves existing authority untouched', async () =
   }), 1);
   assert.deepEqual(readJson(configFile()), before);
   assert.deepEqual(captured.errors, ['ERROR: config endpoint returned HTTP 503']);
+});
+
+test('setup fails visibly when the active version marker cannot be published', async () => {
+  installAt('user');
+  const dataDir = path.join(homeDir, 'plugin-data');
+  const captured = captureOutput();
+  const { applySetup } = require('../lib/setup');
+  let notified = false;
+
+  assert.equal(await applySetup({
+    apiKey: API_KEY,
+    projectDir,
+    dataDir,
+    output: captured.output,
+    fetchConfigFn: async () => ({
+      status: 'server',
+      config: { ingest_url: 'https://remote-ingest.example' },
+    }),
+    readCurrentVersionFn: () => '1.2.3',
+    writeActiveVersionFn: () => false,
+    notifyDashboardFn: async () => {
+      notified = true;
+      return { ok: true, httpStatus: 200, error: null };
+    },
+  }), 1);
+
+  assert.equal(notified, false);
+  assert.match(captured.errors.join('\n'), /active plugin version could not be published/);
+  const userSettings = readJson(path.join(homeDir, '.claude', 'settings.json'));
+  assert.equal(
+    userSettings.otelHeadersHelper,
+    path.join(dataDir, 'bin', 'prism-otel-headers-helper.js'),
+  );
 });

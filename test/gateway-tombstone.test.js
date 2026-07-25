@@ -102,6 +102,15 @@ test('SessionStart accepts an opaque config key and never rewrites the host env 
     source: 'auth-error',
     auth_status: 401,
   });
+  const now = new Date().toISOString();
+  assert.equal(require('../lib/plugin-update').writeUpdateCache(dataDir, {
+    checkedAt: now,
+    lastSuccessAt: now,
+    etag: null,
+    latestVersion: require('../lib/plugin-update').readCurrentPluginVersion({
+      pluginRoot: ROOT,
+    }),
+  }), true);
 
   const result = spawnSync('bash', [path.join(ROOT, 'hooks', 'scripts', 'session-start.sh')], {
     encoding: 'utf8',

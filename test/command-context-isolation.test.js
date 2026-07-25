@@ -26,11 +26,11 @@ const AGENT_TOOLS = Object.freeze({
 });
 
 const READ_COMMAND_INVOCATIONS = Object.freeze({
-  doctor: 'node "${CLAUDE_PLUGIN_ROOT}/lib/doctor.js" --project-dir "${CLAUDE_PROJECT_DIR}" 2>&1 || true',
+  doctor: 'node "${CLAUDE_PLUGIN_ROOT}/lib/doctor.js" --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}" 2>&1 || true',
   help: 'node "${CLAUDE_PLUGIN_ROOT}/lib/help.js" 2>&1 || true',
   realtime: 'node "${CLAUDE_PLUGIN_ROOT}/lib/realtime-status.js" --data-dir "${CLAUDE_PLUGIN_DATA}"',
   report: 'node "${CLAUDE_PLUGIN_ROOT}/lib/report.js" 2>&1 || true',
-  status: 'node "${CLAUDE_PLUGIN_ROOT}/lib/status.js" --project-dir "${CLAUDE_PROJECT_DIR}" 2>&1 || true',
+  status: 'node "${CLAUDE_PLUGIN_ROOT}/lib/status.js" --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}" 2>&1 || true',
 });
 
 const READ_COMMAND_PERMISSIONS = Object.freeze({

@@ -9,6 +9,7 @@ const { afterEach, test } = require('node:test');
 const ROOT = path.resolve(__dirname, '..');
 const SUBMIT_HANDLER = path.join(ROOT, 'hooks', 'scripts', 'submit-handler.js');
 const SESSION_START = path.join(ROOT, 'hooks', 'scripts', 'session-start.sh');
+const SESSION_START_HANDLER = path.join(ROOT, 'hooks', 'scripts', 'session-start-handler.js');
 const STOP_HANDLER = path.join(ROOT, 'hooks', 'scripts', 'stop-handler.js');
 const SENTINEL = 'prism_submit_handler_secret_sentinel';
 const tempDirs = [];
@@ -28,6 +29,39 @@ function writeRuntimeConfig(home, value) {
   const configFile = path.join(home, '.prism', 'config.json');
   fs.mkdirSync(path.dirname(configFile), { recursive: true });
   fs.writeFileSync(configFile, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function writeJsonFile(file, value) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function seedInstalledPlugin(home, projectDir, scope = 'local') {
+  writeJsonFile(path.join(home, '.claude', 'plugins', 'installed_plugins.json'), {
+    plugins: {
+      'prism@optra-prism': [{
+        scope,
+        projectPath: projectDir,
+        installPath: ROOT,
+      }],
+    },
+  });
+}
+
+function seedFreshPluginUpdateCache(dataDir, latestVersion) {
+  const {
+    cachePathFor,
+    readCurrentPluginVersion,
+    writeUpdateCache,
+  } = require('../lib/plugin-update');
+  if (fs.existsSync(cachePathFor(dataDir))) return;
+  const now = new Date().toISOString();
+  assert.equal(writeUpdateCache(dataDir, {
+    checkedAt: now,
+    lastSuccessAt: now,
+    etag: null,
+    latestVersion: latestVersion || readCurrentPluginVersion({ pluginRoot: ROOT }),
+  }), true);
 }
 
 function runtimeEnv(home, dataDir, config, extra = {}) {
@@ -182,6 +216,7 @@ function writeCrashAfterPrompt2xxInterceptor(home) {
 }
 
 function runSessionStart(home, dataDir, input, env = {}) {
+  seedFreshPluginUpdateCache(dataDir);
   return spawnSync('bash', [SESSION_START], {
     cwd: ROOT,
     encoding: 'utf8',
@@ -333,6 +368,43 @@ test('case-insensitive and whitespace-prefixed Prism controls never post', () =>
   }
 });
 
+test('submit does not activate plugin metadata when its control barrier fails', () => {
+  const home = makeTempDir('prism-control-barrier-home-');
+  const dataDir = makeTempDir('prism-control-barrier-data-');
+  const projectDir = path.join(home, 'project');
+  const settingsFile = path.join(projectDir, '.claude', 'settings.local.json');
+  fs.mkdirSync(projectDir);
+  seedInstalledPlugin(home, projectDir);
+  writeJsonFile(settingsFile, {
+    env: {
+      OTEL_EXPORTER_OTLP_HEADERS: 'x-api-key=old,x-prism-plugin-version=0.0.1',
+    },
+  });
+  fs.writeFileSync(path.join(dataDir, 'last-version.txt'), '0.0.1');
+
+  const result = spawnSync(process.execPath, [SUBMIT_HANDLER], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    input: JSON.stringify({ session_id: '', cwd: projectDir, prompt: '/prism:status' }),
+    env: runtimeEnv(home, dataDir, {
+      apiKey: 'prism_barrier_test',
+      ingest_url: 'http://127.0.0.1:9',
+      show_realtime_summary: false,
+    }, {
+      CLAUDE_PLUGIN_ROOT: ROOT,
+      CLAUDE_PROJECT_DIR: projectDir,
+    }),
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(assertJsonOrEmpty(result.stdout), null);
+  assert.equal(
+    JSON.parse(fs.readFileSync(settingsFile, 'utf8')).env.OTEL_EXPORTER_OTLP_HEADERS,
+    'x-api-key=old,x-prism-plugin-version=0.0.1',
+  );
+  assert.equal(fs.readFileSync(path.join(dataDir, 'last-version.txt'), 'utf8'), '0.0.1');
+});
+
 test('non-string prompts advance only control barriers without posting', () => {
   for (const [label, prompt] of [
     ['number', 42],
@@ -469,6 +541,108 @@ test('SessionStart reports a malformed config instead of claiming the key is mis
   assert.match(result.stderr, /Unable to read ~\/\.prism\/config\.json/);
   assert.doesNotMatch(result.stderr, /No API key configured|Session started/);
   assertLifecycleInvalidated(dataDir, sessionId);
+});
+
+test('SessionStart skips activation when the lifecycle barrier is unavailable', () => {
+  const home = makeTempDir('prism-session-barrier-home-');
+  const dataDir = makeTempDir('prism-session-barrier-data-');
+  const activationMarker = path.join(home, 'activation-called');
+  const preload = path.join(home, 'fail-session-barrier.js');
+  fs.writeFileSync(preload, [
+    "const fs = require('node:fs');",
+    "const Module = require('node:module');",
+    'const load = Module._load;',
+    'Module._load = function(request, parent, isMain) {',
+    "  if (request === '../../lib/session' && parent && parent.filename.endsWith('session-start-handler.js')) {",
+    '    const session = load.call(this, request, parent, isMain);',
+    '    return { ...session, advanceBarrier: () => null };',
+    '  }',
+    "  if (request === '../../lib/plugin-activation' && parent && parent.filename.endsWith('session-start-handler.js')) {",
+    "    fs.writeFileSync(process.env.PRISM_ACTIVATION_MARKER, 'called');",
+    '    return { collectPluginNotices: async () => ({ notices: [] }) };',
+    '  }',
+    '  return load.call(this, request, parent, isMain);',
+    '};',
+    '',
+  ].join('\n'));
+
+  const result = spawnSync(process.execPath, [SESSION_START_HANDLER], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    input: JSON.stringify({
+      session_id: 'session-barrier-unavailable',
+      source: 'startup',
+      cwd: ROOT,
+    }),
+    env: {
+      ...process.env,
+      HOME: home,
+      CLAUDE_PLUGIN_DATA: dataDir,
+      PRISM_PLUGIN_ROOT: ROOT,
+      PRISM_ACTIVATION_MARKER: activationMarker,
+      NODE_OPTIONS: `--require=${preload}`,
+    },
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(assertJsonOrEmpty(result.stdout), null);
+  assert.equal(fs.existsSync(activationMarker), false);
+});
+
+test('SessionStart projects activated metadata before one combined restart and update notice', () => {
+  const home = makeTempDir('prism-session-version-home-');
+  const dataDir = makeTempDir('prism-session-version-data-');
+  const projectDir = path.join(home, 'project');
+  const settingsFile = path.join(projectDir, '.claude', 'settings.local.json');
+  const apiKey = 'opaque session activation key';
+  fs.mkdirSync(projectDir);
+  seedInstalledPlugin(home, projectDir);
+  writeRuntimeConfig(home, {
+    apiKey,
+    ingest_url: 'https://ingest.example',
+    show_realtime_summary: false,
+  });
+  writeJsonFile(settingsFile, {
+    unrelated: 'preserve',
+    env: {
+      OTEL_LOGS_EXPORTER: 'intentionally-stale',
+      OTEL_EXPORTER_OTLP_HEADERS: 'x-api-key=old,x-prism-plugin-version=0.0.1',
+    },
+  });
+  fs.writeFileSync(path.join(dataDir, 'last-version.txt'), '0.0.1');
+  seedFreshPluginUpdateCache(dataDir, '999.0.0');
+
+  const currentVersion = require('../lib/plugin-update').readCurrentPluginVersion({
+    pluginRoot: ROOT,
+  });
+  const result = runSessionStart(home, dataDir, {
+    session_id: 'version-activation-session',
+    source: 'startup',
+    cwd: projectDir,
+  }, {
+    CLAUDE_PROJECT_DIR: projectDir,
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(assertJsonOrEmpty(result.stdout), {
+    systemMessage:
+      `Prism has been updated to v${currentVersion}. `
+      + 'Restart Claude Code to apply the new telemetry metadata immediately.\n'
+      + 'Prism v999.0.0 is available. '
+      + 'Update the plugin, run `/reload-plugins`, then restart Claude Code.',
+  });
+  const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+  assert.equal(settings.unrelated, 'preserve');
+  assert.equal(settings.env.OTEL_LOGS_EXPORTER, 'intentionally-stale');
+  assert.equal(
+    settings.env.OTEL_EXPORTER_OTLP_HEADERS,
+    `x-api-key=${encodeURIComponent(apiKey)},x-prism-plugin-version=${currentVersion}`,
+  );
+  assert.equal(
+    settings.otelHeadersHelper,
+    path.join(dataDir, 'bin', 'prism-otel-headers-helper.js'),
+  );
+  assert.equal(fs.readFileSync(path.join(dataDir, 'last-version.txt'), 'utf8'), currentVersion);
 });
 
 test('normal prompts bind the captured server id to an opaque frozen payload', () => {
@@ -633,6 +807,7 @@ test('SessionStart advances lifecycle barriers with missing HOME and fallback pl
   const dataDir = makeTempDir('prism-session-start-fallback-data-');
   const sessionId = 'fallback-root-session';
   seedActive(dataDir, sessionId);
+  seedFreshPluginUpdateCache(dataDir);
   const env = { ...process.env, CLAUDE_PLUGIN_DATA: dataDir };
   delete env.HOME;
   delete env.CLAUDE_PLUGIN_ROOT;
@@ -682,6 +857,7 @@ test('SessionStart drain aborts a trickling POST at its deadline', async () => {
   const apiKey = 'prism_session_start_trickle';
   const server = await startTricklingServer();
   writeRuntimeConfig(home, { apiKey, ingest_url: server.url });
+  seedFreshPluginUpdateCache(dataDir);
   readSessionRecord(dataDir, () => require('../lib/response-outbox').enqueue({
     id: 'prompt-session-start-trickle',
     kind: 'prompt',
@@ -932,6 +1108,140 @@ test('submit uses JSON system messages for missing configuration and suppresses 
   assert.equal(hidden.status, 0, hidden.stderr);
   assert.equal(hidden.stderr, '');
   assert.equal(assertJsonOrEmpty(hidden.stdout), null);
+});
+
+test('first normal prompt after plugin reload always recommends restart and refreshes metadata', () => {
+  const home = makeTempDir('prism-submit-version-home-');
+  const dataDir = makeTempDir('prism-submit-version-data-');
+  const projectDir = path.join(home, 'project');
+  const settingsFile = path.join(projectDir, '.claude', 'settings.local.json');
+  const apiKey = 'opaque submit activation key';
+  fs.mkdirSync(projectDir);
+  seedInstalledPlugin(home, projectDir);
+  writeJsonFile(settingsFile, {
+    unrelated: 'preserve',
+    env: {
+      OTEL_LOGS_EXPORTER: 'intentionally-stale',
+      OTEL_EXPORTER_OTLP_HEADERS: 'x-api-key=old,x-prism-plugin-version=0.0.1',
+    },
+  });
+  fs.writeFileSync(path.join(dataDir, 'last-version.txt'), '0.0.1');
+  const interceptor = writeSuccessfulIngestInterceptor(home);
+  const currentVersion = require('../lib/plugin-update').readCurrentPluginVersion({
+    pluginRoot: ROOT,
+  });
+  const env = runtimeEnv(home, dataDir, {
+    apiKey,
+    ingest_url: 'http://127.0.0.1:9',
+    show_realtime_summary: false,
+  }, {
+    CLAUDE_PLUGIN_ROOT: ROOT,
+    CLAUDE_PROJECT_DIR: projectDir,
+    NODE_OPTIONS: `--require=${interceptor}`,
+  });
+
+  const first = spawnSync(process.execPath, [SUBMIT_HANDLER], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    input: JSON.stringify({
+      session_id: 'submit-version-first',
+      prompt_id: 'submit-version-first-prompt',
+      prompt: 'first prompt after reload',
+      cwd: projectDir,
+    }),
+    env,
+  });
+
+  assert.equal(first.status, 0, first.stderr);
+  assert.deepEqual(assertJsonOrEmpty(first.stdout), {
+    systemMessage:
+      `Prism has been updated to v${currentVersion}. `
+      + 'Restart Claude Code to apply the new telemetry metadata immediately.',
+  });
+  const projected = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+  assert.equal(projected.env.OTEL_LOGS_EXPORTER, 'intentionally-stale');
+  assert.equal(
+    projected.env.OTEL_EXPORTER_OTLP_HEADERS,
+    `x-api-key=${encodeURIComponent(apiKey)},x-prism-plugin-version=${currentVersion}`,
+  );
+  assert.equal(projected.unrelated, 'preserve');
+  assert.equal(fs.statSync(projected.otelHeadersHelper).mode & 0o777, 0o700);
+  assert.equal(fs.readFileSync(path.join(dataDir, 'last-version.txt'), 'utf8'), currentVersion);
+
+  const second = spawnSync(process.execPath, [SUBMIT_HANDLER], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    input: JSON.stringify({
+      session_id: 'submit-version-second',
+      prompt_id: 'submit-version-second-prompt',
+      prompt: 'second prompt after reload',
+      cwd: projectDir,
+    }),
+    env,
+  });
+  assert.equal(second.status, 0, second.stderr);
+  assert.equal(assertJsonOrEmpty(second.stdout), null);
+});
+
+test('first Prism control after plugin reload recommends restart without posting the control', () => {
+  const home = makeTempDir('prism-submit-control-version-home-');
+  const dataDir = makeTempDir('prism-submit-control-version-data-');
+  const projectDir = path.join(home, 'project');
+  const settingsFile = path.join(projectDir, '.claude', 'settings.local.json');
+  const postMarker = path.join(home, 'posts');
+  const apiKey = 'opaque control activation key';
+  fs.mkdirSync(projectDir);
+  seedInstalledPlugin(home, projectDir);
+  writeJsonFile(settingsFile, {
+    unrelated: 'preserve',
+    env: {
+      OTEL_EXPORTER_OTLP_HEADERS: 'x-api-key=old,x-prism-plugin-version=0.0.1',
+    },
+  });
+  fs.writeFileSync(path.join(dataDir, 'last-version.txt'), '0.0.1');
+  const currentVersion = require('../lib/plugin-update').readCurrentPluginVersion({
+    pluginRoot: ROOT,
+  });
+  const env = runtimeEnv(home, dataDir, {
+    apiKey,
+    ingest_url: 'http://127.0.0.1:9',
+    show_realtime_summary: false,
+  }, {
+    CLAUDE_PLUGIN_ROOT: ROOT,
+    CLAUDE_PROJECT_DIR: projectDir,
+    PRISM_POST_MARKER: postMarker,
+    NODE_OPTIONS: `--require=${writePostInterceptor(home)}`,
+  });
+
+  const result = spawnSync(process.execPath, [SUBMIT_HANDLER], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    input: JSON.stringify({
+      session_id: 'submit-control-version',
+      prompt_id: 'submit-control-version-prompt',
+      prompt: '/prism:status',
+      cwd: projectDir,
+    }),
+    env,
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(assertJsonOrEmpty(result.stdout), {
+    systemMessage:
+      `Prism has been updated to v${currentVersion}. `
+      + 'Restart Claude Code to apply the new telemetry metadata immediately.',
+  });
+  assert.equal(fs.existsSync(postMarker), false);
+  const turn = JSON.parse(fs.readFileSync(turnFile(dataDir, 'submit-control-version'), 'utf8'));
+  assert.equal(turn.kind, 'control');
+  assert.equal(turn.active, null);
+  const projected = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+  assert.equal(
+    projected.env.OTEL_EXPORTER_OTLP_HEADERS,
+    `x-api-key=${encodeURIComponent(apiKey)},x-prism-plugin-version=${currentVersion}`,
+  );
+  assert.equal(projected.unrelated, 'preserve');
+  assert.equal(fs.readFileSync(path.join(dataDir, 'last-version.txt'), 'utf8'), currentVersion);
 });
 
 test('submit emits no display output on a captured turn and retains capture', () => {
