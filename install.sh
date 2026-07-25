@@ -10,6 +10,7 @@ set -euo pipefail
 
 MARKETPLACE_REPO="grumatic/optra-prism-plugin"
 INSTALL_DIR="${HOME}/.prism/claude-code-plugin"
+PRISM_PLUGIN_DATA_DIR="${HOME}/.claude/plugins/data/prism-inline"
 MIN_NODE_VERSION=18
 
 API_KEY="${1:-}"
@@ -40,13 +41,15 @@ check_node
 
 # Prefer marketplace install if Claude Code CLI is available
 if command -v claude &>/dev/null; then
+  PRISM_PLUGIN_DATA_DIR="${HOME}/.claude/plugins/data/prism-optra-prism"
   info "Installing via Claude Code marketplace..."
 
-  # Force a clean reinstall: wipe ALL cached plugin source (every version),
-  # wipe the plugin data dir, and drop the installed_plugins.json entry so
-  # Claude Code doesn't short-circuit on a stale "already installed" marker.
+  # Force a clean source reinstall: wipe ALL cached plugin source (every
+  # version) and drop the installed_plugins.json entry so Claude Code doesn't
+  # short-circuit on a stale "already installed" marker. Keep the durable
+  # plugin data directory: update state and the OTEL headers helper must remain
+  # valid when installation or configuration is deferred.
   rm -rf "${HOME}/.claude/plugins/cache/optra-prism" 2>/dev/null || true
-  rm -rf "${HOME}/.claude/plugins/data/prism-optra-prism" 2>/dev/null || true
   INSTALLED_JSON="${HOME}/.claude/plugins/installed_plugins.json"
   if [ -f "$INSTALLED_JSON" ] && command -v node &>/dev/null; then
     node - "$INSTALLED_JSON" <<'NODE' 2>/dev/null || true
@@ -112,7 +115,8 @@ if [ -n "$API_KEY" ]; then
     done
   fi
 
-  if [ -f "$PLUGIN_ROOT/lib/setup.js" ] && node "$PLUGIN_ROOT/lib/setup.js" apply "$API_KEY"; then
+  if [ -f "$PLUGIN_ROOT/lib/setup.js" ] \
+    && node "$PLUGIN_ROOT/lib/setup.js" apply "$API_KEY" --data-dir "$PRISM_PLUGIN_DATA_DIR"; then
     info "Prism configured"
   else
     info "Configuration deferred. Run /prism:setup YOUR_KEY inside Claude Code."

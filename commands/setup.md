@@ -23,7 +23,7 @@ return exactly `Usage: /prism:setup KEY` and do not run Bash.
 For a valid key, run exactly one Bash command:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/lib/setup.js" apply "$KEY" --project-dir "${CLAUDE_PROJECT_DIR}"
+node "${CLAUDE_PLUGIN_ROOT}/lib/setup.js" apply "$KEY" --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}"
 ```
 
 Pass the key only as the positional argument shown above. Do not run any
