@@ -116,16 +116,19 @@ NODE
 # enabled, the outcome is appended to model-catalog-refresh.debug.log in DATA_DIR.
 if [ -n "$INGEST_URL" ] && [ -n "$DATA_DIR" ]; then
   (
-    PRISM_CATALOG_INGEST_URL="$INGEST_URL" PRISM_CATALOG_DATA_DIR="$DATA_DIR" PRISM_PLUGIN_ROOT="$PLUGIN_ROOT" node -e '
+    PRISM_PLUGIN_ROOT="$PLUGIN_ROOT" node -e '
       const fs = require("fs");
       const path = require("path");
       const { getConfig } = require(path.join(process.env.PRISM_PLUGIN_ROOT, "lib", "config"));
       const config = getConfig();
+      // Config values are read from the authority file, never handed over as
+      // environment variables. Only host-provided paths arrive through env.
+      const dataDir = process.env.CLAUDE_PLUGIN_DATA;
       const report = (status) => {
         if (config.debug !== true) return;
         try {
           fs.appendFileSync(
-            path.join(process.env.PRISM_CATALOG_DATA_DIR, "model-catalog-refresh.debug.log"),
+            path.join(dataDir, "model-catalog-refresh.debug.log"),
             `${new Date().toISOString()} ${status}\n`,
           );
         } catch {}
@@ -136,9 +139,9 @@ if [ -n "$INGEST_URL" ] && [ -n "$DATA_DIR" ]; then
       }, 1300);
       const { refreshCatalog } = require(path.join(process.env.PRISM_PLUGIN_ROOT, "lib", "model-catalog"));
       refreshCatalog({
-        ingestUrl: process.env.PRISM_CATALOG_INGEST_URL,
+        ingestUrl: config.ingest_url,
         apiKey: config.apiKey,
-        dataDir: process.env.PRISM_CATALOG_DATA_DIR,
+        dataDir,
         timeoutMs: 1000,
       }).then((status) => {
         clearTimeout(guard);
