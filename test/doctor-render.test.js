@@ -6,6 +6,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const { renderReport } = require('../lib/doctor');
+const { buildBinding } = require('../lib/binding');
 const ROOT = path.resolve(__dirname, '..');
 
 function snapshotTree(root) {
@@ -261,6 +262,97 @@ test('doctor reports that an effective unrelated helper was preserved at its sou
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
+});
+
+function runDoctorJson(config) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-doctor-binding-'));
+  const projectDir = path.join(home, 'project');
+  fs.mkdirSync(path.join(home, '.prism'), { recursive: true });
+  fs.mkdirSync(path.join(projectDir, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.prism', 'config.json'), `${JSON.stringify(config)}\n`);
+
+  try {
+    const result = spawnSync(process.execPath, [
+      path.join(ROOT, 'lib', 'doctor.js'), '--json', '--project-dir', projectDir,
+    ], { encoding: 'utf8', env: { ...process.env, HOME: home } });
+    return {
+      status: result.status,
+      stderr: result.stderr,
+      apiKey: JSON.parse(result.stdout).checks.find((check) => check.id === 'api-key'),
+    };
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+}
+
+test('doctor fails the API key check when the key is not bound to the configured ingest_url', () => {
+  const result = runDoctorJson({
+    apiKey: 'opaque-key',
+    ingest_url: 'http://127.0.0.1:1',
+    binding: buildBinding({ apiKey: 'opaque-key', ingestUrl: 'https://ingest.dev.example' }),
+  });
+
+  assert.equal(result.status, 2, result.stderr);
+  assert.equal(result.apiKey.status, 'fail');
+  assert.match(result.apiKey.message, /not bound to the configured ingest_url/);
+  assert.match(result.apiKey.message, /verified for ingest\.dev\.example/);
+  assert.match(result.apiKey.message, /ingest_url points to 127\.0\.0\.1:1/);
+  assert.match(result.apiKey.remediation, /Run \/prism:setup KEY/);
+});
+
+test('doctor reports the bound destination and stays silent about unsealed pairs', () => {
+  const bound = runDoctorJson({
+    apiKey: 'opaque-key',
+    ingest_url: 'http://127.0.0.1:1',
+    binding: buildBinding({ apiKey: 'opaque-key', ingestUrl: 'http://127.0.0.1:1/' }),
+  });
+
+  assert.equal(bound.apiKey.status, 'pass');
+  assert.match(bound.apiKey.message, /bound to 127\.0\.0\.1:1/);
+  assert.equal(bound.apiKey.remediation, null);
+
+  const unsealed = runDoctorJson({ apiKey: 'opaque-key', ingest_url: 'http://127.0.0.1:1' });
+
+  assert.equal(unsealed.apiKey.status, 'pass');
+  assert.equal(unsealed.apiKey.message, 'Prism API key present in ~/.prism/config.json');
+  assert.doesNotMatch(unsealed.apiKey.message, /bound/);
+});
+
+function runDoctorReport(config) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-doctor-notice-'));
+  const projectDir = path.join(home, 'project');
+  fs.mkdirSync(path.join(home, '.prism'), { recursive: true });
+  fs.mkdirSync(path.join(projectDir, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.prism', 'config.json'), `${JSON.stringify(config)}\n`);
+
+  try {
+    const result = spawnSync(process.execPath, [
+      path.join(ROOT, 'lib', 'doctor.js'), '--project-dir', projectDir,
+    ], { encoding: 'utf8', env: { ...process.env, HOME: home } });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout;
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+}
+
+test('doctor reports enabled debug logging and stays silent when it is off', () => {
+  const withDebug = runDoctorReport({
+    apiKey: 'opaque-key',
+    ingest_url: 'http://127.0.0.1:1',
+    debug: true,
+  });
+
+  assert.match(withDebug, /\*\*Notices:\*\*/);
+  assert.match(withDebug, /Debug logging is enabled in ~\/\.prism\/config\.json/);
+
+  const withoutDebug = runDoctorReport({
+    apiKey: 'opaque-key',
+    ingest_url: 'http://127.0.0.1:1',
+  });
+
+  assert.doesNotMatch(withoutDebug, /Notices/);
+  assert.doesNotMatch(withoutDebug, /Debug logging/);
 });
 
 test('doctor rejects unknown, duplicate, incomplete, and relative data-dir arguments', () => {

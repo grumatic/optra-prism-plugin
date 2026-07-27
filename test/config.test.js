@@ -104,6 +104,7 @@ test('missing config has no implicit runtime route even when legacy inputs are p
     apiKey: '',
     show_realtime_summary: false,
     ingest_url: null,
+    dashboard_url: null,
   });
 });
 
@@ -149,7 +150,7 @@ test('an unsafe stored URL remains visible but is not used as a runtime route', 
   assert.equal(runtime.INGEST_URL, '');
 });
 
-test('read, patch, and write preserve config fields and secure the authority file', () => {
+test('write drops dead registry fields while preserving unknown fields', () => {
   const config = require('../lib/config');
   config.writeConfig({
     custom: { preserved: true },
@@ -160,7 +161,6 @@ test('read, patch, and write preserve config fields and secure the authority fil
 
   assert.deepEqual(config.readConfig(), {
     custom: { preserved: true },
-    prismThreshold: 2,
     show_realtime_summary: true,
   });
   assert.equal(fs.statSync(path.dirname(configFile())).mode & 0o777, 0o700);
@@ -320,4 +320,43 @@ test('fetch reports HTTP, JSON, and unsupported ingest_url failures distinctly',
       '(HTTPS, or HTTP on loopback, without credentials, query, or fragment).',
     httpStatus: 200,
   });
+});
+// Only host-provided paths may arrive through the environment. Every runtime
+// value that a user can configure must be read from ~/.prism/config.json, so a
+// new `process.env` read is a regression unless it is one of these paths.
+const RUNTIME_ENV_ALLOWLIST = new Map([
+  ['CLAUDE_PROJECT_DIR', 'host: active project directory'],
+  ['CLAUDE_PLUGIN_DATA', 'host: durable plugin storage'],
+  ['CLAUDE_PLUGIN_ROOT', 'host: plugin checkout'],
+  ['PRISM_PLUGIN_ROOT', 'self: plugin root handed to inline node children'],
+]);
+
+test('no runtime file substitutes config through environment variables', () => {
+  const root = path.resolve(__dirname, '..');
+  const directories = [path.join(root, 'lib'), path.join(root, 'hooks', 'scripts')];
+  const patterns = [
+    /process\.env\.([A-Za-z_][A-Za-z0-9_]*)/g,
+    /process\.env\[\s*["']([^"']+)["']\s*\]/g,
+  ];
+  const offenders = [];
+  let scannedFiles = 0;
+
+  for (const directory of directories) {
+    for (const name of fs.readdirSync(directory).sort()) {
+      const file = path.join(directory, name);
+      if (!fs.statSync(file).isFile()) continue;
+      scannedFiles += 1;
+      const contents = fs.readFileSync(file, 'utf8');
+      for (const pattern of patterns) {
+        for (const [, variable] of contents.matchAll(pattern)) {
+          if (!RUNTIME_ENV_ALLOWLIST.has(variable)) {
+            offenders.push(`${path.relative(root, file)}: ${variable}`);
+          }
+        }
+      }
+    }
+  }
+
+  assert.deepEqual(offenders, []);
+  assert.ok(scannedFiles > 20, `expected the runtime scan to cover files, saw ${scannedFiles}`);
 });

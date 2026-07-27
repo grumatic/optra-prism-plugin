@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 const { afterEach, test } = require('node:test');
+const { buildBinding } = require('../lib/binding');
 
 const ROOT = path.resolve(__dirname, '..');
 const SUBMIT_HANDLER = path.join(ROOT, 'hooks', 'scripts', 'submit-handler.js');
@@ -524,6 +525,28 @@ test('SessionStart reports an unsupported config ingest URL without claiming sta
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stderr, /ingest_url .* is missing or unsupported/);
   assert.doesNotMatch(result.stderr, /Session started/);
+  assertLifecycleInvalidated(dataDir, sessionId);
+});
+
+test('SessionStart names both hosts and stops startup when the key is not bound to ingest_url', () => {
+  const home = makeTempDir('prism-session-start-unbound-home-');
+  const dataDir = makeTempDir('prism-session-start-unbound-data-');
+  const sessionId = 'unbound-pair-session';
+  seedActive(dataDir, sessionId);
+  writeRuntimeConfig(home, {
+    apiKey: 'opaque-key',
+    ingest_url: 'https://ingest.example',
+    binding: buildBinding({ apiKey: 'opaque-key', ingestUrl: 'https://ingest.dev.example' }),
+  });
+
+  const result = runSessionStart(home, dataDir, { session_id: sessionId, source: 'startup' });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /not bound to the configured ingest_url/);
+  assert.match(result.stderr, /verified for ingest\.dev\.example/);
+  assert.match(result.stderr, /points to ingest\.example/);
+  assert.doesNotMatch(result.stderr, /Session started/);
+  assert.doesNotMatch(result.stderr, /No API key configured/);
   assertLifecycleInvalidated(dataDir, sessionId);
 });
 

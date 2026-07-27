@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { afterEach, beforeEach, test } = require('node:test');
+const { bindingDigest } = require('../lib/binding');
 
 const ROOT = path.resolve(__dirname, '..');
 const API_KEY = 'opaque setup key';
@@ -111,13 +112,21 @@ test('setup persists remote config and writes only the detected install scope', 
   assert.equal(exitCode, 1);
   assert.equal(fetchedKey, API_KEY);
   assert.equal(notifiedKey, undefined);
-  assert.deepEqual(readJson(configFile()), {
+  const persisted = readJson(configFile());
+  assert.deepEqual({ ...persisted, binding: undefined }, {
     customField: { preserved: true },
     show_realtime_summary: true,
     apiKey: API_KEY,
     ingest_url: 'https://remote-ingest.example/base',
     dashboard_url: 'https://remote-dashboard.example',
+    binding: undefined,
   });
+  assert.equal(
+    persisted.binding.digest,
+    bindingDigest(API_KEY, 'https://remote-ingest.example/base'),
+  );
+  assert.equal(persisted.binding.host, 'remote-ingest.example');
+  assert.equal(persisted.binding.bound_at, new Date(persisted.binding.bound_at).toISOString());
   assert.deepEqual(readJson(userFile), userBefore);
   assert.deepEqual(readJson(localFile), localBefore);
   const projected = readJson(projectFile);
@@ -225,11 +234,17 @@ test('successful remote config remains saved when OTEL projection cannot run', a
     notifyDashboardFn: async () => ({ ok: true, httpStatus: 200, error: null }),
   }), 1);
 
-  assert.deepEqual(readJson(configFile()), {
+  const persisted = readJson(configFile());
+  assert.deepEqual({ ...persisted, binding: undefined }, {
     marker: 'preserve',
     apiKey: API_KEY,
     ingest_url: 'https://remote-ingest.example',
+    binding: undefined,
   });
+  assert.equal(
+    persisted.binding.digest,
+    bindingDigest(API_KEY, 'https://remote-ingest.example'),
+  );
   assert.equal(captured.errors.length, 1);
   assert.match(captured.errors[0], /OTEL projection failed: unknown install scope/);
 });
