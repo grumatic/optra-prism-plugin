@@ -13,52 +13,11 @@ if [ -z "$PRISM_PLUGIN_ROOT" ]; then
   PRISM_PLUGIN_ROOT="${SCRIPT_DIR:+$(cd "$SCRIPT_DIR/../.." >/dev/null 2>&1 && pwd)}"
 fi
 #
-# This is the only consumer of hook stdin. It validates session identity and
-# source, then independently refreshes only sanitized Git context from cwd.
-PRISM_PLUGIN_ROOT="$PRISM_PLUGIN_ROOT" node -e '
-  const path = require("path");
-  let input = "";
-  process.stdin.setEncoding("utf8");
-  process.stdin.on("data", (chunk) => { input += chunk; });
-  process.stdin.on("end", async () => {
-    let debug = false;
-    try {
-      const { getConfig } = require(path.join(process.env.PRISM_PLUGIN_ROOT, "lib", "config"));
-      debug = getConfig().debug === true;
-    } catch {}
-    const report = (reason) => {
-      if (debug) process.stderr.write(`[Prism debug] SessionStart barrier skipped: ${reason}\n`);
-    };
-    try {
-      const session = require(path.join(process.env.PRISM_PLUGIN_ROOT, "lib", "session"));
-      session.cleanupStaleSessions();
-      const data = JSON.parse(input);
-      const sessionId = data && data.session_id;
-      const source = data && data.source;
-      if (typeof sessionId !== "string" || sessionId.length === 0 || sessionId.length > 1024) {
-        report("invalid session identity");
-        return;
-      }
-      if (typeof source !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(source)) {
-        report("invalid source");
-        return;
-      }
-      if (!session.advanceBarrier(sessionId, "lifecycle")) report("lock unavailable");
-      const cwd = data && data.cwd;
-      if (typeof cwd === "string" && cwd.length > 0) {
-        try {
-          const { collectGitContext } = require(path.join(process.env.PRISM_PLUGIN_ROOT, "lib", "git"));
-          const context = await collectGitContext(cwd);
-          session.writeGit(sessionId, context);
-        } catch {
-          report("git context refresh failed");
-        }
-      }
-    } catch {
-      report("helper failure");
-    }
-  });
-' || true
+# This is the only consumer of hook stdin. It advances the lifecycle barrier
+# before any version activation or update check, then emits at most one JSON
+# system message.
+PRISM_PLUGIN_ROOT="$PRISM_PLUGIN_ROOT" \
+  node "$PRISM_PLUGIN_ROOT/hooks/scripts/session-start-handler.js" || true
 set -euo pipefail
 
 PLUGIN_ROOT="$PRISM_PLUGIN_ROOT"
@@ -70,6 +29,7 @@ if ! INGEST_URL=$(PRISM_PLUGIN_ROOT="$PLUGIN_ROOT" node -e '
   const path = require("path");
   try {
     const { getConfig, isSupportedIngestUrl } = require(path.join(process.env.PRISM_PLUGIN_ROOT, "lib", "config"));
+    const { verifyBinding } = require(path.join(process.env.PRISM_PLUGIN_ROOT, "lib", "binding"));
     const config = getConfig();
     if (typeof config.apiKey !== "string" || config.apiKey.length === 0) {
       process.stderr.write("\n[Prism] No API key configured.\n");
@@ -80,6 +40,13 @@ if ! INGEST_URL=$(PRISM_PLUGIN_ROOT="$PLUGIN_ROOT" node -e '
       process.stderr.write("[Prism] ingest_url in ~/.prism/config.json is missing or unsupported.\n");
       process.stderr.write("        Use HTTPS, or HTTP on loopback, without credentials, query, or fragment.\n");
       process.stderr.write("        Run /prism:setup YOUR_KEY, or set it with /prism:config, then retry.\n");
+      process.exit(1);
+    }
+    const binding = verifyBinding(config);
+    if (binding.status === "mismatch") {
+      process.stderr.write("\n[Prism] API key is not bound to the configured ingest_url.\n");
+      process.stderr.write(`        Key was verified for ${binding.boundHost || "another host"}; ingest_url now points to ${binding.currentHost || "an unreadable host"}.\n`);
+      process.stderr.write("        Telemetry stays off until the pair matches. Run: /prism:setup YOUR_KEY\n\n");
       process.exit(1);
     }
     process.stdout.write(config.ingest_url);
@@ -157,16 +124,19 @@ NODE
 # enabled, the outcome is appended to model-catalog-refresh.debug.log in DATA_DIR.
 if [ -n "$INGEST_URL" ] && [ -n "$DATA_DIR" ]; then
   (
-    PRISM_CATALOG_INGEST_URL="$INGEST_URL" PRISM_CATALOG_DATA_DIR="$DATA_DIR" PRISM_PLUGIN_ROOT="$PLUGIN_ROOT" node -e '
+    PRISM_PLUGIN_ROOT="$PLUGIN_ROOT" node -e '
       const fs = require("fs");
       const path = require("path");
       const { getConfig } = require(path.join(process.env.PRISM_PLUGIN_ROOT, "lib", "config"));
       const config = getConfig();
+      // Config values are read from the authority file, never handed over as
+      // environment variables. Only host-provided paths arrive through env.
+      const dataDir = process.env.CLAUDE_PLUGIN_DATA;
       const report = (status) => {
         if (config.debug !== true) return;
         try {
           fs.appendFileSync(
-            path.join(process.env.PRISM_CATALOG_DATA_DIR, "model-catalog-refresh.debug.log"),
+            path.join(dataDir, "model-catalog-refresh.debug.log"),
             `${new Date().toISOString()} ${status}\n`,
           );
         } catch {}
@@ -177,9 +147,9 @@ if [ -n "$INGEST_URL" ] && [ -n "$DATA_DIR" ]; then
       }, 1300);
       const { refreshCatalog } = require(path.join(process.env.PRISM_PLUGIN_ROOT, "lib", "model-catalog"));
       refreshCatalog({
-        ingestUrl: process.env.PRISM_CATALOG_INGEST_URL,
+        ingestUrl: config.ingest_url,
         apiKey: config.apiKey,
-        dataDir: process.env.PRISM_CATALOG_DATA_DIR,
+        dataDir,
         timeoutMs: 1000,
       }).then((status) => {
         clearTimeout(guard);
@@ -192,23 +162,6 @@ if [ -n "$INGEST_URL" ] && [ -n "$DATA_DIR" ]; then
       });
     ' >/dev/null 2>&1 </dev/null &
   ) || true
-fi
-
-# ─── Version update notification ───
-
-if [ -n "$DATA_DIR" ]; then
-  PLUGIN_VERSION=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('${PLUGIN_ROOT}/.claude-plugin/plugin.json','utf8')).version)" 2>/dev/null || true)
-  LAST_VERSION_FILE="${DATA_DIR}/last-version.txt"
-  LAST_VERSION=""
-  if [ -f "$LAST_VERSION_FILE" ]; then
-    LAST_VERSION=$(cat "$LAST_VERSION_FILE" 2>/dev/null || true)
-  fi
-  if [ -n "$PLUGIN_VERSION" ]; then
-    if [ -n "$LAST_VERSION" ] && [ "$LAST_VERSION" != "$PLUGIN_VERSION" ]; then
-      echo "[Prism] Updated to v${PLUGIN_VERSION} (was v${LAST_VERSION})" >&2
-    fi
-    echo -n "$PLUGIN_VERSION" > "$LAST_VERSION_FILE"
-  fi
 fi
 
 echo "[Prism] Session started — Prism API key present" >&2
