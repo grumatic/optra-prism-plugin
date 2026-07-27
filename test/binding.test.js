@@ -10,7 +10,7 @@ const helper = require('../lib/otel-headers-helper');
 const KEY = 'opaque key with no required prefix';
 const URL_DEV = 'https://ingest.dev.example';
 const URL_PROD = 'https://ingest.example';
-const MODULE_PATHS = ['../lib/config', '../lib/env'];
+const MODULE_PATHS = ['../lib/config', '../lib/env', '../lib/settings'];
 
 let homeDir;
 let originalHome;
@@ -79,11 +79,14 @@ test('the digest folds trailing slashes and case but separates key and destinati
   assert.notEqual(binding.bindingDigest(KEY, `${URL_DEV}/base`), base);
   assert.notEqual(binding.bindingDigest(`${KEY}!`, URL_DEV), base);
 
-  // The separator keeps a key/URL split from colliding with a shifted split.
-  assert.notEqual(
-    binding.bindingDigest('a', `\nb${URL_DEV.slice(0, 0)}`),
-    binding.bindingDigest('a\nb', ''),
-  );
+  // Without the separator, ('ab','c') and ('a','bc') would hash the same bytes.
+  // Assert both sides are real digests first: an empty side returns null, which
+  // would make the inequality hold for the wrong reason.
+  const shiftedLeft = binding.bindingDigest('ab', 'c');
+  const shiftedRight = binding.bindingDigest('a', 'bc');
+  assert.notEqual(shiftedLeft, null);
+  assert.notEqual(shiftedRight, null);
+  assert.notEqual(shiftedLeft, shiftedRight);
 
   for (const [apiKey, ingestUrl] of [['', URL_DEV], [KEY, ''], [null, URL_DEV], [KEY, 7]]) {
     assert.equal(binding.bindingDigest(apiKey, ingestUrl), null);
@@ -218,4 +221,31 @@ test('the OTEL headers helper refuses to emit a repointed pair', () => {
   } finally {
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
+});
+
+test('a repointed destination refuses to project OTEL settings at all', () => {
+  writeJson(configFile(), {
+    apiKey: KEY,
+    ingest_url: URL_PROD,
+    binding: binding.buildBinding({ apiKey: KEY, ingestUrl: URL_DEV }),
+  });
+
+  // Nothing may project the sealed key against a destination it was never
+  // verified for, so the projection source itself refuses rather than letting a
+  // caller write the pair and report success.
+  assert.equal(require('../lib/settings').buildExpectedOtelEnv(), null);
+
+  clearModules();
+  writeJson(configFile(), {
+    apiKey: KEY,
+    ingest_url: URL_DEV,
+    binding: binding.buildBinding({ apiKey: KEY, ingestUrl: `${URL_DEV}/` }),
+  });
+
+  const expected = require('../lib/settings').buildExpectedOtelEnv();
+  assert.equal(expected.apiKey, KEY);
+  assert.equal(
+    expected.otelEnv.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT,
+    `${URL_DEV}/v1/logs`,
+  );
 });

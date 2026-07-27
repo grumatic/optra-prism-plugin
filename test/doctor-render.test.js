@@ -355,6 +355,52 @@ test('doctor reports enabled debug logging and stays silent when it is off', () 
   assert.doesNotMatch(withoutDebug, /Debug logging/);
 });
 
+test('doctor reports a malformed config without a raw module-load stack', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-doctor-malformed-'));
+  fs.mkdirSync(path.join(home, '.prism'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.prism', 'config.json'), '{ not json\n');
+
+  try {
+    const result = spawnSync(process.execPath, [
+      path.join(ROOT, 'lib', 'doctor.js'), '--project-dir', home,
+    ], { encoding: 'utf8', env: { ...process.env, HOME: home } });
+
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /^\[prism:doctor\] Fatal: Unable to read Prism config/m);
+    assert.equal(result.stdout, '');
+    // A module-scope require of the config snapshot would surface as a loader
+    // stack before the entrypoint could report anything.
+    assert.doesNotMatch(result.stderr, /Module\._compile|internal\/modules/);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('doctor reports the debug log under the data directory it was given', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-doctor-debug-path-'));
+  const dataDir = path.join(home, 'plugin-data');
+  fs.mkdirSync(path.join(home, '.prism'), { recursive: true });
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(home, '.prism', 'config.json'),
+    `${JSON.stringify({ apiKey: 'opaque-key', ingest_url: 'http://127.0.0.1:1', debug: true })}\n`,
+  );
+
+  try {
+    const result = spawnSync(process.execPath, [
+      path.join(ROOT, 'lib', 'doctor.js'),
+      '--project-dir', home,
+      '--data-dir', dataDir,
+    ], { encoding: 'utf8', env: { ...process.env, HOME: home, CLAUDE_PLUGIN_DATA: '/nonexistent-ambient' } });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.ok(result.stdout.includes(path.join(dataDir, 'debug.log')), result.stdout);
+    assert.doesNotMatch(result.stdout, /nonexistent-ambient/);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test('doctor rejects unknown, duplicate, incomplete, and relative data-dir arguments', () => {
   const cases = [
     ['--unknown'],
