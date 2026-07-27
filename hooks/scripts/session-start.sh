@@ -29,6 +29,7 @@ if ! INGEST_URL=$(PRISM_PLUGIN_ROOT="$PLUGIN_ROOT" node -e '
   const path = require("path");
   try {
     const { getConfig, isSupportedIngestUrl } = require(path.join(process.env.PRISM_PLUGIN_ROOT, "lib", "config"));
+    const { verifyBinding } = require(path.join(process.env.PRISM_PLUGIN_ROOT, "lib", "binding"));
     const config = getConfig();
     if (typeof config.apiKey !== "string" || config.apiKey.length === 0) {
       process.stderr.write("\n[Prism] No API key configured.\n");
@@ -39,6 +40,13 @@ if ! INGEST_URL=$(PRISM_PLUGIN_ROOT="$PLUGIN_ROOT" node -e '
       process.stderr.write("[Prism] ingest_url in ~/.prism/config.json is missing or unsupported.\n");
       process.stderr.write("        Use HTTPS, or HTTP on loopback, without credentials, query, or fragment.\n");
       process.stderr.write("        Run /prism:setup YOUR_KEY, or set it with /prism:config, then retry.\n");
+      process.exit(1);
+    }
+    const binding = verifyBinding(config);
+    if (binding.status === "mismatch") {
+      process.stderr.write("\n[Prism] API key is not bound to the configured ingest_url.\n");
+      process.stderr.write(`        Key was verified for ${binding.boundHost || "another host"}; ingest_url now points to ${binding.currentHost || "an unreadable host"}.\n`);
+      process.stderr.write("        Telemetry stays off until the pair matches. Run: /prism:setup YOUR_KEY\n\n");
       process.exit(1);
     }
     process.stdout.write(config.ingest_url);
