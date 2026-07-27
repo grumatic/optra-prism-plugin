@@ -19,6 +19,7 @@ let drain;
 let readGit;
 let writeGit;
 let collectGitContext;
+const systemMessages = [];
 
 const MAX_SYSTEM_MESSAGE_LENGTH = 10_000;
 function readHookStdin() {
@@ -149,27 +150,50 @@ function payloadHash(payload) {
 let activeBarrier;
 let activeSessionId;
 
-function emitSystemMessage(message, showRealtimeSummary) {
-  if (!showRealtimeSummary || !message) return;
+function queueSystemMessage(message, enabled = true) {
+  if (!enabled || !message) return;
+  systemMessages.push(message);
+}
+
+function emitSystemMessages() {
+  if (systemMessages.length === 0) return;
   process.stdout.write(`${JSON.stringify({
-    systemMessage: message.slice(0, MAX_SYSTEM_MESSAGE_LENGTH),
+    systemMessage: systemMessages.join('\n').slice(0, MAX_SYSTEM_MESSAGE_LENGTH),
   })}\n`);
 }
 
 async function main() {
   const data = await readHookStdin();
   const prompt = data && data.prompt;
-  if (typeof prompt !== 'string' || isPrismControlPrompt(prompt)) {
-    require('../../lib/session').advanceBarrier(data && data.session_id, 'control');
-    return;
-  }
-  const normalizedPrompt = prompt.trim();
+  const isStringPrompt = typeof prompt === 'string';
+  const isControlPrompt = !isStringPrompt || isPrismControlPrompt(prompt);
 
   ({ advanceBarrier, attachActive, failBarrier, promoteActive, readTurn, readGit, writeGit } = require('../../lib/session'));
-  const barrier = advanceBarrier(data.session_id, 'normal-pending');
+  const barrier = advanceBarrier(
+    data && data.session_id,
+    isControlPrompt ? 'control' : 'normal-pending',
+  );
   if (!barrier) return;
-  activeBarrier = barrier;
-  activeSessionId = data.session_id;
+  if (!isControlPrompt) {
+    activeBarrier = barrier;
+    activeSessionId = data.session_id;
+  }
+
+  if (isStringPrompt) {
+    try {
+      const { activatePluginVersion } = require('../../lib/plugin-activation');
+      const activation = activatePluginVersion({
+        pluginRoot: process.env.CLAUDE_PLUGIN_ROOT
+          || require('node:path').resolve(__dirname, '../..'),
+        dataDir: process.env.CLAUDE_PLUGIN_DATA,
+        projectDir: process.env.CLAUDE_PROJECT_DIR || data.cwd,
+      });
+      queueSystemMessage(activation && activation.notice);
+    } catch {}
+  }
+
+  if (isControlPrompt) return;
+  const normalizedPrompt = prompt.trim();
 
   ({ collectGitContext } = require('../../lib/git'));
   const git = await gitMetadataForPrompt(data);
@@ -192,7 +216,7 @@ async function main() {
   ({ enqueue, drain } = require('../../lib/response-outbox'));
   if (!API_KEY) {
     failBarrier(data.session_id, barrier.epoch);
-    emitSystemMessage(
+    queueSystemMessage(
       '[Prism] API key not configured. Run /prism:setup YOUR_KEY.',
       SHOW_REALTIME_SUMMARY,
     );
@@ -200,7 +224,7 @@ async function main() {
   }
   if (!INGEST_URL) {
     failBarrier(data.session_id, barrier.epoch);
-    emitSystemMessage(
+    queueSystemMessage(
       '[Prism] ingest_url not configured. Run /prism:setup YOUR_KEY or /prism:config.',
       SHOW_REALTIME_SUMMARY,
     );
@@ -230,9 +254,13 @@ async function main() {
   });
 }
 
-main().catch((err) => {
-  if (activeBarrier && failBarrier) {
-    try { failBarrier(activeSessionId, activeBarrier.epoch); } catch {}
-  }
-  if (debug) debug(`FATAL: ${err.message || err}`);
-});
+main()
+  .catch((err) => {
+    if (activeBarrier && failBarrier) {
+      try { failBarrier(activeSessionId, activeBarrier.epoch); } catch {}
+    }
+    if (debug) debug(`FATAL: ${err.message || err}`);
+  })
+  .finally(() => {
+    emitSystemMessages();
+  });
