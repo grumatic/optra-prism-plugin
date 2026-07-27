@@ -5,6 +5,25 @@ All notable changes to the Prism plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2026-07-27
+
+### Added
+- Prism now tracks its own updates. SessionStart compares the installed version against the published marketplace manifest at most once every 24 hours, using a conditional `If-None-Match` request and a durable cache written atomically with mode 0600. Every failure keeps the last known good value and stays silent. Activation and latest-version notices are combined into one deterministic startup message, and the first prompt after a plugin reload recommends a restart.
+- OTEL request headers are produced by a Prism-managed helper installed at `CLAUDE_PLUGIN_DATA/bin` with mode 0700 and registered as `otelHeadersHelper` in the install-scope settings file. The helper is self-contained and re-reads `~/.prism/config.json` and the active-version marker on every invocation, so a host that has not restarted can still pick up a refreshed key and plugin version.
+- `/prism:status` and `/prism:doctor` report managed helper state: the disk-effective setting and its source, the expected path, and per-property artifact checks (existence, regular file, not a symlink, safe path chain, ownership, exact mode 0700, executable, bundled bytes). A helper owned by another setting is preserved and reported as a conflict instead of being overwritten.
+- Every user-invocable command runs in its own fully namespaced forked agent with only the tools that command needs.
+- `/prism:setup` seals the API key to the ingest destination the config endpoint declared for that key. Changing `apiKey` or `ingest_url` on its own — by hand, with `/prism:config`, or by pointing an existing key at another environment — is detected locally with no network round trip: hook requests stop at their existing not-configured skip, the OTEL headers helper refuses to emit headers, the OTEL projection refuses to write the pair so `/prism:config set ingest_url` reports the failure instead of aiming the old key at a new destination, SessionStart names the verified host and the current one, and `/prism:doctor` fails its API key check with the same detail. A config with no seal is unbound and fails open, so installs that predate this release keep working until their next `/prism:setup`.
+- `/prism:doctor` reports enabled debug logging and the file hook diagnostics append to. Debug has no `/prism:config` field, so the toggle stays unadvertised while an install that quietly accumulates logs remains discoverable. Nothing is printed when it is off.
+
+### Changed
+- `/prism:uninstall` is a deterministic entrypoint instead of inline shell in the command file. Preview is read-only and emits a plan token bound to the resolved scope, registry, settings, and OTEL projection. Applying requires that exact token, re-verifies every input immediately before each mutation, aborts without side effects on any drift, and removes only validated Prism-owned targets. Remaining installs keep their registry entries, shared config, data, and cache.
+- Uninstall removes the OTEL headers helper only when the path matches the Prism-managed one, and preserves a diverged value together with the file it references.
+- `apiKey` and `dashboard_url` are registered in the shared config field registry, so they carry defaults and source attribution while staying out of `/prism:config` and `/prism:help`. `prismThreshold`, which no version after 0.6.1 reads, is dropped from `~/.prism/config.json` on the next write; unknown fields are still preserved.
+- The detached model-catalog refresh reads `ingest_url` from `~/.prism/config.json` instead of receiving it through a `PRISM_CATALOG_INGEST_URL` environment variable. No runtime file now takes a configurable value from the environment; the remaining reads are host-provided paths and the plugin root handed to inline children.
+
+### Fixed
+- Commands no longer pre-authorize wildcard Node or Bash invocations. Each command pre-authorizes exactly one fixed inline entrypoint, mutating commands never pre-authorize a mutation or a dynamic matcher, and command output is relayed without interpolating user arguments into inline shell.
+
 ## [0.7.0] - 2026-07-24
 
 ### Changed
