@@ -2,6 +2,10 @@
 name: prism:setup
 description: Configure the Prism plugin with your Prism API key
 user-invocable: true
+disable-model-invocation: true
+context: fork
+background: false
+agent: prism:prism-setup
 ---
 
 Configure Prism with a Prism API key.
@@ -10,14 +14,21 @@ Configure Prism with a Prism API key.
 
 No API key? Get one at: https://dashboard.optra-prism.com/setup
 
-Parse `$ARGUMENTS` as exactly one non-empty key. Scope flags are not supported. Treat the key as opaque: do not validate its prefix or modify it; the backend response determines whether it is accepted. When no key was given, show the usage above and do not run the script.
+The fully expanded argument string is `$ARGUMENTS`. Parse it as exactly one
+non-empty key. Scope flags are not supported. Treat the key as opaque: do not
+validate its prefix, rewrite it, log it, or include it in the final response;
+the backend response determines whether it is accepted. When no key was given,
+return exactly `Usage: /prism:setup KEY` and do not run Bash.
 
-Run this single command:
+For a valid key, run exactly one Bash command:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/lib/setup.js" apply "$KEY" --project-dir "${CLAUDE_PROJECT_DIR}"
+node "${CLAUDE_PLUGIN_ROOT}/lib/setup.js" apply "$KEY" --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}"
 ```
 
-Pass the key only as the positional argument shown above. The script detects the installed plugin scope and writes only its corresponding settings file. Do not read or write Prism configuration files yourself. Display the script's stdout and stderr verbatim.
-
-> 🚀 **Next:** open https://dashboard.optra-prism.com/ for realtime coaching, PRISM scores, and insights.
+Pass the key only as the positional argument shown above. Do not run any
+validation, inspection, or retry command. The script detects the installed
+plugin scope and writes only its corresponding settings file. Do not read or
+write Prism configuration files yourself. After Bash returns, make the final
+response only the complete Bash tool-result text, reproduced verbatim and
+character-for-character.

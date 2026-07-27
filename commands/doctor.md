@@ -2,11 +2,15 @@
 name: prism:doctor
 description: Diagnose Prism plugin configuration and connectivity issues
 user-invocable: true
-allowed-tools: Bash(node:*)
+disable-model-invocation: true
+context: fork
+background: false
+agent: prism:prism-output
+allowed-tools:
+  - Bash(node "${CLAUDE_PLUGIN_ROOT}/lib/doctor.js" --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}" 2>&1 || true)
 ---
 
-Prism diagnostic report:
+!`node "${CLAUDE_PLUGIN_ROOT}/lib/doctor.js" --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}" 2>&1 || true`
 
-!`node "${CLAUDE_PLUGIN_ROOT}/lib/doctor.js" --project-dir "${CLAUDE_PROJECT_DIR}"`
-
-Display the output above verbatim.
+Return only the complete inline command output above, reproduced verbatim and
+character-for-character. Do not summarize, explain, label, or add commentary.

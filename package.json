@@ -15,6 +15,7 @@
   "files": [
     "lib/",
     "commands/",
+    "agents/",
     "hooks/",
     ".claude-plugin/",
     "install.sh",
