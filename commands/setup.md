@@ -1,6 +1,6 @@
 ---
 name: setup
-description: (prism) Configure the Prism plugin with your Prism API key
+description: Configure the Prism plugin with your Prism API key
 user-invocable: true
 disable-model-invocation: true
 model: haiku
