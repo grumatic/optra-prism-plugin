@@ -155,11 +155,6 @@ test('all user-invocable commands declare a main-context controller boundary', (
       commandName,
       `${subject} must let Claude Code apply the plugin namespace exactly once`,
     );
-    assert.match(
-      scalar(metadata, 'description', subject),
-      /^\(prism\)\s+\S/,
-      `${subject} must remain identifiable on hosts without plugin namespacing`,
-    );
     assert.equal(scalar(metadata, 'user-invocable', subject), 'true');
     assert.equal(scalar(metadata, 'disable-model-invocation', subject), 'true');
     assert.equal(scalar(metadata, 'model', subject), 'haiku');
@@ -174,6 +169,20 @@ test('all user-invocable commands declare a main-context controller boundary', (
         : MUTATION_ENTRYPOINT_PERMISSIONS[commandName]),
     ];
     assert.deepEqual(list(metadata, 'allowed-tools', subject), expectedTools);
+  }
+});
+
+test('command descriptions leave plugin source labels to Claude Code', () => {
+  for (const commandName of Object.keys(COMMAND_AGENTS)) {
+    const subject = `commands/${commandName}.md`;
+    const metadata = frontmatter(readMarkdown('commands', commandName), subject);
+    const description = scalar(metadata, 'description', subject);
+
+    assert.doesNotMatch(
+      description,
+      /^\(prism\)(?:\s|$)/i,
+      `${subject} must not duplicate Claude Code's plugin source label`,
+    );
   }
 });
 
