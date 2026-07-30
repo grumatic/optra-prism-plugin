@@ -9,6 +9,13 @@ const { test } = require('node:test');
 const { renderHelp } = require('../lib/help');
 
 const ROOT = path.join(__dirname, '..');
+const READ_COMMANDS = Object.freeze({
+  doctor: 'node "${CLAUDE_PLUGIN_ROOT}/lib/doctor.js" --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}" 2>&1 || true',
+  help: 'node "${CLAUDE_PLUGIN_ROOT}/lib/help.js" 2>&1 || true',
+  realtime: 'node "${CLAUDE_PLUGIN_ROOT}/lib/realtime-status.js" --data-dir "${CLAUDE_PLUGIN_DATA}"',
+  report: 'node "${CLAUDE_PLUGIN_ROOT}/lib/report.js" 2>&1 || true',
+  status: 'node "${CLAUDE_PLUGIN_ROOT}/lib/status.js" --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}" 2>&1 || true',
+});
 
 function readCommand(name) {
   return fs.readFileSync(path.join(ROOT, 'commands', `${name}.md`), 'utf8');
@@ -46,51 +53,58 @@ test('commands reference only Claude Code substitution variables, never bogus on
   }
 });
 
-test('read commands pre-authorize only their exact inline entrypoints', () => {
-  for (const name of ['realtime', 'status', 'doctor', 'report', 'help']) {
+test('read controllers pre-authorize and delegate only their exact entrypoints', () => {
+  for (const [name, invocation] of Object.entries(READ_COMMANDS)) {
     const contents = readCommand(name);
     const metadata = frontmatter(contents);
-    const invocations = inlineShellInvocations(contents);
 
-    assert.equal(invocations.length, 1, `${name}.md must run one inline entrypoint`);
+    assert.deepEqual(inlineShellInvocations(contents), []);
+    assert.equal(body(contents).split(invocation).length - 1, 1);
     if (name === 'realtime') {
       assert.doesNotMatch(
-        invocations[0],
+        invocation,
         /2>&1|\|\|/,
         `${name}.md normalizes failures inside its deterministic entrypoint`,
       );
     } else {
       assert.match(
-        invocations[0],
+        invocation,
         / 2>&1 \|\| true$/,
         `${name}.md must relay stderr and normalize only the read command exit`,
       );
     }
     assert.ok(
-      metadata.includes(`- Bash(${invocations[0]})`),
-      `${name}.md must pre-authorize only its exact inline entrypoint`,
+      metadata.includes(`- Bash(${invocation})`),
+      `${name}.md must pre-authorize only its exact delegated entrypoint`,
     );
+    assert.match(metadata, /^  - Agent\(prism:prism-(?:output|status)\)$/m);
     assert.doesNotMatch(metadata, /\*/, `${name}.md must not pre-authorize a wildcard`);
     assert.doesNotMatch(metadata, /Bash\(node:\*\)/, `${name}.md must not allow arbitrary Node commands`);
+    assert.match(contents, /final response exactly the first text content block/i);
   }
 });
 
-test('setup keeps the permission gate', () => {
-  assert.doesNotMatch(
-    frontmatter(readCommand('setup')),
-    /allowed-tools/,
-    'setup.md must not pre-authorize its mutating entrypoint',
+test('setup pre-authorizes only its validated apply entrypoint shape', () => {
+  const metadata = frontmatter(readCommand('setup'));
+  assert.match(metadata, /^allowed-tools:$/m);
+  assert.match(metadata, /^  - Agent\(prism:prism-setup\)$/m);
+  assert.match(
+    metadata,
+    /^  - Bash\(node "\$\{CLAUDE_PLUGIN_ROOT\}\/lib\/setup\.js" apply \* --project-dir "\$\{CLAUDE_PROJECT_DIR\}" --data-dir "\$\{CLAUDE_PLUGIN_DATA\}"\)$/m,
   );
+  assert.equal((metadata.match(/^  - Bash\(/gm) || []).length, 1);
 });
 
-test('config pre-authorizes only show and help', () => {
+test('config pre-authorizes only its four validated action shapes', () => {
   const metadata = frontmatter(readCommand('config'));
   const permissions = metadata.split('\n').filter((line) => line.trimStart().startsWith('- Bash('));
 
-  assert.equal(permissions.length, 2);
+  assert.equal(permissions.length, 4);
   assert.match(permissions[0], /config-command\.js" show --project-dir/);
   assert.match(permissions[1], /config-command\.js" help --project-dir/);
-  assert.doesNotMatch(permissions.join('\n'), /\b(?:set|unset)\b/);
+  assert.match(permissions[2], /config-command\.js" set \* --project-dir/);
+  assert.match(permissions[3], /config-command\.js" unset \* --project-dir/);
+  assert.doesNotMatch(permissions.join('\n'), /Bash\(node:\*\)|Bash\(node \*\)/);
 });
 
 test('deterministic commands are a single entrypoint call plus verbatim display', () => {
@@ -107,8 +121,15 @@ test('deterministic commands are a single entrypoint call plus verbatim display'
 
 test('status stays a single read-only entrypoint', () => {
   const contents = readCommand('status');
+  const metadata = frontmatter(contents);
   assert.equal(nodeInvocations(contents), 1);
+  assert.equal(inlineShellInvocations(contents).length, 0);
+  assert.match(metadata, /^model: haiku$/m);
+  assert.match(metadata, /^  - Agent\(prism:prism-status\)$/m);
+  assert.doesNotMatch(metadata, /^(?:context|background|agent):/m);
   assert.match(contents, /verbatim/i);
+  assert.match(contents, /final response exactly the first text content block/i);
+  assert.match(contents, /Ignore\s+the continuation `agentId` and usage metadata/i);
 });
 
 test('config is a thin relay to the deterministic config entrypoint', () => {
@@ -117,24 +138,29 @@ test('config is a thin relay to the deterministic config entrypoint', () => {
   assert.match(contents, /\bshow\b/);
   assert.match(contents, /\bset\b/);
   assert.match(contents, /\bunset\b/);
-  assert.match(contents, /verbatim/i);
+  assert.match(contents, /final response exactly the first text content block/i);
+  assert.match(readAgent('prism-config'), /character-for-character/i);
   assert.doesNotMatch(contents, /PRISM_(?:API_KEY|INGEST_URL)|CLAUDE_PLUGIN_OPTION/);
 });
 
-test('config executes in a dedicated forked agent', () => {
+test('config uses a main-context controller and a dedicated executor', () => {
   const commandMetadata = frontmatter(readCommand('config'));
   const agentContents = readAgent('prism-config');
   const agentMetadata = frontmatter(agentContents);
 
-  assert.match(commandMetadata, /^context: fork$/m);
-  assert.match(commandMetadata, /^agent: prism:prism-config$/m);
+  assert.match(commandMetadata, /^model: haiku$/m);
+  assert.match(commandMetadata, /^  - Agent\(prism:prism-config\)$/m);
+  assert.doesNotMatch(commandMetadata, /^(?:context|background|agent):/m);
   assert.match(commandMetadata, /^disable-model-invocation: true$/m);
   assert.match(agentMetadata, /^model: haiku$/m);
   assert.match(agentMetadata, /^tools: \["Bash"\]$/m);
+  assert.match(agentMetadata, /^background: false$/m);
+  assert.match(agentMetadata, /^maxTurns: 2$/m);
   assert.equal((agentMetadata.match(/^model:/gm) || []).length, 1);
   assert.equal((agentMetadata.match(/^tools:/gm) || []).length, 1);
   assert.match(agentContents, /character-for-character/i);
   assert.match(agentContents, /Do\s+not summarize/i);
+  assert.match(readCommand('config'), /final response exactly the first text content block/i);
 });
 
 test('config never interpolates user arguments into inline shell commands', () => {
@@ -167,7 +193,7 @@ test('config keeps a deterministic one-entrypoint argument mapping', () => {
   assert.match(contents, /An empty argument string is a complete request/i);
   assert.match(contents, /do not ask a question/i);
   assert.match(contents, /Reject any other argument shape/i);
-  assert.match(contents, /character-for-character/i);
+  assert.match(contents, /final response exactly the first text content block/i);
 });
 
 test('help lists every user-invocable Prism command', () => {

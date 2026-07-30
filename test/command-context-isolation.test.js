@@ -14,14 +14,15 @@ const COMMAND_AGENTS = Object.freeze({
   realtime: 'prism-output',
   report: 'prism-output',
   setup: 'prism-setup',
-  status: 'prism-output',
+  status: 'prism-status',
   uninstall: 'prism-uninstall',
 });
 
 const AGENT_TOOLS = Object.freeze({
   'prism-config': ['Bash'],
-  'prism-output': [],
+  'prism-output': ['Bash'],
   'prism-setup': ['Bash'],
+  'prism-status': ['Bash'],
   'prism-uninstall': ['Bash'],
 });
 
@@ -33,26 +34,22 @@ const READ_COMMAND_INVOCATIONS = Object.freeze({
   status: 'node "${CLAUDE_PLUGIN_ROOT}/lib/status.js" --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}" 2>&1 || true',
 });
 
-const READ_COMMAND_PERMISSIONS = Object.freeze({
-  ...READ_COMMAND_INVOCATIONS,
-});
-
 const MUTATION_COMMANDS = ['config', 'setup', 'uninstall'];
-const SAFE_MUTATION_PERMISSIONS = Object.freeze({
+const MUTATION_ENTRYPOINT_PERMISSIONS = Object.freeze({
   config: [
     'Bash(node "${CLAUDE_PLUGIN_ROOT}/lib/config-command.js" show --project-dir "${CLAUDE_PROJECT_DIR}")',
     'Bash(node "${CLAUDE_PLUGIN_ROOT}/lib/config-command.js" help --project-dir "${CLAUDE_PROJECT_DIR}")',
+    'Bash(node "${CLAUDE_PLUGIN_ROOT}/lib/config-command.js" set * --project-dir "${CLAUDE_PROJECT_DIR}")',
+    'Bash(node "${CLAUDE_PLUGIN_ROOT}/lib/config-command.js" unset * --project-dir "${CLAUDE_PROJECT_DIR}")',
   ],
-  setup: [],
+  setup: [
+    'Bash(node "${CLAUDE_PLUGIN_ROOT}/lib/setup.js" apply * --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}")',
+  ],
   uninstall: [
     'Bash(node "${CLAUDE_PLUGIN_ROOT}/lib/uninstall.js" preview --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}" --plugin-root "${CLAUDE_PLUGIN_ROOT}")',
+    'Bash(node "${CLAUDE_PLUGIN_ROOT}/lib/uninstall.js" apply --confirm * --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}" --plugin-root "${CLAUDE_PLUGIN_ROOT}")',
   ],
 });
-const SAFE_INLINE_VARIABLES = new Set([
-  'CLAUDE_PLUGIN_ROOT',
-  'CLAUDE_PLUGIN_DATA',
-  'CLAUDE_PROJECT_DIR',
-]);
 
 function readMarkdown(directory, name) {
   return fs.readFileSync(path.join(ROOT, directory, `${name}.md`), 'utf8');
@@ -127,23 +124,13 @@ function inlineShellInvocations(contents) {
   return [...body(contents).matchAll(/!`([^`\n]*)`/g)].map((match) => match[1]);
 }
 
-function shellVariables(invocation) {
-  const variables = [];
-  const pattern = /\$(?:\{([^}]+)\}|([A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*]))/g;
-  let match;
-  while ((match = pattern.exec(invocation)) !== null) {
-    variables.push(match[1] || match[2]);
-  }
-  return variables;
-}
-
 function assertNoBroadBashPermission(value, subject) {
   assert.doesNotMatch(value, /Bash\(\s*node\s*:\s*\*\s*\)/i, subject);
   assert.doesNotMatch(value, /Bash\(\s*node\s+\*\s*\)/i, subject);
   assert.doesNotMatch(value, /Bash\(\s*\*\s*\)/i, subject);
 }
 
-test('all user-invocable commands execute in their fully namespaced fork agent', () => {
+test('all user-invocable commands declare a main-context controller boundary', () => {
   const discoveredCommands = fs.readdirSync(path.join(ROOT, 'commands'))
     .filter((entry) => entry.endsWith('.md'))
     .filter((entry) => {
@@ -166,19 +153,22 @@ test('all user-invocable commands execute in their fully namespaced fork agent',
     assert.equal(scalar(metadata, 'name', subject), `prism:${commandName}`);
     assert.equal(scalar(metadata, 'user-invocable', subject), 'true');
     assert.equal(scalar(metadata, 'disable-model-invocation', subject), 'true');
-    assert.equal(scalar(metadata, 'context', subject), 'fork');
-    assert.equal(scalar(metadata, 'background', subject), 'false');
-    assert.equal(scalar(metadata, 'agent', subject), `prism:${agentName}`);
-    assert.match(
-      scalar(metadata, 'agent', subject),
-      /^prism:[a-z0-9]+(?:-[a-z0-9]+)*$/,
-      `${subject} agent must include the plugin namespace`,
-    );
-    doesNotDeclare(metadata, 'model', subject);
+    assert.equal(scalar(metadata, 'model', subject), 'haiku');
+    doesNotDeclare(metadata, 'context', subject);
+    doesNotDeclare(metadata, 'background', subject);
+    doesNotDeclare(metadata, 'agent', subject);
+
+    const expectedTools = [
+      `Agent(prism:${agentName})`,
+      ...(READ_COMMAND_INVOCATIONS[commandName]
+        ? [`Bash(${READ_COMMAND_INVOCATIONS[commandName]})`]
+        : MUTATION_ENTRYPOINT_PERMISSIONS[commandName]),
+    ];
+    assert.deepEqual(list(metadata, 'allowed-tools', subject), expectedTools);
   }
 });
 
-test('every referenced agent exists, uses Haiku, and exposes only its minimal tools', () => {
+test('every referenced agent is a bounded foreground Haiku executor', () => {
   for (const agentName of new Set(Object.values(COMMAND_AGENTS))) {
     const subject = `agents/${agentName}.md`;
     const agentPath = path.join(ROOT, 'agents', `${agentName}.md`);
@@ -189,6 +179,8 @@ test('every referenced agent exists, uses Haiku, and exposes only its minimal to
     assert.equal(scalar(metadata, 'name', subject), agentName);
     assert.equal(scalar(metadata, 'model', subject), 'haiku');
     assert.deepEqual(list(metadata, 'tools', subject), AGENT_TOOLS[agentName]);
+    assert.equal(scalar(metadata, 'background', subject), 'false');
+    assert.equal(scalar(metadata, 'maxTurns', subject), '2');
     doesNotDeclare(metadata, 'allowed-tools', subject);
   }
 });
@@ -202,16 +194,18 @@ test('no command restores a wildcard Node Bash permission', () => {
   }
 });
 
-test('read commands relay stderr and pre-authorize only their one fixed inline entrypoint', () => {
+test('read controllers delegate and pre-authorize only their one fixed entrypoint', () => {
   for (const [commandName, invocation] of Object.entries(READ_COMMAND_INVOCATIONS)) {
     const subject = `commands/${commandName}.md`;
     const contents = readMarkdown('commands', commandName);
     const metadata = frontmatter(contents, subject);
+    const commandBody = body(contents);
 
-    assert.deepEqual(
-      inlineShellInvocations(contents),
-      [invocation],
-      `${subject} must execute its fixed entrypoint exactly once`,
+    assert.deepEqual(inlineShellInvocations(contents), []);
+    assert.equal(
+      commandBody.split(invocation).length - 1,
+      1,
+      `${subject} must delegate its fixed entrypoint exactly once`,
     );
     if (commandName === 'realtime') {
       assert.doesNotMatch(
@@ -223,7 +217,7 @@ test('read commands relay stderr and pre-authorize only their one fixed inline e
       assert.match(
         invocation,
         / 2>&1 \|\| true$/,
-        `${subject} must merge stderr and keep inline expansion successful`,
+        `${subject} must merge stderr and normalize the script failure status`,
       );
       assert.equal(
         (invocation.match(/2>&1/g) || []).length,
@@ -238,49 +232,49 @@ test('read commands relay stderr and pre-authorize only their one fixed inline e
     }
     assert.deepEqual(
       list(metadata, 'allowed-tools', subject),
-      [`Bash(${READ_COMMAND_PERMISSIONS[commandName]})`],
+      [
+        `Agent(prism:${COMMAND_AGENTS[commandName]})`,
+        `Bash(${invocation})`,
+      ],
       `${subject} must pre-authorize only its fixed entrypoint and argument shape`,
     );
+    assert.match(
+      commandBody,
+      new RegExp(`Use the \`prism:${COMMAND_AGENTS[commandName]}\` Agent exactly once`, 'i'),
+    );
+    assert.match(commandBody, /Do not call Bash or any other tool yourself/i);
+    assert.match(commandBody, /final response exactly the first text content block/i);
+    assert.match(commandBody, /Ignore\s+the continuation `agentId` and usage metadata/i);
   }
 });
 
-test('inline shell commands interpolate only host substitutions, never user arguments', () => {
+test('commands no longer use inline shell expansion', () => {
   for (const commandName of Object.keys(COMMAND_AGENTS)) {
-    const subject = `commands/${commandName}.md`;
-    for (const invocation of inlineShellInvocations(readMarkdown('commands', commandName))) {
-      for (const variable of shellVariables(invocation)) {
-        assert.ok(
-          SAFE_INLINE_VARIABLES.has(variable),
-          `${subject} inline shell must not interpolate $${variable}`,
-        );
-      }
-    }
+    assert.deepEqual(inlineShellInvocations(readMarkdown('commands', commandName)), []);
   }
 });
 
-test('mutating commands never pre-authorize a mutation or dynamic Bash matcher', () => {
-  const mutationPattern = /\b(?:apply|confirm|delete|remove|set|unset)\b/i;
+test('mutating commands pre-authorize only validated plugin entrypoint shapes', () => {
   const dynamicArgumentPattern = /\$(?:\{?(?:ARGUMENTS|FIELD|KEY|VALUE)\}?|\{?[0-9]+\}?|[@*])/i;
 
   for (const commandName of MUTATION_COMMANDS) {
     const subject = `commands/${commandName}.md`;
     const metadata = frontmatter(readMarkdown('commands', commandName), subject);
 
-    for (const permission of list(metadata, 'allowed-tools', subject)) {
-      assertNoBroadBashPermission(permission, `${subject} permission must be fixed`);
+    const permissions = list(metadata, 'allowed-tools', subject)
+      .filter((permission) => permission.startsWith('Bash('));
+    assert.deepEqual(permissions, MUTATION_ENTRYPOINT_PERMISSIONS[commandName]);
+
+    for (const permission of permissions) {
+      assertNoBroadBashPermission(permission, `${subject} permission must stay entrypoint-scoped`);
       assert.doesNotMatch(
         permission,
-        /\*/,
-        `${subject} must not pre-authorize a wildcard argument`,
+        /(?:&&|\|\||[;|&]\s|[\r\n])/,
+        `${subject} permission must not include a compound command`,
       );
       assert.ok(
-        SAFE_MUTATION_PERMISSIONS[commandName].includes(permission),
-        `${subject} may pre-authorize only its fixed read-only modes`,
-      );
-      assert.doesNotMatch(
-        permission,
-        mutationPattern,
-        `${subject} must keep mutations behind native approval`,
+        MUTATION_ENTRYPOINT_PERMISSIONS[commandName].includes(permission),
+        `${subject} may pre-authorize only its deterministic plugin entrypoint shapes`,
       );
       assert.doesNotMatch(
         permission,

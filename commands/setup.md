@@ -3,12 +3,14 @@ name: prism:setup
 description: Configure the Prism plugin with your Prism API key
 user-invocable: true
 disable-model-invocation: true
-context: fork
-background: false
-agent: prism:prism-setup
+model: haiku
+allowed-tools:
+  - Agent(prism:prism-setup)
+  - Bash(node "${CLAUDE_PLUGIN_ROOT}/lib/setup.js" apply * --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}")
 ---
 
-Configure Prism with a Prism API key.
+Use the `prism:prism-setup` Agent exactly once in the foreground. Delegate the
+complete execution contract and fully expanded argument string below.
 
 **Usage:** `/prism:setup KEY`
 
@@ -29,6 +31,9 @@ node "${CLAUDE_PLUGIN_ROOT}/lib/setup.js" apply "$KEY" --project-dir "${CLAUDE_P
 Pass the key only as the positional argument shown above. Do not run any
 validation, inspection, or retry command. The script detects the installed
 plugin scope and writes only its corresponding settings file. Do not read or
-write Prism configuration files yourself. After Bash returns, make the final
-response only the complete Bash tool-result text, reproduced verbatim and
-character-for-character.
+write Prism configuration files yourself.
+
+Do not call Bash or any other tool yourself. After the Agent returns, make your
+final response exactly the first text content block in the Agent result. Ignore
+the continuation `agentId` and usage metadata that Claude Code appends. Do not
+summarize, explain, label, wrap, or add commentary.

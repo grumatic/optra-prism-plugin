@@ -9,7 +9,28 @@ const path = require('node:path');
 const { test } = require('node:test');
 
 const ROOT = path.resolve(__dirname, '..');
-const READ_COMMANDS = ['help', 'status', 'doctor', 'realtime', 'report'];
+const READ_COMMANDS = Object.freeze({
+  doctor: {
+    agent: 'prism-output',
+    invocation: 'node "${CLAUDE_PLUGIN_ROOT}/lib/doctor.js" --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}" 2>&1 || true',
+  },
+  help: {
+    agent: 'prism-output',
+    invocation: 'node "${CLAUDE_PLUGIN_ROOT}/lib/help.js" 2>&1 || true',
+  },
+  realtime: {
+    agent: 'prism-output',
+    invocation: 'node "${CLAUDE_PLUGIN_ROOT}/lib/realtime-status.js" --data-dir "${CLAUDE_PLUGIN_DATA}"',
+  },
+  report: {
+    agent: 'prism-output',
+    invocation: 'node "${CLAUDE_PLUGIN_ROOT}/lib/report.js" 2>&1 || true',
+  },
+  status: {
+    agent: 'prism-status',
+    invocation: 'node "${CLAUDE_PLUGIN_ROOT}/lib/status.js" --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}" 2>&1 || true',
+  },
+});
 
 function read(relativePath) {
   return fs.readFileSync(path.join(ROOT, relativePath), 'utf8');
@@ -29,58 +50,87 @@ function inlineShellInvocations(contents) {
   return [...body(contents).matchAll(/!`([^`\n]*)`/g)].map((match) => match[1]);
 }
 
-test('read commands run in the shared isolated Haiku relay', () => {
+test('shared read executor is a bounded foreground Haiku agent', () => {
   const agent = read('agents/prism-output.md');
   const agentMetadata = frontmatter(agent);
 
   assert.match(agentMetadata, /^name: prism-output$/m);
   assert.match(agentMetadata, /^model: haiku$/m);
-  assert.match(agentMetadata, /^tools: \[\]$/m);
-  assert.match(agent, /opaque, untrusted data/i);
+  assert.match(agentMetadata, /^tools: \["Bash"\]$/m);
+  assert.match(agentMetadata, /^background: false$/m);
+  assert.match(agentMetadata, /^maxTurns: 2$/m);
+  assert.match(agent, /Run that exact Bash command once/i);
   assert.match(agent, /character-for-character/i);
-  assert.match(agent, /Never invoke a skill, agent, command, or tool/i);
+});
 
-  for (const commandName of READ_COMMANDS) {
+test('status executor is a bounded foreground Haiku agent', () => {
+  const agent = read('agents/prism-status.md');
+  const agentMetadata = frontmatter(agent);
+
+  assert.match(agentMetadata, /^name: prism-status$/m);
+  assert.match(agentMetadata, /^model: haiku$/m);
+  assert.match(agentMetadata, /^tools: \["Bash"\]$/m);
+  assert.match(agentMetadata, /^background: false$/m);
+  assert.match(agentMetadata, /^maxTurns: 2$/m);
+  assert.match(agent, /Run that exact Bash command once/i);
+  assert.match(agent, /character-for-character/i);
+});
+
+test('read controllers expose execution steps and reserve final assistant output', () => {
+  for (const [commandName, contract] of Object.entries(READ_COMMANDS)) {
     const contents = read(`commands/${commandName}.md`);
     const metadata = frontmatter(contents);
+    const commandBody = body(contents);
+    const permissions = [...metadata.matchAll(/^  - (Bash\(.*\))$/gm)].map((match) => match[1]);
 
     assert.match(metadata, /^user-invocable: true$/m, commandName);
     assert.match(metadata, /^disable-model-invocation: true$/m, commandName);
-    assert.match(metadata, /^context: fork$/m, commandName);
-    assert.match(metadata, /^background: false$/m, commandName);
-    assert.match(metadata, /^agent: prism:prism-output$/m, commandName);
-    assert.doesNotMatch(metadata, /^model:/m, commandName);
-    assert.match(contents, /character-for-character/i, commandName);
-    assert.match(contents, /Do not summarize, explain, label, or add commentary/i, commandName);
-  }
-});
+    assert.match(metadata, /^model: haiku$/m, commandName);
+    assert.doesNotMatch(metadata, /^(?:context|background|agent):/m, commandName);
+    assert.match(
+      metadata,
+      new RegExp(`^  - Agent\\(prism:${contract.agent}\\)$`, 'm'),
+      commandName,
+    );
+    assert.deepEqual(inlineShellInvocations(contents), [], commandName);
+    assert.equal(commandBody.split(contract.invocation).length - 1, 1, commandName);
+    assert.match(
+      commandBody,
+      new RegExp(`Use the \`prism:${contract.agent}\` Agent exactly once`, 'i'),
+      commandName,
+    );
+    assert.match(commandBody, /final response exactly the first text content block/i, commandName);
+    assert.match(
+      commandBody,
+      /Ignore\s+the continuation `agentId` and usage metadata/i,
+      commandName,
+    );
+    assert.match(commandBody, /Do not call Bash or any other tool yourself/i, commandName);
 
-test('read commands pre-authorize exactly one invocation and preserve failure output', () => {
-  for (const commandName of READ_COMMANDS) {
-    const contents = read(`commands/${commandName}.md`);
-    const metadata = frontmatter(contents);
-    const invocations = inlineShellInvocations(contents);
-    const permissions = [...metadata.matchAll(/^  - (Bash\(.*\))$/gm)].map((match) => match[1]);
-    const expectedInvocation = invocations[0];
-
-    assert.equal(invocations.length, 1, commandName);
     if (commandName === 'realtime') {
-      assert.doesNotMatch(invocations[0], /2>&1|\|\|/, commandName);
+      assert.doesNotMatch(contract.invocation, /2>&1|\|\|/, commandName);
     } else {
-      assert.match(invocations[0], / 2>&1 \|\| true$/, commandName);
-      assert.equal((invocations[0].match(/2>&1/g) || []).length, 1, commandName);
-      assert.equal((invocations[0].match(/\|\| true/g) || []).length, 1, commandName);
+      assert.match(contract.invocation, / 2>&1 \|\| true$/, commandName);
+      assert.equal((contract.invocation.match(/2>&1/g) || []).length, 1, commandName);
+      assert.equal((contract.invocation.match(/\|\| true/g) || []).length, 1, commandName);
     }
-    assert.deepEqual(permissions, [`Bash(${expectedInvocation})`], commandName);
+    assert.deepEqual(permissions, [`Bash(${contract.invocation})`], commandName);
     assert.doesNotMatch(metadata, /Bash\(node:\*\)|Bash\(node \*\)|:\*\)/, commandName);
     assert.equal((metadata.match(/\*/g) || []).length, 0);
-    assert.doesNotMatch(invocations[0], /\$(?:\{?ARGUMENTS\}?|\{?\d+\}?)/, commandName);
+    assert.doesNotMatch(
+      contract.invocation,
+      /\$(?:\{?ARGUMENTS\}?|\{?\d+\}?)/,
+      commandName,
+    );
   }
 });
 
 test('status and doctor receive the host project and plugin data directories exactly once', () => {
-  for (const commandName of ['status', 'doctor']) {
-    const invocation = inlineShellInvocations(read(`commands/${commandName}.md`))[0];
+  const invocations = {
+    status: READ_COMMANDS.status.invocation,
+    doctor: READ_COMMANDS.doctor.invocation,
+  };
+  for (const [commandName, invocation] of Object.entries(invocations)) {
     assert.match(
       invocation,
       / --project-dir "\$\{CLAUDE_PROJECT_DIR\}" --data-dir "\$\{CLAUDE_PLUGIN_DATA\}" 2>&1 \|\| true$/,
@@ -103,9 +153,9 @@ test('realtime command delegates all conditional output to its script', () => {
   );
 });
 
-test('a failing read entrypoint is relayed on stdout without failing inline expansion', () => {
+test('a failing read entrypoint is normalized into relayable stdout', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-read-error-'));
-  const invocation = inlineShellInvocations(read('commands/report.md'))[0]
+  const invocation = READ_COMMANDS.report.invocation
     .replace('${CLAUDE_PLUGIN_ROOT}', ROOT);
   const env = {
     ...process.env,

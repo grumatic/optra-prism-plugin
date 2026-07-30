@@ -636,25 +636,36 @@ function runWithDataRemovalFailure(fx) {
   });
 }
 
-test('command preauthorizes only preview and maps one safe plan token to one apply', () => {
+test('command preauthorizes only validated preview and confirmed-apply shapes', () => {
   const command = fs.readFileSync(path.join(ROOT, 'commands', 'uninstall.md'), 'utf8');
   const agent = fs.readFileSync(path.join(ROOT, 'agents', 'prism-uninstall.md'), 'utf8');
   const frontmatter = command.match(/^---\n([\s\S]*?)\n---\n/)[1];
   const agentFrontmatter = agent.match(/^---\n([\s\S]*?)\n---\n/)[1];
 
   assert.match(frontmatter, /^disable-model-invocation: true$/m);
-  assert.match(frontmatter, /^context: fork$/m);
-  assert.match(frontmatter, /^agent: prism:prism-uninstall$/m);
+  assert.match(frontmatter, /^model: haiku$/m);
+  assert.doesNotMatch(frontmatter, /^(?:context|background|agent):/m);
   assert.match(frontmatter, /^allowed-tools:$/m);
+  assert.match(frontmatter, /^  - Agent\(prism:prism-uninstall\)$/m);
   assert.match(
     frontmatter,
     /^  - Bash\(node "\$\{CLAUDE_PLUGIN_ROOT\}\/lib\/uninstall\.js" preview --project-dir "\$\{CLAUDE_PROJECT_DIR\}" --data-dir "\$\{CLAUDE_PLUGIN_DATA\}" --plugin-root "\$\{CLAUDE_PLUGIN_ROOT\}"\)$/m,
   );
-  assert.doesNotMatch(frontmatter, /uninstall\.js" apply/);
+  assert.match(
+    frontmatter,
+    /^  - Bash\(node "\$\{CLAUDE_PLUGIN_ROOT\}\/lib\/uninstall\.js" apply --confirm \* --project-dir "\$\{CLAUDE_PROJECT_DIR\}" --data-dir "\$\{CLAUDE_PLUGIN_DATA\}" --plugin-root "\$\{CLAUDE_PLUGIN_ROOT\}"\)$/m,
+  );
+  assert.equal((frontmatter.match(/^  - Bash\(/gm) || []).length, 2);
   assert.match(agentFrontmatter, /^model: haiku$/m);
   assert.match(agentFrontmatter, /^tools: \["Bash"\]$/m);
+  assert.match(agentFrontmatter, /^background: false$/m);
+  assert.match(agentFrontmatter, /^maxTurns: 2$/m);
+  assert.match(command, /Use the `prism:prism-uninstall` Agent exactly once/i);
+  assert.match(command, /Do not call Bash or any other tool yourself/i);
+  assert.match(command, /final response exactly the first text content block/i);
+  assert.match(command, /Ignore\s+the continuation `agentId` and usage metadata/i);
   assert.match(command, /run the selected command exactly once/i);
-  assert.match(command, /character-for-character/i);
+  assert.match(agent, /character-for-character/i);
   const commandBody = command.replace(/^---\n[\s\S]*?\n---\n/, '');
   assert.equal(
     (commandBody.match(/node "\$\{CLAUDE_PLUGIN_ROOT\}\/lib\/uninstall\.js"/g) || []).length,

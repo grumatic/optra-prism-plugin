@@ -85,7 +85,13 @@ test('commands and their dedicated agents are included by the package projection
   assert.equal(fs.existsSync(path.join(ROOT, 'lib', 'config-command.js')), true);
   assert.equal(fs.existsSync(path.join(ROOT, 'lib', 'uninstall.js')), true);
   assert.equal(fs.existsSync(path.join(ROOT, 'commands', 'config.md')), true);
-  for (const agent of ['prism-config', 'prism-output', 'prism-setup', 'prism-uninstall']) {
+  for (const agent of [
+    'prism-config',
+    'prism-output',
+    'prism-setup',
+    'prism-status',
+    'prism-uninstall',
+  ]) {
     assert.equal(fs.existsSync(path.join(ROOT, 'agents', `${agent}.md`)), true, agent);
   }
 });

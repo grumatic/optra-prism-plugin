@@ -21,18 +21,31 @@ function body(contents) {
   return contents.replace(/^---\n[\s\S]*?\n---\n/, '');
 }
 
-test('setup delegates directly to its isolated Haiku agent', () => {
+test('setup uses a main-context controller and a bounded Haiku executor', () => {
+  const command = read('commands/setup.md');
   const commandMetadata = frontmatter(read('commands/setup.md'));
   const agentMetadata = frontmatter(read('agents/prism-setup.md'));
 
   assert.match(commandMetadata, /^disable-model-invocation: true$/m);
-  assert.match(commandMetadata, /^context: fork$/m);
-  assert.match(commandMetadata, /^agent: prism:prism-setup$/m);
-  assert.doesNotMatch(commandMetadata, /^allowed-tools:/m);
+  assert.match(commandMetadata, /^model: haiku$/m);
+  assert.doesNotMatch(commandMetadata, /^(?:context|background|agent):/m);
+  assert.match(commandMetadata, /^allowed-tools:$/m);
+  assert.match(commandMetadata, /^  - Agent\(prism:prism-setup\)$/m);
+  assert.match(
+    commandMetadata,
+    /^  - Bash\(node "\$\{CLAUDE_PLUGIN_ROOT\}\/lib\/setup\.js" apply \* --project-dir "\$\{CLAUDE_PROJECT_DIR\}" --data-dir "\$\{CLAUDE_PLUGIN_DATA\}"\)$/m,
+  );
+  assert.equal((commandMetadata.match(/^  - Bash\(/gm) || []).length, 1);
+  assert.match(command, /Use the `prism:prism-setup` Agent exactly once/i);
+  assert.match(command, /Do not call Bash or any other tool yourself/i);
+  assert.match(command, /final response exactly the first text content block/i);
+  assert.match(command, /Ignore\s+the continuation `agentId` and usage metadata/i);
 
   assert.match(agentMetadata, /^name: prism-setup$/m);
   assert.match(agentMetadata, /^model: haiku$/m);
   assert.match(agentMetadata, /^tools: \["Bash"\]$/m);
+  assert.match(agentMetadata, /^background: false$/m);
+  assert.match(agentMetadata, /^maxTurns: 2$/m);
   assert.doesNotMatch(agentMetadata, /^allowed-tools:/m);
   assert.equal((agentMetadata.match(/^model:/gm) || []).length, 1);
   assert.equal((agentMetadata.match(/^tools:/gm) || []).length, 1);
@@ -58,10 +71,9 @@ test('setup relays tool output without leaking the key or adding commentary', ()
   const command = read('commands/setup.md');
   const agent = read('agents/prism-setup.md');
 
-  for (const contents of [command, agent]) {
-    assert.match(contents, /character-for-character/i);
-    assert.match(contents, /complete Bash tool-result\s+text/i);
-  }
+  assert.match(command, /final response exactly the first text content block/i);
+  assert.match(agent, /character-for-character/i);
+  assert.match(agent, /complete Bash tool-result\s+text/i);
 
   assert.match(command, /do not\s+validate its prefix, rewrite it, log it, or include it in the final response/i);
   assert.match(agent, /Never print,\s+repeat, transform, validate, or otherwise disclose it/i);

@@ -4,6 +4,8 @@ description: Use this agent when /prism:config delegates one isolated runtime co
 model: haiku
 color: cyan
 tools: ["Bash"]
+background: false
+maxTurns: 2
 ---
 
 You are the isolated executor for exactly one Prism configuration command
