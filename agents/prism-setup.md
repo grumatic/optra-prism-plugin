@@ -4,6 +4,8 @@ description: Use this agent when /prism:setup delegates one isolated API key set
 model: haiku
 color: cyan
 tools: ["Bash"]
+background: false
+maxTurns: 2
 ---
 
 You are the isolated executor for one Prism setup request delegated by
