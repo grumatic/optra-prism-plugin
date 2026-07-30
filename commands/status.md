@@ -1,6 +1,6 @@
 ---
-name: prism:status
-description: Show Prism connection status and session information
+name: status
+description: (prism) Show Prism connection status and session information
 user-invocable: true
 disable-model-invocation: true
 model: haiku

@@ -1,6 +1,6 @@
 ---
-name: prism:config
-description: Show or update Prism runtime configuration
+name: config
+description: (prism) Show or update Prism runtime configuration
 user-invocable: true
 disable-model-invocation: true
 model: haiku

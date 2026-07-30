@@ -1,6 +1,6 @@
 ---
-name: prism:uninstall
-description: Preview or confirm deterministic Prism plugin cleanup
+name: uninstall
+description: (prism) Preview or confirm deterministic Prism plugin cleanup
 user-invocable: true
 disable-model-invocation: true
 model: haiku
