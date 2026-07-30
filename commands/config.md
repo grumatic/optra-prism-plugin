@@ -3,15 +3,17 @@ name: prism:config
 description: Show or update Prism runtime configuration
 user-invocable: true
 disable-model-invocation: true
-context: fork
-background: false
-agent: prism:prism-config
+model: haiku
 allowed-tools:
+  - Agent(prism:prism-config)
   - Bash(node "${CLAUDE_PLUGIN_ROOT}/lib/config-command.js" show --project-dir "${CLAUDE_PROJECT_DIR}")
   - Bash(node "${CLAUDE_PLUGIN_ROOT}/lib/config-command.js" help --project-dir "${CLAUDE_PROJECT_DIR}")
+  - Bash(node "${CLAUDE_PLUGIN_ROOT}/lib/config-command.js" set * --project-dir "${CLAUDE_PROJECT_DIR}")
+  - Bash(node "${CLAUDE_PLUGIN_ROOT}/lib/config-command.js" unset * --project-dir "${CLAUDE_PROJECT_DIR}")
 ---
 
-Show or update Prism runtime configuration.
+Use the `prism:prism-config` Agent exactly once in the foreground. Delegate the
+complete execution contract and fully expanded argument string below.
 
 **Usage:**
 - `/prism:config`
@@ -34,4 +36,10 @@ An empty argument string is a complete request and selects the "No arguments"
 mapping. Run the selected command immediately; do not ask a question or list
 the available commands.
 
-Do not validate or rewrite field names or values in the command prompt; the script is the authority. Reject any other argument shape. The final response must be only the complete Bash tool-result text, reproduced verbatim and character-for-character.
+Do not validate or rewrite field names or values in the command prompt; the
+script is the authority. Reject any other argument shape.
+
+Do not call Bash or any other tool yourself. After the Agent returns, make your
+final response exactly the first text content block in the Agent result. Ignore
+the continuation `agentId` and usage metadata that Claude Code appends. Do not
+summarize, explain, label, wrap, or add commentary.

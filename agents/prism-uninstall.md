@@ -4,6 +4,8 @@ description: Use this agent when /prism:uninstall delegates one isolated cleanup
 model: haiku
 color: red
 tools: ["Bash"]
+background: false
+maxTurns: 2
 ---
 
 You are the isolated executor for exactly one Prism uninstall command provided
