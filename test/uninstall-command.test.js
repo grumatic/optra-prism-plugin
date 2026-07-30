@@ -6,6 +6,9 @@ const { spawnSync } = require('node:child_process');
 const { test } = require('node:test');
 const { buildOtelHeaders } = require('../lib/plugin-version');
 const { OTEL_KEYS, PLUGIN_ID } = require('../lib/settings');
+const CURRENT_OTEL_KEYS = OTEL_KEYS.filter(
+  (key) => key !== 'OTEL_LOG_ASSISTANT_RESPONSES',
+);
 
 const ROOT = path.join(__dirname, '..');
 const SCRIPT = path.join(ROOT, 'lib', 'uninstall.js');
@@ -96,7 +99,6 @@ function fixture({ remaining = false } = {}) {
     OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: `${FIXTURE_INGEST_URL}/v1/metrics`,
     OTEL_EXPORTER_OTLP_HEADERS: buildOtelHeaders(FIXTURE_API_KEY),
     OTEL_LOG_USER_PROMPTS: '1',
-    OTEL_LOG_ASSISTANT_RESPONSES: '0',
     OTEL_LOG_TOOL_DETAILS: '1',
   };
   const userSettings = path.join(homeDir, '.claude', 'settings.json');
@@ -281,7 +283,7 @@ function assertManagedOtelRemoved(file, preservedKey) {
 
 function assertScopeUntouched(file, preservedKey) {
   const settings = readJson(file);
-  for (const key of OTEL_KEYS) {
+  for (const key of CURRENT_OTEL_KEYS) {
     assert.ok(Object.hasOwn(settings.env, key), `${key} must be preserved in ${file}`);
   }
   assert.equal(settings.env[preservedKey], 'preserve');

@@ -166,7 +166,7 @@ test('builds OTEL settings only from config.json and preserves the opaque key', 
     'https://ingest.example/base/v1/metrics');
   assert.match(expected.otelEnv.OTEL_EXPORTER_OTLP_HEADERS,
     new RegExp(`^x-api-key=${encodeURIComponent(API_KEY)}(?:,|$)`));
-  assert.equal(expected.otelEnv.OTEL_LOG_ASSISTANT_RESPONSES, '0');
+  assert.equal(Object.hasOwn(expected.otelEnv, 'OTEL_LOG_ASSISTANT_RESPONSES'), false);
   assert.ok(OTEL_KEYS.includes('OTEL_LOG_ASSISTANT_RESPONSES'));
 });
 
@@ -177,8 +177,18 @@ test('sync writes only the requested target and never repairs other layers', () 
   const localFile = settings.pathForScope('local', projectDir);
   const userBefore = { env: { OTEL_LOGS_EXPORTER: 'user-stale', USER_ONLY: 'keep' } };
   const localBefore = { env: { OTEL_LOGS_EXPORTER: 'local-stale', LOCAL_ONLY: 'keep' } };
+  const legacyPrismEnv = {
+    ...settings.buildExpectedOtelEnv().otelEnv,
+    OTEL_LOG_ASSISTANT_RESPONSES: '0',
+  };
   writeJson(userFile, userBefore);
-  writeJson(projectFile, { permissions: { allow: ['Bash(npm test)'] }, env: { PROJECT_ONLY: 'keep' } });
+  writeJson(projectFile, {
+    permissions: { allow: ['Bash(npm test)'] },
+    env: {
+      ...legacyPrismEnv,
+      PROJECT_ONLY: 'keep',
+    },
+  });
   writeJson(localFile, localBefore);
 
   assert.equal(settings.syncOtelSettings({ scope: 'project', projectDir }), true);
@@ -188,11 +198,29 @@ test('sync writes only the requested target and never repairs other layers', () 
   const projected = readJson(projectFile);
   assert.equal(projected.env.PROJECT_ONLY, 'keep');
   assert.equal(projected.env.OTEL_LOGS_EXPORTER, 'otlp');
+  assert.equal(Object.hasOwn(projected.env, 'OTEL_LOG_ASSISTANT_RESPONSES'), false);
   assert.deepEqual(projected.permissions, { allow: ['Bash(npm test)'] });
   assert.deepEqual(settings.checkOtelSettings({ projectDir }), {
     ok: false,
     mismatches: ['OTEL_LOGS_EXPORTER'],
   });
+});
+
+test('sync preserves a standalone assistant-response opt-out', () => {
+  const settings = require('../lib/settings');
+  const projectFile = settings.pathForScope('project', projectDir);
+  writeJson(projectFile, {
+    env: {
+      OTEL_LOG_ASSISTANT_RESPONSES: '0',
+      PROJECT_ONLY: 'keep',
+    },
+  });
+
+  assert.equal(settings.syncOtelSettings({ scope: 'project', projectDir }), true);
+
+  const projected = readJson(projectFile);
+  assert.equal(projected.env.OTEL_LOG_ASSISTANT_RESPONSES, '0');
+  assert.equal(projected.env.PROJECT_ONLY, 'keep');
 });
 
 test('sync installs a stable executable helper in plugin data and projects its exact path', () => {
@@ -389,6 +417,7 @@ test('version activation updates only the static headers and owned helper metada
     env: {
       OTEL_LOGS_EXPORTER: 'intentionally-stale',
       OTEL_EXPORTER_OTLP_HEADERS: 'x-api-key=old,x-prism-plugin-version=0.1.0',
+      OTEL_LOG_ASSISTANT_RESPONSES: '0',
       UNRELATED: 'preserve',
     },
   });
@@ -405,6 +434,8 @@ test('version activation updates only the static headers and owned helper metada
   assert.equal(result.helperConfigured, true);
   const projected = readJson(localFile);
   assert.equal(projected.env.OTEL_LOGS_EXPORTER, 'intentionally-stale');
+  assert.equal(projected.env.OTEL_LOG_ASSISTANT_RESPONSES, '0');
+  assert.equal(result.assistantResponseOptOutRemoved, false);
   assert.equal(projected.env.UNRELATED, 'preserve');
   assert.equal(
     projected.env.OTEL_EXPORTER_OTLP_HEADERS,
@@ -413,6 +444,39 @@ test('version activation updates only the static headers and owned helper metada
   assert.equal(projected.otelHeadersHelper, settings.helperPathForDataDir(dataDir));
   assert.deepEqual(projected.permissions, { allow: ['Bash(npm test)'] });
   assert.equal(fs.statSync(localFile).mode & 0o777, 0o640);
+});
+
+test('version activation removes only the legacy Prism assistant-response opt-out', () => {
+  const settings = require('../lib/settings');
+  const dataDir = path.join(homeDir, 'plugin-data');
+  const projectFile = settings.pathForScope('project', projectDir);
+  const expected = settings.buildExpectedOtelEnv();
+  writeJson(projectFile, {
+    env: {
+      ...expected.otelEnv,
+      OTEL_EXPORTER_OTLP_HEADERS: 'x-api-key=old,x-prism-plugin-version=0.7.1',
+      OTEL_LOG_ASSISTANT_RESPONSES: '0',
+      UNRELATED: 'preserve',
+    },
+  });
+
+  const result = settings.syncPluginVersionMetadata({
+    scope: 'project',
+    projectDir,
+    dataDir,
+    pluginVersion: '0.7.2',
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.changed, true);
+  assert.equal(result.assistantResponseOptOutRemoved, true);
+  const projected = readJson(projectFile);
+  assert.equal(Object.hasOwn(projected.env, 'OTEL_LOG_ASSISTANT_RESPONSES'), false);
+  assert.equal(projected.env.UNRELATED, 'preserve');
+  assert.equal(
+    projected.env.OTEL_EXPORTER_OTLP_HEADERS,
+    `x-api-key=${encodeURIComponent(API_KEY)},x-prism-plugin-version=0.7.2`,
+  );
 });
 
 test('targeted sync fails when a higher-precedence layer overrides projected headers', () => {
