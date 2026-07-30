@@ -5,6 +5,15 @@ All notable changes to the Prism plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.2] - 2026-07-31
+
+### Changed
+- Every user-invocable command now keeps a lightweight main-context controller while delegating execution to a bounded foreground Haiku agent. Agent and Bash progress remain visible, then the command output is emitted as the final assistant response without appended agent metadata. Explicit Prism slash commands pre-authorize only their deterministic plugin entrypoint shapes, including validated setup, configuration, and confirmed-uninstall actions, so the plugin does not ask separately for Bash approval.
+- Command frontmatter now declares unqualified names so current Claude Code applies the `prism:` plugin namespace exactly once. Descriptions start with `(prism)` so commands remain identifiable on older hosts that do not add the plugin namespace.
+
+### Fixed
+- Assistant-response OTEL events are collected again on Claude Code versions that inherit response logging from `OTEL_LOG_USER_PROMPTS`. Prism no longer projects `OTEL_LOG_ASSISTANT_RESPONSES=0`, and activation removes that legacy value only when the surrounding OTEL settings still match Prism's projection; standalone or diverged opt-outs are preserved.
+
 ## [0.7.1] - 2026-07-27
 
 ### Added
