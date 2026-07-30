@@ -150,7 +150,16 @@ test('all user-invocable commands declare a main-context controller boundary', (
     const subject = `commands/${commandName}.md`;
     const metadata = frontmatter(readMarkdown('commands', commandName), subject);
 
-    assert.equal(scalar(metadata, 'name', subject), `prism:${commandName}`);
+    assert.equal(
+      scalar(metadata, 'name', subject),
+      commandName,
+      `${subject} must let Claude Code apply the plugin namespace exactly once`,
+    );
+    assert.match(
+      scalar(metadata, 'description', subject),
+      /^\(prism\)\s+\S/,
+      `${subject} must remain identifiable on hosts without plugin namespacing`,
+    );
     assert.equal(scalar(metadata, 'user-invocable', subject), 'true');
     assert.equal(scalar(metadata, 'disable-model-invocation', subject), 'true');
     assert.equal(scalar(metadata, 'model', subject), 'haiku');

@@ -1,6 +1,6 @@
 ---
-name: prism:report
-description: Weekly review — this week vs last week, PRISM grade, habits, worst prompts
+name: report
+description: (prism) Weekly review — this week vs last week, PRISM grade, habits, worst prompts
 user-invocable: true
 disable-model-invocation: true
 model: haiku

@@ -1,6 +1,6 @@
 ---
-name: prism:realtime
-description: Show the current session's realtime Prism score summary (grade, cost, turns)
+name: realtime
+description: (prism) Show the current session's realtime Prism score summary (grade, cost, turns)
 user-invocable: true
 disable-model-invocation: true
 model: haiku

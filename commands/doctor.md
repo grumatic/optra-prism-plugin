@@ -1,6 +1,6 @@
 ---
-name: prism:doctor
-description: Diagnose Prism plugin configuration and connectivity issues
+name: doctor
+description: (prism) Diagnose Prism plugin configuration and connectivity issues
 user-invocable: true
 disable-model-invocation: true
 model: haiku

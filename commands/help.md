@@ -1,6 +1,6 @@
 ---
-name: prism:help
-description: Show all available Prism plugin commands and how to use them
+name: help
+description: (prism) Show all available Prism plugin commands and how to use them
 user-invocable: true
 disable-model-invocation: true
 model: haiku
