@@ -128,6 +128,41 @@ test('promotion persists a non-nil server UUID and consumption requires both ide
   }));
 });
 
+test('legacy promotion remains hostless and a later barrier makes the old epoch stale', () => {
+  makeDataDir();
+  const sessionId = 'legacy-promotion';
+  const barrier = session.advanceBarrier(sessionId, 'normal-pending');
+  assert.ok(session.attachActive(sessionId, active(barrier.epoch, 'legacy-client')));
+  const serverPromptId = '55555555-5555-4555-8555-555555555555';
+  assert.ok(session.promoteLegacyActive(sessionId, 'legacy-client', barrier.epoch, serverPromptId));
+  assert.equal(session.readTurn(sessionId).active.submitPromptId, undefined);
+  assert.equal(session.readTurn(sessionId).active.serverPromptId, serverPromptId);
+  const next = session.advanceBarrier(sessionId, 'normal-pending');
+  assert.equal(next.epoch, barrier.epoch + 1);
+  assert.equal(session.promoteLegacyActive(sessionId, 'legacy-client', barrier.epoch, serverPromptId), null);
+});
+
+test('publish-and-consume keeps an existing immutable publication when the compare-and-swap retry resumes', () => {
+  makeDataDir();
+  const sessionId = 'publish-consume';
+  const submitPromptId = 'publish-host';
+  const serverPromptId = '66666666-6666-4666-8666-666666666666';
+  const barrier = session.advanceBarrier(sessionId, 'normal-pending');
+  assert.ok(session.attachActive(sessionId, {
+    ...active(barrier.epoch, 'publish-client'),
+    submitPromptId,
+  }));
+  assert.ok(session.promoteActive(sessionId, 'publish-client', submitPromptId, serverPromptId));
+  const expected = {
+    epoch: barrier.epoch,
+    clientEventId: 'publish-client',
+    submitPromptId,
+    serverPromptId,
+  };
+  assert.equal(session.publishAndConsumeActive(sessionId, expected, () => ({ success: true })).state, 'published');
+  assert.equal(session.publishAndConsumeActive(sessionId, expected, () => ({ success: true })).state, 'already_consumed');
+});
+
 test('epochs advance monotonically and compact generations are serialized', () => {
   makeDataDir();
   const sessionId = 'monotonic-session';

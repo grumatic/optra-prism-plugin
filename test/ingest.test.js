@@ -10,6 +10,7 @@ const {
 } = require('node:test');
 
 const { readPluginVersion } = require('../lib/plugin-version');
+const { MAX_HOST_PROMPT_ID_BYTES, validHostPromptId } = require('../lib/host-prompt-id');
 
 const API_KEY = 'prism_ingest_test_key';
 const LEGACY_API_KEY = 'gck_ingest_test_key';
@@ -62,12 +63,14 @@ function writeRuntimeConfig(value) {
 
 async function loadIngestWithCapture(apiKey = API_KEY, responseBody = 'accepted', trailingSlash = false) {
   let resolveRequest;
+  let requestCount = 0;
   const requestReceived = new Promise((resolve) => { resolveRequest = resolve; });
 
   server = http.createServer((request, response) => {
     const chunks = [];
     request.on('data', (chunk) => chunks.push(chunk));
     request.on('end', () => {
+      requestCount += 1;
       const body = Buffer.concat(chunks).toString('utf8');
       resolveRequest({
         body,
@@ -105,6 +108,7 @@ async function loadIngestWithCapture(apiKey = API_KEY, responseBody = 'accepted'
   return {
     ingest: require('../lib/ingest'),
     requestReceived,
+    requestCount: () => requestCount,
   };
 }
 
@@ -178,8 +182,50 @@ test('sendPrompt preserves the Hook prompt request and adds plugin provenance', 
     requestReceived,
   ]);
 
-  assert.deepEqual(result, { status: 202, body: 'accepted' });
+  assert.deepEqual(result, {
+    status: 202,
+    body: 'accepted',
+    bodyBytes: 8,
+    bodyTruncated: false,
+    mediaType: 'text/plain',
+  });
   assertRequest(request, '/v1/prompts', expectedBody);
+});
+
+test('sendPrompt preserves valid opaque host IDs and rejects invalid present IDs before POST', async () => {
+  assert.equal(validHostPromptId('x'.repeat(MAX_HOST_PROMPT_ID_BYTES)), true);
+  assert.equal(validHostPromptId(`${'가'.repeat(341)}x`), true);
+  assert.equal(validHostPromptId(`${'가'.repeat(341)}xy`), false);
+  assert.equal(validHostPromptId('\u00a0opaque id\u00a0'), true);
+  for (const whitespace of [' ', '\t', '\n', '\v', '\f', '\r']) {
+    assert.equal(validHostPromptId(`opaque${whitespace}id`), true, JSON.stringify(whitespace));
+    assert.equal(validHostPromptId(`${whitespace}opaque`), false, JSON.stringify(whitespace));
+    assert.equal(validHostPromptId(`opaque${whitespace}`), false, JSON.stringify(whitespace));
+  }
+  for (const value of ['', 'x'.repeat(MAX_HOST_PROMPT_ID_BYTES + 1)]) {
+    assert.equal(validHostPromptId(value), false, JSON.stringify(value));
+  }
+
+  const { ingest, requestReceived, requestCount } = await loadIngestWithCapture();
+  const [result, request] = await Promise.all([
+    ingest.sendPrompt({ prompt_text: 'opaque', host_prompt_id: '\u00a0opaque id\u00a0' }),
+    requestReceived,
+  ]);
+  assert.equal(result.status, 202);
+  assert.equal(JSON.parse(request.body).host_prompt_id, '\u00a0opaque id\u00a0');
+  await assert.rejects(
+    ingest.sendPrompt({ prompt_text: 'blocked', host_prompt_id: ' blocked' }),
+    /valid host_prompt_id/,
+  );
+  assert.equal(requestCount(), 1);
+});
+
+test('normalizes JSON media type parameters before response classification', () => {
+  const { normalizedMediaType } = require('../lib/ingest');
+  assert.equal(normalizedMediaType('application/json; charset=utf-8'), 'application/json');
+  assert.equal(normalizedMediaType(['application/json;charset=utf-8']), 'application/json');
+  assert.equal(normalizedMediaType('application/jsonp'), 'application/jsonp');
+  assert.equal(normalizedMediaType(undefined), null);
 });
 
 test('engine report requests use one slash after a trailing-slash ingest URL', async () => {
@@ -256,7 +302,13 @@ test('sendResponse preserves the Hook response request and adds plugin provenanc
     requestReceived,
   ]);
 
-  assert.deepEqual(result, { status: 202, body: 'accepted' });
+  assert.deepEqual(result, {
+    status: 202,
+    body: 'accepted',
+    bodyBytes: 8,
+    bodyTruncated: false,
+    mediaType: 'text/plain',
+  });
   assertRequest(request, '/v1/prompts/response', expectedBody);
   assert.equal(Object.hasOwn(JSON.parse(request.body), 'response_content_hash'), false);
 });
@@ -346,7 +398,13 @@ test('sendPrompt preserves a legacy API key from config in the request header', 
     requestReceived,
   ]);
 
-  assert.deepEqual(result, { status: 202, body: 'accepted' });
+  assert.deepEqual(result, {
+    status: 202,
+    body: 'accepted',
+    bodyBytes: 8,
+    bodyTruncated: false,
+    mediaType: 'text/plain',
+  });
   assertRequest(request, '/v1/prompts', input, LEGACY_API_KEY);
 });
 test('debug logging records response metadata without echoing response contents', async () => {

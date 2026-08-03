@@ -124,7 +124,7 @@ function interceptor(home, statusCode = 202) {
     '  let body = ""; const request = new events.EventEmitter();',
     '  request.write = (chunk) => { body += chunk; }; request.destroy = () => {};',
     '  request.end = () => {',
-    '    const response = new events.EventEmitter();',
+    "    const response = Object.assign(new events.EventEmitter(), { headers: { 'content-type': 'application/json' } });",
     "    if (url.pathname === '/v1/score_v3/realtime/sub-sessions') { response.statusCode = 200; callback(response); response.emit('data', Buffer.from(realtimeRows)); response.emit('end'); return; }",
     `    response.statusCode = ${statusCode}; callback(response);`,
     "    if (url.pathname === '/v1/prompts/response') fs.writeFileSync(process.env.RESPONSE_MARKER, body);",
@@ -188,8 +188,6 @@ test('exact Stop consumes one proven multi-assistant turn and separates totals f
   const response = JSON.parse(fs.readFileSync(marker, 'utf8'));
   assert.equal(response.prompt_id, SERVER_PROMPT_ID);
   assert.equal(response.client_event_id, 'event-exact-stop');
-  assert.equal(response.cache_read_tokens, 0);
-  assert.equal(response.cache_creation_tokens, 0);
   assert.equal(response.host_prompt_id, promptId);
   assert.equal(
     response.response_operation_id,
@@ -200,9 +198,14 @@ test('exact Stop consumes one proven multi-assistant turn and separates totals f
     crypto.createHash('sha256').update(`exact-stop\nevent-next-turn\n${promptId}`).digest('hex'),
   );
   assert.equal(Object.hasOwn(response, 'response_content_hash'), false);
-  assert.equal(response.cost_catalog_revision, 42);
-  assert.equal(response.cost_kind, 'public_list_price_estimate');
-  assert.ok(Math.abs(response.cost_usd - 0.2406) < Number.EPSILON);
+  assert.deepEqual(Object.keys(response).sort(), [
+    'client_event_id',
+    'host_prompt_id',
+    'prompt_id',
+    'response_operation_id',
+    'response_text',
+    'tool_session_id',
+  ]);
   assert.equal(session.readTurn('exact-stop').active.status, 'consumed');
 });
 test('proven usage prices only strict RFC3339 transcript timestamps', async () => {
@@ -227,7 +230,7 @@ test('proven usage prices only strict RFC3339 transcript timestamps', async () =
   }
 });
 
-test('incomplete proven usage omits all response token totals while preserving the raw assistant model', () => {
+test('incomplete proven usage is not added to the immutable response payload', () => {
   const home = temp('prism-realtime-incomplete-home-');
   const data = temp('prism-realtime-incomplete-data-');
   const file = path.join(home, 'turn.jsonl');
@@ -258,7 +261,7 @@ test('incomplete proven usage omits all response token totals while preserving t
   for (const key of ['input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_creation_tokens', 'cost_usd', 'cost_catalog_revision', 'cost_kind']) {
     assert.equal(Object.hasOwn(response, key), false);
   }
-  assert.equal(response.model, 'raw-unpriced-model');
+  assert.equal(Object.hasOwn(response, 'model'), false);
 });
 test('failed response capture retains accounting after the active turn is consumed', async () => {
   const home = temp('prism-realtime-failed-response-home-');
@@ -300,6 +303,69 @@ test('failed response capture retains accounting after the active turn is consum
   assert.equal(summary.contextHealth.turnCount, 1);
   assert.equal(summary.consumedTotals.input, 321);
   assert.equal(summary.processedUsageIds.length, 1);
+});
+
+test('Stop publishes one minimal first response before malformed configuration can block delivery', () => {
+  const home = temp('prism-realtime-minimal-home-');
+  const data = temp('prism-realtime-minimal-data-');
+  const promptId = 'minimal-prompt';
+  const sessionId = 'minimal-response';
+  process.env.CLAUDE_PLUGIN_DATA = data;
+  active(sessionId, promptId, path.join(home, 'missing-transcript.jsonl'));
+  const configFile = path.join(home, '.prism', 'config.json');
+  fs.mkdirSync(path.dirname(configFile), { recursive: true });
+  fs.writeFileSync(configFile, '{malformed');
+  const invoke = (responseText) => spawnSync(process.execPath, [STOP], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    input: JSON.stringify({ session_id: sessionId, prompt_id: promptId, last_assistant_message: responseText }),
+    env: { ...process.env, HOME: home, CLAUDE_PLUGIN_DATA: data },
+  });
+
+  const first = invoke('first immutable answer');
+  assert.equal(first.status, 0, first.stderr);
+  const [pending] = require('../lib/response-outbox').listPending();
+  assert.deepEqual(pending.payload, {
+    tool_session_id: sessionId,
+    prompt_id: SERVER_PROMPT_ID,
+    client_event_id: `event-${sessionId}`,
+    host_prompt_id: promptId,
+    response_operation_id: pending.id,
+    response_text: 'first immutable answer',
+  });
+  assert.equal(require('../lib/response-outbox').listPending().length, 1);
+  assert.equal(session.readTurn(sessionId).active.status, 'consumed');
+  assert.equal(session.readSummary(sessionId).turnLog.length, 1);
+
+  const second = invoke('later conflicting answer');
+  assert.equal(second.status, 0, second.stderr);
+  const [replayed] = require('../lib/response-outbox').listPending();
+  assert.equal(replayed.id, pending.id);
+  assert.equal(replayed.payload.response_text, 'first immutable answer');
+  assert.equal(session.readSummary(sessionId).turnLog.length, 1);
+});
+
+test('Stop leaves a captured turn unconsumed when its minimal durable response exceeds 2MiB', () => {
+  const home = temp('prism-realtime-response-overflow-home-');
+  const data = temp('prism-realtime-response-overflow-data-');
+  const sessionId = 'response-overflow';
+  const promptId = 'response-overflow-prompt';
+  process.env.CLAUDE_PLUGIN_DATA = data;
+  active(sessionId, promptId, path.join(home, 'missing-transcript.jsonl'));
+  const result = spawnSync(process.execPath, [STOP], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    input: JSON.stringify({
+      session_id: sessionId,
+      prompt_id: promptId,
+      last_assistant_message: 'x'.repeat(2 * 1024 * 1024),
+    }),
+    env: runtimeEnv(home, data, { apiKey: '', ingest_url: 'http://127.0.0.1:1', show_realtime_summary: false }),
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /Response capture pending: oversized response/);
+  assert.equal(session.readTurn(sessionId).active.status, 'captured');
+  assert.deepEqual(require('../lib/response-outbox').listPending(), []);
 });
 
 test('control, stale, expired, prompt mismatch, and transcript lag leave active records unconsumed', async () => {
@@ -448,7 +514,7 @@ test('renderScoreLine renders live, settled, scoring, and no-score states', () =
   assert.equal(renderScoreLine({ state: 'scoring' }, 0.1, false, 2), '[Prism] scoring… · $0.100 · 2 turns');
   assert.equal(renderScoreLine({ state: 'no score' }, 0.4, true, 12), '[Prism] no score · cost n/a · 12 turns');
 });
-test('exact authorization skips malformed prompt ids, expired records, and compact or failed barriers', () => {
+test('malformed prompt IDs skip, while an expired captured turn still publishes its immutable response', () => {
   const home = temp('prism-realtime-guards-home-');
   const data = temp('prism-realtime-guards-data-');
   const file = path.join(home, 'turn.jsonl');
@@ -476,7 +542,7 @@ test('exact authorization skips malformed prompt ids, expired records, and compa
     input: JSON.stringify({ session_id: 'expired', prompt_id: promptId, transcript_path: file, last_assistant_message: text }),
     env: { ...process.env, HOME: home, CLAUDE_PLUGIN_DATA: data },
   }).stdout, '');
-  assert.equal(session.readTurn('expired').active.status, 'captured');
+  assert.equal(session.readTurn('expired').active.status, 'consumed');
 
   active('compact', promptId, file);
   session.advanceCompactBarrier('compact');
@@ -523,7 +589,7 @@ test('show_realtime_summary off suppresses stdout but retains exact capture and 
   assert.equal(session.readSummary('summary-off').contextHealth.turnCount, 1);
   assert.equal(fs.existsSync(marker), true);
 });
-test('oversized boundaries fail closed, while structural proof rejects later users and ignores sidechains', async () => {
+test('oversized and malformed transcripts do not prevent durable response publication', async () => {
   const dir = temp('prism-realtime-boundary-');
   const oversized = path.join(dir, 'oversized.jsonl');
   fs.writeFileSync(oversized, `${'x'.repeat(MAX_TRANSCRIPT_BYTES + 1)}\n${JSON.stringify({ type: 'user', message: { role: 'user' } })}\n`);
@@ -535,10 +601,14 @@ test('oversized boundaries fail closed, while structural proof rejects later use
     cwd: ROOT,
     encoding: 'utf8',
     input: JSON.stringify({ session_id: 'oversized-stop', prompt_id: 'host', transcript_path: oversized, last_assistant_message: 'answer' }),
-    env: { ...process.env, CLAUDE_PLUGIN_DATA: data },
+    env: runtimeEnv(dir, data, { apiKey: '', ingest_url: 'http://127.0.0.1:1', show_realtime_summary: false }),
   });
   assert.equal(stop.status, 0, stop.stderr);
-  assert.equal(session.readTurn('oversized-stop').active.status, 'captured');
+  assert.equal(session.readTurn('oversized-stop').active.status, 'consumed');
+  const [pending] = require('../lib/response-outbox').listPending();
+  assert.deepEqual(Object.keys(pending.payload).sort(), [
+    'client_event_id', 'host_prompt_id', 'prompt_id', 'response_operation_id', 'response_text', 'tool_session_id',
+  ]);
 
   const sidechain = JSON.stringify({ type: 'assistant', isSidechain: true, message: { role: 'assistant', isSidechain: true, stop_reason: 'end_turn', content: 'x'.repeat(900_000), usage: { input_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1 } } });
   const validAssistant = JSON.stringify({ type: 'assistant', uuid: 'top-level', message: { role: 'assistant', stop_reason: 'end_turn', content: 'answer', model: 'claude-sonnet-4-6', usage: { input_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1 } } });
@@ -602,6 +672,10 @@ test('concurrent Stop hooks have exactly one compare-and-swap winner', async () 
   assert.deepEqual(results.map((result) => result.code), [0, 0]);
   assert.equal(results.filter((result) => result.stdout.includes('Realtime summary unavailable')).length, 1);
   assert.equal(session.readTurn('concurrent-stop').active.status, 'consumed');
+  const pending = require('../lib/response-outbox').listPending();
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0].payload.response_text, text);
+  assert.equal(session.readSummary('concurrent-stop').turnLog.length, 1);
 });
 
 test('consumeUsage prices records by their transcript timestamp and propagates the catalog revision', () => {

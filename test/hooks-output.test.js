@@ -159,7 +159,7 @@ function writeSuccessfulIngestInterceptor(home) {
     '  request.write = () => {};',
     '  request.destroy = () => {};',
     '  request.end = () => {',
-    '    const response = new events.EventEmitter();',
+    "    const response = Object.assign(new events.EventEmitter(), { headers: { 'content-type': 'application/json' } });",
     "    if (url.pathname === '/v1/score_v3/realtime/sub-sessions') { response.statusCode = 200; callback(response); response.emit('data', Buffer.from(realtimeRows)); response.emit('end'); return; }",
     "    response.statusCode = url.pathname === '/v1/prompts' ? 201 : 202;",
     '    callback(response);',
@@ -202,7 +202,7 @@ function writeCrashAfterPrompt2xxInterceptor(home) {
     '  request.destroy = () => {};',
     '  request.end = () => {',
     "    fs.writeFileSync(process.env.PRISM_CRASH_MARKER, url.pathname);",
-    '    const response = new events.EventEmitter();',
+    "    const response = Object.assign(new events.EventEmitter(), { headers: { 'content-type': 'application/json' } });",
     '    response.statusCode = 201;',
     '    callback(response);',
     "    response.emit('data', Buffer.from('{\"id\":\"5e1f8f6e-4b2a-4c3d-9e0f-1a2b3c4d5e6f\"}'));",
@@ -439,6 +439,25 @@ test('non-string prompts advance only control barriers without posting', () => {
     assert.equal(JSON.stringify(turn).includes(SENTINEL), false);
   }
 });
+
+test('a present invalid host prompt ID advances the barrier without creating a new active turn or outbox intent', () => {
+  const home = makeTempDir('prism-invalid-host-home-');
+  const dataDir = makeTempDir('prism-invalid-host-data-');
+  const sessionId = 'invalid-host-submit';
+  seedActive(dataDir, sessionId);
+  const result = spawnSync(process.execPath, [SUBMIT_HANDLER], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    input: JSON.stringify({ session_id: sessionId, prompt_id: ' invalid-host', prompt: 'normal prompt' }),
+    env: runtimeEnv(home, dataDir, { apiKey: 'prism_invalid_host', ingest_url: 'http://127.0.0.1:9' }),
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const turn = readSessionRecord(dataDir, () => session.readTurn(sessionId));
+  assert.equal(turn.epoch, 2);
+  assert.equal(turn.kind, 'normal-pending');
+  assert.equal(turn.active.status, 'invalidated');
+  assert.deepEqual(readSessionRecord(dataDir, () => require('../lib/response-outbox').listPending()), []);
+});
 test('SessionStart accepts an opaque config key without fetch, OTEL repair, or env-file writes', () => {
   const home = makeTempDir('prism-session-start-config-home-');
   const dataDir = makeTempDir('prism-session-start-config-data-');
@@ -612,6 +631,46 @@ test('SessionStart skips activation when the lifecycle barrier is unavailable', 
   assert.equal(fs.existsSync(activationMarker), false);
 });
 
+test('SessionStart advances the current lifecycle barrier before cleanup and the shared outbox drain', () => {
+  const home = makeTempDir('prism-session-order-home-');
+  const dataDir = makeTempDir('prism-session-order-data-');
+  const sessionId = 'session-order';
+  const marker = path.join(home, 'order');
+  const preload = path.join(home, 'observe-order.js');
+  seedActive(dataDir, sessionId);
+  seedFreshPluginUpdateCache(dataDir);
+  fs.writeFileSync(preload, [
+    "const fs = require('node:fs');",
+    "const Module = require('node:module');",
+    'const load = Module._load;',
+    'Module._load = function(request, parent, isMain) {',
+    '  const value = load.call(this, request, parent, isMain);',
+    "  if (parent && parent.filename.endsWith('session-start-handler.js') && request === '../../lib/session') {",
+    '    const advance = value.advanceBarrier; const cleanup = value.cleanupStaleSessions;',
+    "    value.advanceBarrier = (...args) => { fs.appendFileSync(process.env.PRISM_ORDER_MARKER, 'advance\\n'); return advance(...args); };",
+    "    value.cleanupStaleSessions = (...args) => { fs.appendFileSync(process.env.PRISM_ORDER_MARKER, 'cleanup\\n'); return cleanup(...args); };",
+    '  }',
+    "  if (parent && parent.filename.endsWith('session-start-handler.js') && request === '../../lib/response-outbox') {",
+    '    const drain = value.drain;',
+    "    value.drain = (...args) => { fs.appendFileSync(process.env.PRISM_ORDER_MARKER, 'drain\\n'); return drain(...args); };",
+    '  }',
+    '  return value;',
+    '};',
+  ].join('\n'));
+  const result = spawnSync(process.execPath, [SESSION_START_HANDLER], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    input: JSON.stringify({ session_id: sessionId, source: 'startup' }),
+    env: runtimeEnv(home, dataDir, { apiKey: '', ingest_url: 'http://127.0.0.1:1' }, {
+      PRISM_ORDER_MARKER: marker,
+      NODE_OPTIONS: `--require=${preload}`,
+    }),
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(fs.readFileSync(marker, 'utf8').trim().split('\n'), ['advance', 'cleanup', 'drain']);
+  assertLifecycleInvalidated(dataDir, sessionId);
+});
+
 test('SessionStart projects activated metadata before one combined restart and update notice', () => {
   const home = makeTempDir('prism-session-version-home-');
   const dataDir = makeTempDir('prism-session-version-data-');
@@ -688,7 +747,7 @@ test('normal prompts bind the captured server id to an opaque frozen payload', (
     '  request.destroy = () => {};',
     '  request.end = () => {',
     "    if (url.pathname === '/v1/prompts') fs.writeFileSync(process.env.PRISM_PROMPT_MARKER, body);",
-    '    const response = new events.EventEmitter();',
+    "    const response = Object.assign(new events.EventEmitter(), { headers: { 'content-type': 'application/json' } });",
     '    response.statusCode = 201;',
     '    callback(response);',
     "    response.emit('data', Buffer.from('{\"id\":\"5e1f8f6e-4b2a-4c3d-9e0f-1a2b3c4d5e6f\"}'));",
@@ -727,6 +786,7 @@ test('normal prompts bind the captured server id to an opaque frozen payload', (
   assert.equal(turn.active.status, 'captured');
   assert.equal(turn.active.clientEventId, sent.client_event_id);
   assert.equal(turn.active.submitPromptId, 'submit-host-prompt-id');
+  assert.equal(sent.host_prompt_id, 'submit-host-prompt-id');
   assert.equal(turn.active.serverPromptId, '5e1f8f6e-4b2a-4c3d-9e0f-1a2b3c4d5e6f');
   assert.deepEqual(Object.keys(sent.metadata.git).sort(), [
     'branch', 'dirty', 'head', 'host', 'owner', 'repo', 'worktree',
@@ -966,6 +1026,48 @@ test('SessionStart replays a prior-session prompt and promotes its durable serve
   assert.equal(priorTurn.active.serverPromptId, '5e1f8f6e-4b2a-4c3d-9e0f-1a2b3c4d5e6f');
   assert.deepEqual(readSessionRecord(dataDir, () => require('../lib/response-outbox').listPending()), []);
 });
+
+test('SessionStart replays a hostless legacy prompt, while Stop remains exact-ID only', () => {
+  const home = makeTempDir('prism-session-legacy-replay-home-');
+  const dataDir = makeTempDir('prism-session-legacy-replay-data-');
+  const sessionId = 'legacy-session-replay';
+  writeRuntimeConfig(home, { apiKey: 'prism_legacy_replay', ingest_url: 'http://127.0.0.1:9' });
+  const crashMarker = path.join(home, 'legacy-first-ack');
+  const submit = spawnSync(process.execPath, [SUBMIT_HANDLER], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    input: JSON.stringify({ session_id: sessionId, prompt: 'recover legacy prompt' }),
+    env: runtimeEnv(home, dataDir, { apiKey: 'prism_legacy_replay', ingest_url: 'http://127.0.0.1:9' }, {
+      PRISM_CRASH_MARKER: crashMarker,
+      NODE_OPTIONS: `--require=${writeCrashAfterPrompt2xxInterceptor(home)}`,
+    }),
+  });
+  assert.equal(submit.status, 0, submit.stderr);
+  assert.equal(fs.readFileSync(crashMarker, 'utf8'), '/v1/prompts');
+  const [pending] = readSessionRecord(dataDir, () => require('../lib/response-outbox').listPending());
+  assert.ok(pending.legacyPromotion);
+  assert.equal(Object.hasOwn(pending.payload, 'host_prompt_id'), false);
+  assert.equal(readSessionRecord(dataDir, () => session.readTurn(sessionId)).active.status, 'submitting');
+  const start = runSessionStart(home, dataDir, { session_id: 'restart-session', source: 'startup' }, {
+    NODE_OPTIONS: `--require=${writeSuccessfulIngestInterceptor(home)}`,
+  });
+  assert.equal(start.status, 0, start.stderr);
+  const promoted = readSessionRecord(dataDir, () => session.readTurn(sessionId));
+  assert.equal(promoted.active.status, 'captured');
+  assert.equal(promoted.active.submitPromptId, undefined);
+  assert.equal(promoted.active.serverPromptId, '5e1f8f6e-4b2a-4c3d-9e0f-1a2b3c4d5e6f');
+
+  const stop = spawnSync(process.execPath, [STOP_HANDLER], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    input: JSON.stringify({ session_id: sessionId, last_assistant_message: 'hostless answer' }),
+    env: runtimeEnv(home, dataDir, { apiKey: 'prism_legacy_replay', ingest_url: 'http://127.0.0.1:9' }),
+  });
+  assert.equal(stop.status, 0, stop.stderr);
+  assert.equal(readSessionRecord(dataDir, () => session.readTurn(sessionId)).active.status, 'captured');
+  const next = readSessionRecord(dataDir, () => session.advanceBarrier(sessionId, 'normal-pending'));
+  assert.equal(next.active.status, 'invalidated');
+});
 test('submit treats the nil-UUID dropped-prompt acknowledgment as terminal', () => {
   const home = makeTempDir('prism-submit-nil-id-home-');
   const dataDir = makeTempDir('prism-submit-nil-id-data-');
@@ -975,7 +1077,7 @@ test('submit treats the nil-UUID dropped-prompt acknowledgment as terminal', () 
     "const http = require('node:http');",
     'http.request = (url, options, callback) => {',
     '  const request = new events.EventEmitter(); request.write = () => {}; request.destroy = () => {};',
-    '  request.end = () => { const response = new events.EventEmitter(); response.statusCode = 200; callback(response); response.emit("data", Buffer.from(\'{"id":"00000000-0000-0000-0000-000000000000"}\')); response.emit("end"); };',
+    "  request.end = () => { const response = Object.assign(new events.EventEmitter(), { headers: { 'content-type': 'application/json' } }); response.statusCode = 200; callback(response); response.emit(\"data\", Buffer.from('{\\\"id\\\":\\\"00000000-0000-0000-0000-000000000000\\\"}')); response.emit(\"end\"); };",
     '  return request;',
     '};',
   ].join('\n'));
