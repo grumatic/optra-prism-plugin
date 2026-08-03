@@ -14,8 +14,8 @@ if [ -z "$PRISM_PLUGIN_ROOT" ]; then
 fi
 #
 # This is the only consumer of hook stdin. It advances the lifecycle barrier
-# before any version activation or update check, then emits at most one JSON
-# system message.
+# before durable recovery, version activation, or update checks, then emits at
+# most one JSON system message.
 PRISM_PLUGIN_ROOT="$PRISM_PLUGIN_ROOT" \
   node "$PRISM_PLUGIN_ROOT/hooks/scripts/session-start-handler.js" || true
 set -euo pipefail
@@ -57,61 +57,6 @@ if ! INGEST_URL=$(PRISM_PLUGIN_ROOT="$PLUGIN_ROOT" node -e '
 '); then
   exit 0
 fi
-
-# ─── Recover prior durable ingest intents ───
-# Run only after key and URL resolution, with the same bounded hook budget used
-# by submit/stop. Prompt entries are acknowledged only after session promotion.
-PRISM_PLUGIN_ROOT="$PLUGIN_ROOT" node <<'NODE' || true
-  const path = require("path");
-  const root = process.env.PRISM_PLUGIN_ROOT;
-  const { sendPrompt, sendResponse } = require(path.join(root, "lib", "ingest"));
-  const { drain } = require(path.join(root, "lib", "response-outbox"));
-  const { promoteActive, readTurn, validServerPromptId } = require(path.join(root, "lib", "session"));
-
-  function serverPromptId(body) {
-    try {
-      const parsed = JSON.parse(body);
-      return parsed && validServerPromptId(parsed.id) ? parsed.id : null;
-    } catch {
-      return null;
-    }
-  }
-  function isTerminalDroppedPromptAck(body) {
-    try {
-      return JSON.parse(body).id === "00000000-0000-0000-0000-000000000000";
-    } catch {
-      return false;
-    }
-  }
-
-  function promptIsPromoted(entry, promptId) {
-    const promotion = entry.promotion;
-    if (!promotion) return true;
-    if (!promptId) return false;
-    if (promoteActive(promotion.sessionId, promotion.clientEventId, promotion.hostPromptId, promptId)) return true;
-    const turn = readTurn(promotion.sessionId);
-    return Boolean(
-      turn
-      && turn.epoch === promotion.epoch
-      && turn.active
-      && turn.active.clientEventId === promotion.clientEventId
-      && turn.active.submitPromptId === promotion.hostPromptId
-      && turn.active.serverPromptId === promptId
-      && ["captured", "consumed"].includes(turn.active.status)
-    );
-  }
-
-  drain(async (entry, options) => {
-    const result = await (entry.kind === "prompt" ? sendPrompt(entry.payload, options) : sendResponse(entry.payload, options));
-    if (entry.kind !== "prompt" || !result || result.status < 200 || result.status >= 300) return result;
-    // Ingest uses 200 plus the nil UUID for intentionally dropped internal
-    // utility prompts. It is terminal, but must not promote a server prompt id.
-    return {
-      ...result,
-      ack: isTerminalDroppedPromptAck(result.body) || promptIsPromoted(entry, serverPromptId(result.body)),
-    };
-  }, { limit: 32, maxElapsedMs: 2000 }).catch(() => {});
-NODE
 
 # ─── Refresh model catalog cache (detached, fail-open) ───
 #

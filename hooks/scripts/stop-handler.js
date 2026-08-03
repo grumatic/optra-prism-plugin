@@ -1,119 +1,97 @@
 #!/usr/bin/env node
 /**
- * Stop correlation is intentionally exact: a captured submit must match this
- * host Stop prompt_id, its epoch, and a bounded transcript turn proof before
- * the active record is consumed. There is no cross-turn or session fallback.
+ * Stop first publishes a minimal immutable response intent. Transcript and
+ * realtime work happen only after that intent is durable.
  */
 
 const crypto = require('crypto');
-const { API_KEY, INGEST_URL, SHOW_REALTIME_SUMMARY, DATA_DIR } = require('../../lib/env');
 const { readStdin } = require('../../lib/stdin');
-const { sendPrompt, sendResponse, fetchRealtimeSubSessions } = require('../../lib/ingest');
-const { readTurn, consumeActive, updateSummary, promoteActive, validServerPromptId } = require('../../lib/session');
-const { enqueue, drain, replayPrompt } = require('../../lib/response-outbox');
-const { loadCatalog } = require('../../lib/model-catalog');
 const {
-  validPromptId,
-  proveTranscriptTurn,
-  consumeUsage,
-  selectScoreRow,
-  mapTurnRange,
-  renderScoreLine,
-  assistantContentHash,
-} = require('../../lib/realtime');
-
-const ACTIVE_TTL_MS = 30 * 60 * 1000;
+  readTurn,
+  updateSummary,
+  validServerPromptId,
+  publishAndConsumeActive,
+} = require('../../lib/session');
+const {
+  MAX_ENTRY_BYTES,
+  enqueueDetailed,
+  serializedEntryBytes,
+  drain,
+  replayPrompt,
+} = require('../../lib/response-outbox');
+const { validHostPromptId } = require('../../lib/host-prompt-id');
 
 function sha256(value) {
   return typeof value === 'string' ? crypto.createHash('sha256').update(value).digest('hex') : null;
 }
+
 function responseOperationId(data, active) {
   return sha256(`${data.session_id}\n${active.clientEventId}\n${active.submitPromptId}`);
 }
 
-function persistedServerPromptId(body) {
+function validSessionId(value) {
+  return typeof value === 'string' && value.length > 0 && value.length <= 1024;
+}
+
+function reportLocalGap(reason, serializedBytes, operationId) {
+  const size = Number.isSafeInteger(serializedBytes) ? ` bytes=${serializedBytes}` : '';
+  const operation = typeof operationId === 'string' ? ` operation=${operationId}` : '';
+  process.stderr.write(`[Prism] Response capture pending: ${reason}.${size}${operation}\n`);
+}
+
+function recordActiveAge(active, operationId) {
+  const submittedAt = active && Date.parse(active.submittedAt);
+  const age = Date.now() - submittedAt;
+  if (!Number.isFinite(age) || typeof operationId !== 'string') return;
   try {
-    const parsed = JSON.parse(body);
-    return parsed && validServerPromptId(parsed.id) ? parsed.id : null;
-  } catch {
-    return null;
-  }
-}
-function isTerminalDroppedPromptAck(body) {
-  try {
-    return JSON.parse(body).id === '00000000-0000-0000-0000-000000000000';
-  } catch {
-    return false;
-  }
-}
-
-function promptIsPromoted(entry, serverPromptId) {
-  const promotion = entry.promotion;
-  if (!promotion) return true;
-  if (!serverPromptId) return false;
-  const promoted = promoteActive(
-    promotion.sessionId,
-    promotion.clientEventId,
-    promotion.hostPromptId,
-    serverPromptId,
-  );
-  if (promoted) return true;
-  const turn = readTurn(promotion.sessionId);
-  return Boolean(
-    turn
-    && turn.epoch === promotion.epoch
-    && turn.active
-    && turn.active.clientEventId === promotion.clientEventId
-    && turn.active.submitPromptId === promotion.hostPromptId
-    && turn.active.serverPromptId === serverPromptId
-    && ['captured', 'consumed'].includes(turn.active.status),
-  );
-}
-
-async function deliverOutboxEntry(entry, options = {}) {
-  const result = await (entry.kind === 'prompt'
-    ? sendPrompt(entry.payload, options)
-    : sendResponse(entry.payload, options));
-  if (entry.kind !== 'prompt' || !result || result.status < 200 || result.status >= 300) return result;
-  return {
-    ...result,
-    // Ingest uses 200 plus the nil UUID for intentionally dropped internal
-    // utility prompts. It is terminal, but must not promote a server prompt id.
-    ack: isTerminalDroppedPromptAck(result.body)
-      || promptIsPromoted(entry, persistedServerPromptId(result.body)),
-  };
-}
-
-async function drainOutbox(prioritizeIds = []) {
-  return drain(deliverOutboxEntry, { limit: 32, maxElapsedMs: 2000, prioritizeIds });
-}
-
-function emitSystemMessage(message) {
-  if (SHOW_REALTIME_SUMMARY && message) process.stdout.write(`${JSON.stringify({ systemMessage: message })}\n`);
+    const { createDebug } = require('../../lib/debug');
+    createDebug('stop-handler')(
+      `STOP durable publication operation_id=${operationId} active_age_ms=${Math.max(0, Math.trunc(age))}`,
+    );
+  } catch {}
 }
 
 function activeIsEligible(turn, data) {
   const active = turn && turn.active;
-  if (!active || turn.kind !== 'normal-pending' || active.status !== 'captured') return false;
-  if (!validPromptId(data.prompt_id) || !validPromptId(active.submitPromptId) || active.submitPromptId !== data.prompt_id) return false;
-  const submittedAt = Date.parse(active.submittedAt);
-  return Number.isFinite(submittedAt) && Date.now() - submittedAt >= 0 && Date.now() - submittedAt <= ACTIVE_TTL_MS;
+  return Boolean(
+    active
+    && turn.kind === 'normal-pending'
+    && active.status === 'captured'
+    && validServerPromptId(active.serverPromptId)
+    && validHostPromptId(data.prompt_id)
+    && validHostPromptId(active.submitPromptId)
+    && active.submitPromptId === data.prompt_id,
+  );
 }
+
 function activeIsSubmitting(turn, data) {
   const active = turn && turn.active;
   return Boolean(
     active
     && turn.kind === 'normal-pending'
     && active.status === 'submitting'
-    && validPromptId(data.prompt_id)
-    && validPromptId(active.submitPromptId)
+    && validHostPromptId(data.prompt_id)
+    && validHostPromptId(active.submitPromptId)
+    && active.submitPromptId === data.prompt_id,
+  );
+}
+
+function activeIsConsumedEligible(turn, data) {
+  const active = turn && turn.active;
+  return Boolean(
+    active
+    && turn.kind === 'normal-pending'
+    && active.status === 'consumed'
+    && validServerPromptId(active.serverPromptId)
+    && validHostPromptId(data.prompt_id)
+    && validHostPromptId(active.submitPromptId)
     && active.submitPromptId === data.prompt_id,
   );
 }
 
 async function recoverSubmittingTurn(turn, data) {
   if (!activeIsSubmitting(turn, data)) return turn;
-
+  const { deliverOutboxEntry } = require('../../lib/outbox-delivery');
   const active = turn.active;
   const outcomes = await replayPrompt({
     sessionId: data.session_id,
@@ -121,168 +99,211 @@ async function recoverSubmittingTurn(turn, data) {
     clientEventId: active.clientEventId,
     hostPromptId: active.submitPromptId,
   }, deliverOutboxEntry, { maxElapsedMs: 2000 });
-  if (!outcomes.some((outcome) => outcome.acked)) return null;
-  return readTurn(data.session_id);
+  const recovered = readTurn(data.session_id);
+  if (outcomes.some((outcome) => outcome.acked) || activeIsEligible(recovered, data)) return recovered;
+  return null;
 }
 
-function summaryUpdate(summary, proof, catalog) {
-  const validUsage = proof.usage.filter(Boolean);
-  const invalidUsage = validUsage.length !== proof.usage.length;
-  const { totals, addedIds } = consumeUsage(validUsage, summary.processedUsageIds, catalog);
-  const last = proof.usage.at(-1);
-  const previous = summary.contextHealth;
-  const contextHealth = last ? {
-    ...previous,
-    turnCount: (previous.turnCount || 0) + 1,
-  } : previous;
-  return {
-    ...summary,
-    consumedTotals: {
-      input: summary.consumedTotals.input + totals.input,
-      cacheRead: summary.consumedTotals.cacheRead + totals.cacheRead,
-      cacheCreation: summary.consumedTotals.cacheCreation + totals.cacheCreation,
-      output: summary.consumedTotals.output + totals.output,
-      cost: summary.consumedTotals.cost + totals.cost,
-      unknownCost: summary.consumedTotals.unknownCost || totals.unknownCost || invalidUsage,
-    },
-    processedUsageIds: [...summary.processedUsageIds, ...addedIds].slice(-500),
-    contextHealth,
-  };
-}
-
-function assistantModel(record) {
-  const message = record && record.message;
-  if (message && typeof message.model === 'string') return message.model;
-  return record && typeof record.model === 'string' ? record.model : undefined;
-}
-
-async function main() {
-  const catalog = loadCatalog(DATA_DIR, INGEST_URL);
-  const data = await readStdin();
-  if (!data || typeof data.session_id !== 'string' || !validPromptId(data.prompt_id)) return;
-  let turn = readTurn(data.session_id);
-  turn = await recoverSubmittingTurn(turn, data);
-  if (!turn || !activeIsEligible(turn, data)) return;
-
+function minimalResponseEntry(data, turn) {
   const active = turn.active;
-  const proof = await proveTranscriptTurn({
-    transcriptPath: data.transcript_path,
-    boundary: active.transcriptBoundary,
-    promptId: data.prompt_id,
-  });
-  const lastHash = proof && assistantContentHash(proof.assistants.at(-1));
-  if (!proof || !lastHash || lastHash !== sha256(data.last_assistant_message)) return;
-
-  const validUsage = proof.usage.filter(Boolean);
-  const usageComplete = validUsage.length === proof.usage.length;
-  const { totals } = consumeUsage(validUsage, [], catalog);
-  const hasPricedCost = usageComplete
-    && !totals.unknownCost
-    && Number.isSafeInteger(totals.costCatalogRevision)
-    && totals.costCatalogRevision > 0;
   const responsePayload = {
     tool_session_id: data.session_id,
     prompt_id: active.serverPromptId,
     client_event_id: active.clientEventId,
     host_prompt_id: active.submitPromptId,
-    response_text: typeof data.last_assistant_message === 'string' ? data.last_assistant_message : '',
-    model: assistantModel(proof.assistants.at(-1)),
-    ...(usageComplete ? {
-      input_tokens: totals.input,
-      output_tokens: totals.output,
-      cache_read_tokens: totals.cacheRead,
-      cache_creation_tokens: totals.cacheCreation,
-    } : {}),
-    ...(hasPricedCost ? {
-      cost_usd: totals.cost,
-      cost_catalog_revision: totals.costCatalogRevision,
-      cost_kind: 'public_list_price_estimate',
-    } : {}),
+    response_operation_id: responseOperationId(data, active),
+    response_text: data.last_assistant_message,
   };
-  responsePayload.response_operation_id = responseOperationId(data, active);
-  if (!enqueue({
+  return {
     id: responsePayload.response_operation_id,
     kind: 'response',
     payload: responsePayload,
-  })) return;
+    deliveryFence: {
+      sessionId: data.session_id,
+      epoch: turn.epoch,
+      clientEventId: active.clientEventId,
+      submitPromptId: active.submitPromptId,
+      serverPromptId: active.serverPromptId,
+    },
+    createdAt: new Date().toISOString(),
+  };
+}
 
-  // The response intent is durable before the compare-and-swap consumes the
-  // active turn, so a transport failure is replayed by the next hook run.
-  if (!consumeActive(data.session_id, {
+function recordCompletedTurn(sessionId) {
+  const completedAt = new Date().toISOString();
+  return updateSummary(sessionId, (current) => {
+    const contextHealth = {
+      ...current.contextHealth,
+      turnCount: (current.contextHealth.turnCount || 0) + 1,
+    };
+    return {
+      ...current,
+      contextHealth,
+      turnLog: [
+        ...(current.turnLog || []),
+        { turn: contextHealth.turnCount, completedAt },
+      ].slice(-50),
+    };
+  });
+}
+
+async function enrichAfterPublication(data, active, summary, delivered) {
+  try {
+    const { API_KEY, INGEST_URL, SHOW_REALTIME_SUMMARY, DATA_DIR } = require('../../lib/env');
+    const { loadCatalog } = require('../../lib/model-catalog');
+    const {
+      proveTranscriptTurn,
+      consumeUsage,
+      selectScoreRow,
+      mapTurnRange,
+      renderScoreLine,
+      assistantContentHash,
+    } = require('../../lib/realtime');
+    const { fetchRealtimeSubSessions } = require('../../lib/ingest');
+    const catalog = loadCatalog(DATA_DIR, INGEST_URL);
+    const proof = await proveTranscriptTurn({
+      transcriptPath: data.transcript_path,
+      boundary: active.transcriptBoundary,
+      promptId: active.submitPromptId,
+    });
+    let updatedSummary = summary;
+    let totals = { cost: 0, unknownCost: true };
+    if (proof && assistantContentHash(proof.assistants.at(-1)) === sha256(data.last_assistant_message)) {
+      updatedSummary = updateSummary(data.session_id, (current) => {
+        const usage = proof.usage.filter(Boolean);
+        const { totals: added, addedIds } = consumeUsage(usage, current.processedUsageIds, catalog);
+        totals = added;
+        return {
+          ...current,
+          consumedTotals: {
+            input: current.consumedTotals.input + added.input,
+            cacheRead: current.consumedTotals.cacheRead + added.cacheRead,
+            cacheCreation: current.consumedTotals.cacheCreation + added.cacheCreation,
+            output: current.consumedTotals.output + added.output,
+            cost: current.consumedTotals.cost + added.cost,
+            unknownCost: current.consumedTotals.unknownCost || added.unknownCost || usage.length !== proof.usage.length,
+          },
+          processedUsageIds: [...current.processedUsageIds, ...addedIds].slice(-500),
+        };
+      }) || updatedSummary;
+    }
+    if (!SHOW_REALTIME_SUMMARY) return;
+    if (!API_KEY || !INGEST_URL) {
+      process.stdout.write(`${JSON.stringify({ systemMessage: '[Prism] Realtime summary unavailable: ingest is not configured.' })}\n`);
+      return;
+    }
+    if (!delivered || !delivered.acked) {
+      process.stdout.write(`${JSON.stringify({ systemMessage: '[Prism] Realtime summary unavailable: response capture failed.' })}\n`);
+      return;
+    }
+    const rows = await fetchRealtimeSubSessions({ claudeSessionId: data.session_id, limit: 5 });
+    let serverScore = updatedSummary && updatedSummary.serverScore
+      ? updatedSummary.serverScore
+      : { state: 'no score' };
+    if (Array.isArray(rows)) {
+      const selected = selectScoreRow(rows);
+      if (selected) {
+        const range = mapTurnRange(
+          updatedSummary && updatedSummary.turnLog,
+          selected.row,
+          updatedSummary && updatedSummary.contextHealth.turnCount,
+        );
+        serverScore = {
+          state: selected.state,
+          grade: selected.state === 'live' ? selected.row.letter_grade : (selected.row.prompt_grade || selected.row.letter_grade),
+          intent: selected.row.intent_class || null,
+          goalComplete: selected.row.goal_complete === true,
+          rework: selected.row.rework === true,
+          turnStart: range.turnStart,
+          turnEnd: range.turnEnd,
+          subSessionId: selected.row.sub_session_id,
+          fetchedAt: new Date().toISOString(),
+        };
+        const stored = updateSummary(data.session_id, (current) => ({ ...current, serverScore }));
+        if (stored) updatedSummary = stored;
+      } else {
+        serverScore = { state: 'scoring' };
+      }
+    }
+    const display = updatedSummary || {
+      consumedTotals: { cost: totals.cost, unknownCost: totals.unknownCost },
+      contextHealth: { turnCount: 0 },
+    };
+    process.stdout.write(`${JSON.stringify({
+      systemMessage: renderScoreLine(
+        serverScore,
+        display.consumedTotals.cost,
+        display.consumedTotals.unknownCost,
+        display.contextHealth.turnCount,
+      ),
+    })}\n`);
+  } catch {}
+}
+
+async function main() {
+  const data = await readStdin();
+  if (
+    !data
+    || !validSessionId(data.session_id)
+    || !validHostPromptId(data.prompt_id)
+  ) return;
+
+  let turn = readTurn(data.session_id);
+  turn = await recoverSubmittingTurn(turn, data);
+  if (!turn) return;
+  if (activeIsConsumedEligible(turn, data)) {
+    const { deliverOutboxEntry } = require('../../lib/outbox-delivery');
+    await drain(deliverOutboxEntry, {
+      limit: 32,
+      maxElapsedMs: 2000,
+      prioritizeIds: [responseOperationId(data, turn.active)],
+    });
+    return;
+  }
+  if (!activeIsEligible(turn, data) || typeof data.last_assistant_message !== 'string') return;
+
+  const entry = minimalResponseEntry(data, turn);
+  const serializedBytes = serializedEntryBytes(entry);
+  if (serializedBytes === null || serializedBytes > MAX_ENTRY_BYTES) {
+    reportLocalGap('oversized response', serializedBytes, entry.id);
+    return;
+  }
+  const active = turn.active;
+  const publication = publishAndConsumeActive(data.session_id, {
     epoch: turn.epoch,
     clientEventId: active.clientEventId,
     submitPromptId: active.submitPromptId,
     serverPromptId: active.serverPromptId,
-  })) return;
-
-  // Local accounting is finalized once the exactly correlated turn is consumed.
-  // `processedUsageIds` keeps this safe if state is replayed.
-  const completedAt = new Date().toISOString();
-  const summary = updateSummary(data.session_id, (current) => {
-    const updated = summaryUpdate(current, proof, catalog);
+  }, () => {
+    const result = enqueueDetailed(entry);
     return {
-      ...updated,
-      turnLog: [
-        ...(updated.turnLog || []),
-        { turn: updated.contextHealth.turnCount, completedAt },
-      ].slice(-50),
+      // A deterministic operation already has an immutable first body. A
+      // concurrent Stop with different text must consume that publication,
+      // never replace it or reopen the completed turn.
+      success: ['created', 'existing', 'conflict'].includes(result.outcome),
+      result,
     };
   });
-  if (!API_KEY || !INGEST_URL) {
-    emitSystemMessage('[Prism] Realtime summary unavailable: ingest is not configured.');
+  if (!publication || publication.state === 'not_current') return;
+  if (publication.state === 'enqueue_failed') {
+    const outcome = publication.publication && publication.publication.result
+      ? publication.publication.result.outcome
+      : 'io_error';
+    reportLocalGap(outcome, serializedBytes, entry.id);
     return;
   }
-
-  const realtimeRequest = fetchRealtimeSubSessions({ claudeSessionId: data.session_id, limit: 5 });
-  const [outcomes, rows] = await Promise.all([
-    drainOutbox([responsePayload.response_operation_id]),
-    realtimeRequest,
-  ]);
-  const delivered = outcomes.find((outcome) => outcome.id === responsePayload.response_operation_id);
-  if (!delivered || !delivered.acked) {
-    emitSystemMessage('[Prism] Realtime summary unavailable: response capture failed.');
-    return;
+  const summary = publication.state === 'published' ? recordCompletedTurn(data.session_id) : null;
+  const { deliverOutboxEntry } = require('../../lib/outbox-delivery');
+  const outcomes = await drain(deliverOutboxEntry, {
+    limit: 32,
+    maxElapsedMs: 2000,
+    prioritizeIds: [entry.id],
+  });
+  const delivered = outcomes.find((outcome) => outcome.id === entry.id);
+  if (publication.state === 'published') {
+    recordActiveAge(active, entry.id);
+    await enrichAfterPublication(data, active, summary, delivered);
   }
-
-  let serverScore;
-  if (Array.isArray(rows)) {
-    const selected = selectScoreRow(rows);
-    if (selected) {
-      const range = mapTurnRange(
-        summary && summary.turnLog,
-        selected.row,
-        summary && summary.contextHealth.turnCount,
-      );
-      serverScore = {
-        state: selected.state,
-        grade: selected.state === 'live' ? selected.row.letter_grade : (selected.row.prompt_grade || selected.row.letter_grade),
-        intent: selected.row.intent_class || null,
-        goalComplete: selected.row.goal_complete === true,
-        rework: selected.row.rework === true,
-        turnStart: range.turnStart,
-        turnEnd: range.turnEnd,
-        subSessionId: selected.row.sub_session_id,
-        fetchedAt: new Date().toISOString(),
-      };
-      const stored = updateSummary(data.session_id, (current) => ({ ...current, serverScore }));
-      if (stored) serverScore = stored.serverScore;
-    } else {
-      serverScore = { state: 'scoring' };
-    }
-  } else {
-    serverScore = summary && summary.serverScore ? summary.serverScore : { state: 'no score' };
-  }
-
-  const display = summary || {
-    consumedTotals: { cost: totals.cost, unknownCost: totals.unknownCost },
-    contextHealth: { turnCount: 0 },
-  };
-  emitSystemMessage(renderScoreLine(
-    serverScore,
-    display.consumedTotals.cost,
-    display.consumedTotals.unknownCost,
-    display.contextHealth.turnCount,
-  ));
 }
 
 main().catch(() => {});

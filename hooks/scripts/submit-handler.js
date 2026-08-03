@@ -10,10 +10,7 @@ let debug;
 let advanceBarrier;
 let attachActive;
 let failBarrier;
-let promoteActive;
 let readTurn;
-let sendPrompt;
-let sendResponse;
 let enqueue;
 let drain;
 let readGit;
@@ -33,61 +30,6 @@ function readHookStdin() {
   });
 }
 
-function validPromptId(value) {
-  return typeof value === 'string' && value.length > 0 && value.length <= 1024;
-}
-function persistedServerPromptId(body) {
-  try {
-    const parsed = JSON.parse(body);
-    const { validServerPromptId } = require('../../lib/session');
-    return parsed && validServerPromptId(parsed.id) ? parsed.id : null;
-  } catch {
-    return null;
-  }
-}
-function isTerminalDroppedPromptAck(body) {
-  try {
-    return JSON.parse(body).id === '00000000-0000-0000-0000-000000000000';
-  } catch {
-    return false;
-  }
-}
-
-function promptIsPromoted(entry, serverPromptId) {
-  const promotion = entry.promotion;
-  if (!promotion || !serverPromptId) return !promotion;
-  const promoted = promoteActive(
-    promotion.sessionId,
-    promotion.clientEventId,
-    promotion.hostPromptId,
-    serverPromptId,
-  );
-  if (promoted) return true;
-  const turn = readTurn(promotion.sessionId);
-  return Boolean(
-    turn
-    && turn.epoch === promotion.epoch
-    && turn.active
-    && turn.active.clientEventId === promotion.clientEventId
-    && turn.active.submitPromptId === promotion.hostPromptId
-    && turn.active.serverPromptId === serverPromptId
-    && ['captured', 'consumed'].includes(turn.active.status),
-  );
-}
-
-async function deliverOutboxEntry(entry, options) {
-  const result = await (entry.kind === 'prompt' ? sendPrompt(entry.payload, options) : sendResponse(entry.payload, options));
-  if (entry.kind !== 'prompt' || !result || result.status < 200 || result.status >= 300) return result;
-  return {
-    ...result,
-    // Ingest uses 200 plus the nil UUID for intentionally dropped internal
-    // utility prompts. It is terminal, but must not promote a server prompt id.
-    ack: isTerminalDroppedPromptAck(result.body)
-      || promptIsPromoted(entry, persistedServerPromptId(result.body)),
-  };
-}
-
-
 function isPrismControlPrompt(prompt) {
   return /^[\x00-\x1F\s]*\/prism:/i.test(prompt);
 }
@@ -97,7 +39,7 @@ function transcriptBoundary(transcriptPath) {
   try { return { byteOffset: fs.statSync(transcriptPath).size, lineOffset: 0 }; } catch { return { byteOffset: 0, lineOffset: 0 }; }
 }
 
-function frozenPayload(data, prompt, clientEventId, git) {
+function frozenPayload(data, prompt, clientEventId, git, hostPromptId) {
   const payload = {
     prompt_text: prompt.slice(0, 2000),
     source: 'claude-code',
@@ -106,6 +48,7 @@ function frozenPayload(data, prompt, clientEventId, git) {
   };
   if (data.cwd) payload.cwd = data.cwd;
   if (git) payload.metadata = { git };
+  if (hostPromptId) payload.host_prompt_id = hostPromptId;
   return payload;
 }
 
@@ -168,7 +111,7 @@ async function main() {
   const isStringPrompt = typeof prompt === 'string';
   const isControlPrompt = !isStringPrompt || isPrismControlPrompt(prompt);
 
-  ({ advanceBarrier, attachActive, failBarrier, promoteActive, readTurn, readGit, writeGit } = require('../../lib/session'));
+  ({ advanceBarrier, attachActive, failBarrier, readTurn, readGit, writeGit } = require('../../lib/session'));
   const barrier = advanceBarrier(
     data && data.session_id,
     isControlPrompt ? 'control' : 'normal-pending',
@@ -193,12 +136,16 @@ async function main() {
   }
 
   if (isControlPrompt) return;
+  const { validHostPromptId } = require('../../lib/host-prompt-id');
+  const hostPromptPresent = data && typeof data === 'object' && Object.hasOwn(data, 'prompt_id');
+  if (hostPromptPresent && !validHostPromptId(data.prompt_id)) return;
+  const hostPromptId = validHostPromptId(data && data.prompt_id) ? data.prompt_id : null;
   const normalizedPrompt = prompt.trim();
 
   ({ collectGitContext } = require('../../lib/git'));
   const git = await gitMetadataForPrompt(data);
   const clientEventId = crypto.randomUUID();
-  const payload = frozenPayload(data, normalizedPrompt, clientEventId, git);
+  const payload = frozenPayload(data, normalizedPrompt, clientEventId, git, hostPromptId);
   const activeRecord = {
     epoch: barrier.epoch,
     clientEventId,
@@ -207,12 +154,11 @@ async function main() {
     frozenPayloadHash: payloadHash(payload),
     status: 'submitting',
   };
-  if (validPromptId(data.prompt_id)) activeRecord.submitPromptId = data.prompt_id;
+  if (hostPromptId) activeRecord.submitPromptId = hostPromptId;
   if (!attachActive(data.session_id, activeRecord)) return;
 
   const { API_KEY, INGEST_URL, SHOW_REALTIME_SUMMARY } = require('../../lib/env');
   debug = require('../../lib/debug').createDebug('submit-handler');
-  ({ sendPrompt, sendResponse } = require('../../lib/ingest'));
   ({ enqueue, drain } = require('../../lib/response-outbox'));
   if (!API_KEY) {
     failBarrier(data.session_id, barrier.epoch);
@@ -232,21 +178,32 @@ async function main() {
   }
 
   const outboxId = `prompt-${clientEventId}`;
-  if (!enqueue({
+  const promptIntent = {
     id: outboxId,
     kind: 'prompt',
     payload,
-    promotion: {
+  };
+  if (hostPromptId) {
+    promptIntent.promotion = {
       sessionId: data.session_id,
       epoch: barrier.epoch,
       clientEventId,
-      hostPromptId: data.prompt_id,
-    },
-  })) {
+      hostPromptId,
+      identityMode: 'exact',
+    };
+  } else {
+    promptIntent.legacyPromotion = {
+      sessionId: data.session_id,
+      epoch: barrier.epoch,
+      clientEventId,
+    };
+  }
+  if (!enqueue(promptIntent)) {
     failBarrier(data.session_id, barrier.epoch);
     return;
   }
 
+  const { deliverOutboxEntry } = require('../../lib/outbox-delivery');
   await drain(deliverOutboxEntry, {
     limit: 32,
     maxElapsedMs: 2000,
