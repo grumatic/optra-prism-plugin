@@ -5,6 +5,16 @@ All notable changes to the Prism plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.4] - 2026-08-04
+
+### Changed
+- Stop response requests now send only immutable response text and correlation fields; Claude Code OTEL remains the source for model, token, and cost data.
+
+### Fixed
+- Stop hooks write response text to the bounded local delivery queue before finalizing the turn, and later hooks retry pending prompt and response deliveries after a timeout, failure, or restart.
+- Host prompt IDs are retained across durable retries and sent to compatible backends, enabling exact correlation on Claude Code 2.1.196+; older hosts continue with best-effort prompt capture and are not blocked.
+- Permanently invalid host IDs are isolated without blocking other pending deliveries.
+
 ## [0.7.3] - 2026-07-31
 
 ### Fixed
