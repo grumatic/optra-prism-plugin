@@ -16,7 +16,6 @@ function readHookStdin() {
 
 async function advanceLifecycle(data, report) {
   const session = require('../../lib/session');
-  session.cleanupStaleSessions();
   const sessionId = data && data.session_id;
   const source = data && data.source;
   if (typeof sessionId !== 'string' || sessionId.length === 0 || sessionId.length > 1024) {
@@ -32,6 +31,7 @@ async function advanceLifecycle(data, report) {
     report('lock unavailable');
     return false;
   }
+  try { session.cleanupStaleSessions(); } catch {}
   const cwd = data && data.cwd;
   if (typeof cwd === 'string' && cwd.length > 0) {
     try {
@@ -43,6 +43,16 @@ async function advanceLifecycle(data, report) {
     }
   }
   return true;
+}
+
+async function recoverOutbox(report) {
+  try {
+    const { drain } = require('../../lib/response-outbox');
+    const { deliverOutboxEntry } = require('../../lib/outbox-delivery');
+    await drain(deliverOutboxEntry, { limit: 32, maxElapsedMs: 2000 });
+  } catch {
+    report('outbox recovery failed');
+  }
 }
 
 async function main() {
@@ -62,6 +72,7 @@ async function main() {
     report('helper failure');
   }
   if (!validLifecycle) return 0;
+  await recoverOutbox(report);
 
   try {
     const { collectPluginNotices } = require('../../lib/plugin-activation');
@@ -90,6 +101,7 @@ if (require.main === module) {
 
 module.exports = {
   advanceLifecycle,
+  recoverOutbox,
   main,
   readHookStdin,
 };
