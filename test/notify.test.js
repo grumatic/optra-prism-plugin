@@ -68,6 +68,28 @@ test('setup notification uses config.json and preserves an opaque non-empty key'
   assert.deepEqual(Object.keys(JSON.parse(requests[0].options.body)), ['plugin_version']);
 });
 
+test('setup notification adds an optional setup run id', async () => {
+  const setupRunId = 'c35cc706-9b9f-48d2-bfc8-b67ea88a37c5';
+  writeConfig({ ingest_url: 'https://config-ingest.example' });
+  const requests = [];
+  global.fetch = async (url, options) => {
+    requests.push({ url, options });
+    return { ok: true, status: 204 };
+  };
+
+  const { notifySetupComplete } = require('../lib/notify');
+  assert.deepEqual(await notifySetupComplete('opaque', setupRunId), {
+    ok: true,
+    httpStatus: 204,
+    error: null,
+  });
+  assert.equal(requests.length, 1);
+  assert.deepEqual(JSON.parse(requests[0].options.body), {
+    plugin_version: require('../package.json').version,
+    setup_run_id: setupRunId,
+  });
+});
+
 test('empty and non-string keys are rejected without a request', async () => {
   writeConfig({ ingest_url: 'https://config-ingest.example' });
   let requests = 0;
@@ -88,17 +110,18 @@ test('empty and non-string keys are rejected without a request', async () => {
 });
 
 test('notification preserves network and backend failure details', async () => {
+  const setupRunId = 'c35cc706-9b9f-48d2-bfc8-b67ea88a37c5';
   writeConfig({ ingest_url: 'https://config-ingest.example' });
   const { notifySetupComplete } = require('../lib/notify');
   global.fetch = async () => { throw new Error('DNS lookup failed'); };
-  assert.deepEqual(await notifySetupComplete('opaque'), {
+  assert.deepEqual(await notifySetupComplete('opaque', setupRunId), {
     ok: false,
     httpStatus: null,
     error: 'DNS lookup failed',
   });
 
   global.fetch = async () => ({ ok: false, status: 403 });
-  assert.deepEqual(await notifySetupComplete('opaque'), {
+  assert.deepEqual(await notifySetupComplete('opaque', setupRunId), {
     ok: false,
     httpStatus: 403,
     error: 'HTTP 403',

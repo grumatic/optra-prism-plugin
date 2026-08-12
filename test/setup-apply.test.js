@@ -198,6 +198,9 @@ test('backend authentication rejection leaves config and settings unchanged', as
 
 test('setup reports notification failure without turning local success into failure', async () => {
   installAt('user');
+  const setupRunId = 'c35cc706-9b9f-48d2-bfc8-b67ea88a37c5';
+  let generated = 0;
+  const notifiedSetupRunIds = [];
   const captured = captureOutput();
   const { applySetup } = require('../lib/setup');
 
@@ -209,13 +212,66 @@ test('setup reports notification failure without turning local success into fail
       status: 'server',
       config: { ingest_url: 'https://remote-ingest.example' },
     }),
-    notifyDashboardFn: async () => ({ ok: false, httpStatus: 503, error: 'HTTP 503' }),
+    createSetupRunIdFn: () => {
+      generated += 1;
+      return setupRunId;
+    },
+    notifyDashboardFn: async (_apiKey, receivedSetupRunId) => {
+      notifiedSetupRunIds.push(receivedSetupRunId);
+      return { ok: false, httpStatus: 503, error: 'HTTP 503' };
+    },
   }), 0);
 
+  assert.equal(generated, 1);
+  assert.deepEqual(notifiedSetupRunIds, [setupRunId]);
   assert.match(captured.logs.join('\n'), /Prism setup complete/);
   assert.deepEqual(captured.errors, [
     'Local setup succeeded, but the dashboard setup notification failed: HTTP 503.',
   ]);
+});
+
+test('setup creates one run id per successful invocation and does not persist or log it', async () => {
+  installAt('user');
+  const setupRunIds = [
+    'c35cc706-9b9f-48d2-bfc8-b67ea88a37c5',
+    '3ef8b37f-a578-4111-b707-31ccb62ce2f9',
+  ];
+  let generated = 0;
+  const notifications = [];
+  const captured = captureOutput();
+  const { applySetup } = require('../lib/setup');
+  const options = {
+    apiKey: API_KEY,
+    projectDir,
+    output: captured.output,
+    fetchConfigFn: async () => ({
+      status: 'server',
+      config: { ingest_url: 'https://remote-ingest.example' },
+    }),
+    createSetupRunIdFn: () => setupRunIds[generated++],
+    notifyDashboardFn: async (apiKey, setupRunId) => {
+      notifications.push({ apiKey, setupRunId });
+      return { ok: true, httpStatus: 200, error: null };
+    },
+  };
+
+  assert.equal(await applySetup(options), 0);
+  assert.equal(await applySetup(options), 0);
+
+  assert.equal(generated, 2);
+  assert.deepEqual(notifications, setupRunIds.map((setupRunId) => ({
+    apiKey: API_KEY,
+    setupRunId,
+  })));
+  const persistedConfig = [
+    fs.readFileSync(configFile(), 'utf8'),
+    fs.readFileSync(path.join(homeDir, '.claude', 'settings.json'), 'utf8'),
+  ].join('\n');
+  const output = [...captured.logs, ...captured.errors].join('\n');
+  for (const setupRunId of setupRunIds) {
+    assert.equal(persistedConfig.includes(setupRunId), false);
+    assert.equal(output.includes(setupRunId), false);
+  }
 });
 
 test('successful remote config remains saved when OTEL projection cannot run', async () => {
@@ -275,6 +331,7 @@ test('setup fails visibly when the active version marker cannot be published', a
   const dataDir = path.join(homeDir, 'plugin-data');
   const captured = captureOutput();
   const { applySetup } = require('../lib/setup');
+  let generated = 0;
   let notified = false;
 
   assert.equal(await applySetup({
@@ -288,12 +345,17 @@ test('setup fails visibly when the active version marker cannot be published', a
     }),
     readCurrentVersionFn: () => '1.2.3',
     writeActiveVersionFn: () => false,
+    createSetupRunIdFn: () => {
+      generated += 1;
+      return 'c35cc706-9b9f-48d2-bfc8-b67ea88a37c5';
+    },
     notifyDashboardFn: async () => {
       notified = true;
       return { ok: true, httpStatus: 200, error: null };
     },
   }), 1);
 
+  assert.equal(generated, 0);
   assert.equal(notified, false);
   assert.match(captured.errors.join('\n'), /active plugin version could not be published/);
   const userSettings = readJson(path.join(homeDir, '.claude', 'settings.json'));
