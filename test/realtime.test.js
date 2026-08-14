@@ -406,7 +406,7 @@ test('consumeUsage totals tokens while failing closed for unknown models', () =>
   const deduped = consumeUsage(usage, first.addedIds, catalog());
   assert.equal(deduped.totals.input, 0);
 });
-test('usageFromRecord fails closed unless cache creation is proven all-5m', () => {
+test('usageFromRecord prices absent cache breakdown as all-5m and fails closed on explicit 1h', () => {
   const base = {
     type: 'assistant',
     uuid: 'cache-creation',
@@ -426,7 +426,7 @@ test('usageFromRecord fails closed unless cache creation is proven all-5m', () =
     ['all-5m snake case', {
       cache_creation: { ephemeral_5m_input_tokens: 10, ephemeral_1h_input_tokens: 0 },
     }, true],
-    ['positive aggregate without breakdown', {}, false],
+    ['positive aggregate without breakdown assumes all-5m', {}, true],
     ['mixed 5m and 1h', {
       cache_creation: { ephemeral_5m_input_tokens: 5, ephemeral_1h_input_tokens: 5 },
     }, false],
