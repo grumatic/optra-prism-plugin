@@ -457,6 +457,29 @@ test('usageFromRecord prices absent cache breakdown as all-5m and 1h splits only
     assert.equal(result.totals.costCatalogRevision, priced === null ? undefined : 42, name);
   }
 
+  // Above 200k input-side tokens a tiered model prices the whole request at
+  // its premium rates; a tier without published rates stays unknown.
+  const tiered = catalog();
+  tiered.exact_lookups[0].list_rates[0].rate.has_long_context_tier = true;
+  tiered.exact_lookups[0].list_rates[0].rate.long_context_above_200k = {
+    input: 6, output: 30, cache_read: 0.6, cache_write_5m: 7.5,
+  };
+  const bigItem = usageFromRecord({
+    ...base,
+    message: {
+      ...base.message,
+      usage: { ...base.message.usage, input_tokens: 300000, cache_creation_input_tokens: 0 },
+    },
+  }, 0);
+  const tierResult = consumeUsage([bigItem], [], tiered);
+  assert.equal(tierResult.totals.unknownCost, false);
+  assert.equal(tierResult.totals.cost, (300000 * 6) / 1_000_000);
+  const tierWithoutRates = catalog();
+  tierWithoutRates.exact_lookups[0].list_rates[0].rate.has_long_context_tier = true;
+  const noRateResult = consumeUsage([bigItem], [], tierWithoutRates);
+  assert.equal(noRateResult.totals.unknownCost, true);
+  assert.equal(noRateResult.totals.cost, 0);
+
   // With a catalog that carries a 1h write rate, a proven mixed split prices
   // each interval at its own rate: 5 * 3.75 + 5 * 6 = 48.75.
   const withOneHour = catalog();
