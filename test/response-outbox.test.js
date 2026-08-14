@@ -132,6 +132,29 @@ test('duplicate idempotent delivery is acknowledged without duplicate local stat
   assert.deepEqual(outbox.listPending(), []);
 });
 
+test('every machine-coded admission rejection is terminal and unknown codes are not', () => {
+  for (const code of ['invalid_host_prompt_id', 'unrecognized_source', 'empty_prompt_text']) {
+    const body = JSON.stringify({ error: { code } });
+    assert.equal(outbox.terminalRejectionCode({
+      status: 400,
+      mediaType: 'application/json',
+      body,
+      bodyBytes: Buffer.byteLength(body),
+      bodyTruncated: false,
+    }), code);
+  }
+  // The set is closed: a well-shaped envelope carrying an unregistered code
+  // stays retryable rather than silently becoming terminal.
+  const unknown = JSON.stringify({ error: { code: 'some_future_code' } });
+  assert.equal(outbox.terminalRejectionCode({
+    status: 400,
+    mediaType: 'application/json',
+    body: unknown,
+    bodyBytes: Buffer.byteLength(unknown),
+    bodyTruncated: false,
+  }), null);
+});
+
 test('terminal rejection requires the exact bounded JSON envelope and isolates the original intent', async () => {
   const body = JSON.stringify({ error: { code: 'invalid_host_prompt_id' } });
   assert.equal(outbox.isTerminalInvalidHostPrompt({
