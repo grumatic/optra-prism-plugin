@@ -406,7 +406,7 @@ test('consumeUsage totals tokens while failing closed for unknown models', () =>
   const deduped = consumeUsage(usage, first.addedIds, catalog());
   assert.equal(deduped.totals.input, 0);
 });
-test('usageFromRecord prices absent cache breakdown as all-5m and fails closed on explicit 1h', () => {
+test('usageFromRecord prices absent cache breakdown as all-5m and 1h splits only with a 1h rate', () => {
   const base = {
     type: 'assistant',
     uuid: 'cache-creation',
@@ -422,39 +422,59 @@ test('usageFromRecord prices absent cache breakdown as all-5m and fails closed o
       },
     },
   };
+  // Third column: the cost priced against the no-1h-rate catalog() fixture,
+  // or null when the item must surface as unknown cost.
   const cases = [
     ['all-5m snake case', {
       cache_creation: { ephemeral_5m_input_tokens: 10, ephemeral_1h_input_tokens: 0 },
-    }, true],
-    ['positive aggregate without breakdown assumes all-5m', {}, true],
-    ['mixed 5m and 1h', {
+    }, 37.5],
+    ['positive aggregate without breakdown assumes all-5m', {}, 37.5],
+    ['mixed 5m and 1h without a 1h rate', {
       cache_creation: { ephemeral_5m_input_tokens: 5, ephemeral_1h_input_tokens: 5 },
-    }, false],
+    }, null],
     ['inconsistent breakdown sum', {
       cache_creation: { ephemeral_5m_input_tokens: 9, ephemeral_1h_input_tokens: 0 },
-    }, false],
+    }, null],
     ['negative breakdown tokens', {
       cache_creation: { ephemeral_5m_input_tokens: -1, ephemeral_1h_input_tokens: 11 },
-    }, false],
+    }, null],
     ['NaN breakdown tokens', {
       cache_creation: { ephemeral_5m_input_tokens: NaN, ephemeral_1h_input_tokens: 0 },
-    }, false],
+    }, null],
     ['camel case', {
       cacheCreation: { ephemeral5mInputTokens: 10, ephemeral1hInputTokens: 0 },
-    }, true],
+    }, 37.5],
   ];
-  for (const [name, breakdown, proven] of cases) {
+  for (const [name, breakdown, priced] of cases) {
     const item = usageFromRecord({
       ...base,
       message: { ...base.message, usage: { ...base.message.usage, ...breakdown } },
     }, 0);
-    assert.equal(item.cacheCreation5mProven, proven, name);
     const result = consumeUsage([item], [], catalog());
     assert.equal(result.totals.cacheCreation, 10, name);
-    assert.equal(result.totals.unknownCost, !proven, name);
-    assert.equal(result.totals.cost, proven ? 37.5 / 1_000_000 : 0, name);
-    assert.equal(result.totals.costCatalogRevision, proven ? 42 : undefined, name);
+    assert.equal(result.totals.unknownCost, priced === null, name);
+    assert.equal(result.totals.cost, priced === null ? 0 : priced / 1_000_000, name);
+    assert.equal(result.totals.costCatalogRevision, priced === null ? undefined : 42, name);
   }
+
+  // With a catalog that carries a 1h write rate, a proven mixed split prices
+  // each interval at its own rate: 5 * 3.75 + 5 * 6 = 48.75.
+  const withOneHour = catalog();
+  withOneHour.exact_lookups[0].list_rates[0].rate.cache_write_1h = 6;
+  const mixed = usageFromRecord({
+    ...base,
+    message: {
+      ...base.message,
+      usage: {
+        ...base.message.usage,
+        cache_creation: { ephemeral_5m_input_tokens: 5, ephemeral_1h_input_tokens: 5 },
+      },
+    },
+  }, 0);
+  const mixedResult = consumeUsage([mixed], [], withOneHour);
+  assert.equal(mixedResult.totals.unknownCost, false);
+  assert.equal(mixedResult.totals.cost, 48.75 / 1_000_000);
+  assert.equal(mixedResult.totals.costCatalogRevision, 42);
 
   const zero = usageFromRecord({
     ...base,
@@ -464,7 +484,7 @@ test('usageFromRecord prices absent cache breakdown as all-5m and fails closed o
     },
   }, 0);
   const zeroResult = consumeUsage([zero], [], catalog());
-  assert.equal(zero.cacheCreation5mProven, true);
+  assert.equal(zero.cacheSplit, null);
   assert.equal(zeroResult.totals.unknownCost, false);
   assert.equal(zeroResult.totals.cost, 0);
   assert.equal(zeroResult.totals.costCatalogRevision, 42);
@@ -623,7 +643,7 @@ test('oversized and malformed transcripts do not prevent durable response public
 
 test('usage identities ignore mutable values and consumeUsage prices all four proven token buckets', async () => {
   const cached = consumeUsage([{
-    id: 'a'.repeat(64), input: 100, cacheRead: 50, cacheCreation: 25, cacheCreation5mProven: true, output: 10,
+    id: 'a'.repeat(64), input: 100, cacheRead: 50, cacheCreation: 25, cacheSplit: null, output: 10,
     model: 'claude-sonnet-4-6', occurredAt: Date.parse('2026-06-30T00:00:00Z'),
   }], [], catalog());
   assert.equal(cached.totals.cost, (100 * 3 + 50 * 0.3 + 25 * 3.75 + 10 * 15) / 1_000_000);

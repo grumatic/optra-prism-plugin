@@ -163,8 +163,8 @@ test('rateFor uses exact IDs, timestamp boundaries, open segments, and unpriced 
   const value = snapshot(19);
   const before = rateFor(value, 'claude-test', Date.parse('2026-06-30T23:59:59.999Z'));
   const atBoundary = rateFor(value, 'claude-test', Date.parse('2026-07-01T00:00:00Z'));
-  assert.deepEqual(before, { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0.2, revision: 19 });
-  assert.deepEqual(atBoundary, { input: 3, output: 4, cacheRead: 0.3, cacheWrite: 0.4, revision: 19 });
+  assert.deepEqual(before, { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0.2, cacheWrite1h: null, revision: 19 });
+  assert.deepEqual(atBoundary, { input: 3, output: 4, cacheRead: 0.3, cacheWrite: 0.4, cacheWrite1h: null, revision: 19 });
   assert.deepEqual(rateFor(value, 'claude-test[1m]', Date.parse('2027-01-01T00:00:00Z')), atBoundary);
   value.exact_lookups.push({ external_model_id: 'unpriced', model: { status: 'ambiguous' }, provider: { status: 'ambiguous' }, list_rates: [{ effective_from: '2026-01-01T00:00:00Z', effective_to: null, unpriced_reason: 'ambiguous' }] });
   assert.equal(rateFor(value, 'unpriced', Date.now()), null);
