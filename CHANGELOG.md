@@ -5,6 +5,15 @@ All notable changes to the Prism plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.6] - 2026-08-18
+
+### Changed
+- Realtime cost summaries now apply catalog-defined long-context premiums when input-side tokens exceed 200,000 and price one-hour cache writes with their dedicated catalog rate.
+
+### Fixed
+- Cache creation without a duration breakdown is priced as five-minute cache writes instead of being reported as unavailable.
+- Machine-coded admission rejections are treated as terminal delivery outcomes, preventing permanently rejected response intents from retrying indefinitely.
+
 ## [0.7.5] - 2026-08-13
 
 ### Added
