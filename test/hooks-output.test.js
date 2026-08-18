@@ -787,6 +787,7 @@ test('normal prompts bind the captured server id to an opaque frozen payload', (
   assert.equal(turn.active.clientEventId, sent.client_event_id);
   assert.equal(turn.active.submitPromptId, 'submit-host-prompt-id');
   assert.equal(sent.host_prompt_id, 'submit-host-prompt-id');
+  assert.ok(Number.isFinite(Date.parse(sent.submitted_at)));
   assert.equal(turn.active.serverPromptId, '5e1f8f6e-4b2a-4c3d-9e0f-1a2b3c4d5e6f');
   assert.deepEqual(Object.keys(sent.metadata.git).sort(), [
     'branch', 'dirty', 'head', 'host', 'owner', 'repo', 'worktree',
