@@ -106,13 +106,19 @@ async function recoverSubmittingTurn(turn, data) {
 
 function minimalResponseEntry(data, turn) {
   const active = turn.active;
+  const responseText = data.last_assistant_message;
   const responsePayload = {
     tool_session_id: data.session_id,
     prompt_id: active.serverPromptId,
     client_event_id: active.clientEventId,
     host_prompt_id: active.submitPromptId,
     response_operation_id: responseOperationId(data, active),
-    response_text: data.last_assistant_message,
+    response_text: responseText,
+    // The plugin sends the full response text untruncated today, so this is
+    // evidence about that body, not a record of client-side truncation.
+    original_char_count: responseText.length,
+    untruncated_sha256: sha256(responseText),
+    truncated: false,
   };
   return {
     id: responsePayload.response_operation_id,
