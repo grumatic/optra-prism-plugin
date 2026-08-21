@@ -49,6 +49,11 @@ function frozenPayload(data, prompt, clientEventId, git, hostPromptId) {
   if (data.cwd) payload.cwd = data.cwd;
   if (git) payload.metadata = { git };
   if (hostPromptId) payload.host_prompt_id = hostPromptId;
+  // Client-observed submit time. The outbox can deliver this payload long
+  // after submit, and the server's receipt time would misplace the turn.
+  // Keep it last: sendPrompt rebuilds the body in this key order, and the
+  // frozen payload hash compares the serialized forms.
+  payload.submitted_at = new Date().toISOString();
   return payload;
 }
 
