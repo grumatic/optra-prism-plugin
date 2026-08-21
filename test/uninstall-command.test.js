@@ -100,6 +100,8 @@ function fixture({ remaining = false } = {}) {
     OTEL_EXPORTER_OTLP_HEADERS: buildOtelHeaders(FIXTURE_API_KEY),
     OTEL_LOG_USER_PROMPTS: '1',
     OTEL_LOG_TOOL_DETAILS: '1',
+    OTEL_BLRP_MAX_EXPORT_BATCH_SIZE: '100',
+    OTEL_BLRP_SCHEDULE_DELAY: '1000',
   };
   const userSettings = path.join(homeDir, '.claude', 'settings.json');
   const projectSettings = path.join(projectDir, '.claude', 'settings.json');

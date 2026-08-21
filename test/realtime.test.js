@@ -201,10 +201,13 @@ test('exact Stop consumes one proven multi-assistant turn and separates totals f
   assert.deepEqual(Object.keys(response).sort(), [
     'client_event_id',
     'host_prompt_id',
+    'original_char_count',
     'prompt_id',
     'response_operation_id',
     'response_text',
     'tool_session_id',
+    'truncated',
+    'untruncated_sha256',
   ]);
   assert.equal(session.readTurn('exact-stop').active.status, 'consumed');
 });
@@ -332,6 +335,9 @@ test('Stop publishes one minimal first response before malformed configuration c
     host_prompt_id: promptId,
     response_operation_id: pending.id,
     response_text: 'first immutable answer',
+    original_char_count: 'first immutable answer'.length,
+    untruncated_sha256: crypto.createHash('sha256').update('first immutable answer').digest('hex'),
+    truncated: false,
   });
   assert.equal(require('../lib/response-outbox').listPending().length, 1);
   assert.equal(session.readTurn(sessionId).active.status, 'consumed');
@@ -650,7 +656,8 @@ test('oversized and malformed transcripts do not prevent durable response public
   assert.equal(session.readTurn('oversized-stop').active.status, 'consumed');
   const [pending] = require('../lib/response-outbox').listPending();
   assert.deepEqual(Object.keys(pending.payload).sort(), [
-    'client_event_id', 'host_prompt_id', 'prompt_id', 'response_operation_id', 'response_text', 'tool_session_id',
+    'client_event_id', 'host_prompt_id', 'original_char_count', 'prompt_id', 'response_operation_id',
+    'response_text', 'tool_session_id', 'truncated', 'untruncated_sha256',
   ]);
 
   const sidechain = JSON.stringify({ type: 'assistant', isSidechain: true, message: { role: 'assistant', isSidechain: true, stop_reason: 'end_turn', content: 'x'.repeat(900_000), usage: { input_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1 } } });

@@ -797,6 +797,135 @@ test('normal prompts bind the captured server id to an opaque frozen payload', (
   assert.deepEqual(turn.active.transcriptBoundary, { byteOffset: 64 * 1024 * 1024, lineOffset: 0 });
   assert.equal(turn.active.frozenPayloadHash, crypto.createHash('sha256').update(JSON.stringify(sent)).digest('hex'));
   assert.equal(JSON.stringify(turn).includes(prompt), false);
+  assert.equal(sent.truncated, false);
+  assert.equal(sent.original_char_count, prompt.length);
+  assert.equal(sent.untruncated_sha256, crypto.createHash('sha256').update(prompt, 'utf8').digest('hex'));
+});
+
+test('a prompt over the 2000-char slice carries truncation evidence for the full untruncated body', () => {
+  const home = makeTempDir('prism-truncated-home-');
+  const dataDir = makeTempDir('prism-truncated-data-');
+  const marker = path.join(home, 'prompt.json');
+  const interceptor = path.join(home, 'prompt-interceptor.js');
+  // Multibyte filler: each character is 1 UTF-16 code unit but 3 UTF-8 bytes,
+  // so char-count truncation evidence must not be confused with byte counts.
+  const prompt = `${'가'.repeat(2500)}tail-marker-beyond-slice`;
+  fs.writeFileSync(interceptor, [
+    "const events = require('node:events');",
+    "const fs = require('node:fs');",
+    "const http = require('node:http');",
+    'http.request = (url, options, callback) => {',
+    '  let body = "";',
+    '  const request = new events.EventEmitter();',
+    '  request.write = (chunk) => { body += chunk; };',
+    '  request.destroy = () => {};',
+    '  request.end = () => {',
+    "    if (url.pathname === '/v1/prompts') fs.writeFileSync(process.env.PRISM_PROMPT_MARKER, body);",
+    "    const response = Object.assign(new events.EventEmitter(), { headers: { 'content-type': 'application/json' } });",
+    '    response.statusCode = 201;',
+    '    callback(response);',
+    "    response.emit('data', Buffer.from('{\"id\":\"5e1f8f6e-4b2a-4c3d-9e0f-1a2b3c4d5e6f\"}'));",
+    "    response.emit('end');",
+    '  };',
+    '  return request;',
+    '};',
+    '',
+  ].join('\n'));
+
+  const result = spawnSync(process.execPath, [SUBMIT_HANDLER], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    input: JSON.stringify({
+      session_id: 'truncated-capture-session',
+      cwd: ROOT,
+      prompt,
+      prompt_id: 'submit-host-prompt-id-truncated',
+    }),
+    env: runtimeEnv(home, dataDir, {
+      apiKey: 'prism_truncated_capture',
+      ingest_url: 'http://127.0.0.1:12345',
+    }, {
+      PRISM_PROMPT_MARKER: marker,
+      NODE_OPTIONS: `--require=${interceptor}`,
+    }),
+    timeout: 3000,
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const sent = JSON.parse(fs.readFileSync(marker, 'utf8'));
+  assert.equal(sent.prompt_text.length, 2000);
+  assert.equal(sent.truncated, true);
+  assert.equal(sent.original_char_count, prompt.length);
+  assert.notEqual(sent.original_char_count, Buffer.byteLength(prompt, 'utf8'));
+  assert.equal(sent.untruncated_sha256, crypto.createHash('sha256').update(prompt, 'utf8').digest('hex'));
+  assert.notEqual(
+    sent.untruncated_sha256,
+    crypto.createHash('sha256').update(prompt.slice(0, 2000), 'utf8').digest('hex'),
+  );
+});
+test('truncation never splits a surrogate pair straddling the 2000-unit boundary', () => {
+  const home = makeTempDir('prism-surrogate-home-');
+  const dataDir = makeTempDir('prism-surrogate-data-');
+  const marker = path.join(home, 'prompt.json');
+  const interceptor = path.join(home, 'prompt-interceptor.js');
+  // An emoji (a surrogate pair: 2 UTF-16 units) placed so its high surrogate
+  // lands exactly at index 1999 and its low surrogate at index 2000 — a
+  // plain slice(0, 2000) cuts the pair apart, leaving prompt_text ending in
+  // a lone high surrogate. JSON.stringify escapes that as a bare \uD83D with
+  // no matching low-surrogate escape, which serde_json rejects as invalid.
+  const prompt = `${'x'.repeat(1999)}\u{1F600}tail-marker-beyond-slice`;
+  fs.writeFileSync(interceptor, [
+    "const events = require('node:events');",
+    "const fs = require('node:fs');",
+    "const http = require('node:http');",
+    'http.request = (url, options, callback) => {',
+    '  let body = "";',
+    '  const request = new events.EventEmitter();',
+    '  request.write = (chunk) => { body += chunk; };',
+    '  request.destroy = () => {};',
+    '  request.end = () => {',
+    "    if (url.pathname === '/v1/prompts') fs.writeFileSync(process.env.PRISM_PROMPT_MARKER, body);",
+    "    const response = Object.assign(new events.EventEmitter(), { headers: { 'content-type': 'application/json' } });",
+    '    response.statusCode = 201;',
+    '    callback(response);',
+    "    response.emit('data', Buffer.from('{\"id\":\"5e1f8f6e-4b2a-4c3d-9e0f-1a2b3c4d5e6f\"}'));",
+    "    response.emit('end');",
+    '  };',
+    '  return request;',
+    '};',
+    '',
+  ].join('\n'));
+
+  const result = spawnSync(process.execPath, [SUBMIT_HANDLER], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    input: JSON.stringify({
+      session_id: 'surrogate-capture-session',
+      cwd: ROOT,
+      prompt,
+      prompt_id: 'submit-host-prompt-id-surrogate',
+    }),
+    env: runtimeEnv(home, dataDir, {
+      apiKey: 'prism_surrogate_capture',
+      ingest_url: 'http://127.0.0.1:12345',
+    }, {
+      PRISM_PROMPT_MARKER: marker,
+      NODE_OPTIONS: `--require=${interceptor}`,
+    }),
+    timeout: 3000,
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const sent = JSON.parse(fs.readFileSync(marker, 'utf8'));
+  // The orphan high surrogate is dropped rather than kept dangling, so this
+  // truncation lands one unit short of the 2000-unit cap.
+  assert.equal(sent.prompt_text.length, 1999);
+  assert.equal(sent.prompt_text, 'x'.repeat(1999));
+  const lastUnit = sent.prompt_text.charCodeAt(sent.prompt_text.length - 1);
+  assert.equal(lastUnit >= 0xd800 && lastUnit <= 0xdbff, false);
+  assert.equal(sent.truncated, true);
+  assert.equal(sent.original_char_count, prompt.length);
+  assert.equal(sent.untruncated_sha256, crypto.createHash('sha256').update(prompt, 'utf8').digest('hex'));
 });
 test('Stop without an exact captured prompt is a zero-effect skip', () => {
   const home = makeTempDir('prism-stop-home-');

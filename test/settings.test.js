@@ -166,8 +166,12 @@ test('builds OTEL settings only from config.json and preserves the opaque key', 
     'https://ingest.example/base/v1/metrics');
   assert.match(expected.otelEnv.OTEL_EXPORTER_OTLP_HEADERS,
     new RegExp(`^x-api-key=${encodeURIComponent(API_KEY)}(?:,|$)`));
-  assert.equal(Object.hasOwn(expected.otelEnv, 'OTEL_LOG_ASSISTANT_RESPONSES'), false);
+  assert.equal(expected.otelEnv.OTEL_LOG_ASSISTANT_RESPONSES, '1');
   assert.ok(OTEL_KEYS.includes('OTEL_LOG_ASSISTANT_RESPONSES'));
+  assert.equal(expected.otelEnv.OTEL_BLRP_MAX_EXPORT_BATCH_SIZE, '100');
+  assert.ok(OTEL_KEYS.includes('OTEL_BLRP_MAX_EXPORT_BATCH_SIZE'));
+  assert.equal(expected.otelEnv.OTEL_BLRP_SCHEDULE_DELAY, '1000');
+  assert.ok(OTEL_KEYS.includes('OTEL_BLRP_SCHEDULE_DELAY'));
 });
 
 test('sync writes only the requested target and never repairs other layers', () => {
@@ -198,11 +202,15 @@ test('sync writes only the requested target and never repairs other layers', () 
   const projected = readJson(projectFile);
   assert.equal(projected.env.PROJECT_ONLY, 'keep');
   assert.equal(projected.env.OTEL_LOGS_EXPORTER, 'otlp');
-  assert.equal(Object.hasOwn(projected.env, 'OTEL_LOG_ASSISTANT_RESPONSES'), false);
+  // The stale "0" here was Prism's own legacy default (every other managed
+  // key already matched), so cleanup removes it and the managed "1" becomes
+  // explicit again — unlike a standalone user opt-out, which stays put.
+  assert.equal(projected.env.OTEL_LOG_ASSISTANT_RESPONSES, '1');
   assert.deepEqual(projected.permissions, { allow: ['Bash(npm test)'] });
   assert.deepEqual(settings.checkOtelSettings({ projectDir }), {
     ok: false,
     mismatches: ['OTEL_LOGS_EXPORTER'],
+    assistantResponseConflict: null,
   });
 });
 
@@ -221,6 +229,179 @@ test('sync preserves a standalone assistant-response opt-out', () => {
   const projected = readJson(projectFile);
   assert.equal(projected.env.OTEL_LOG_ASSISTANT_RESPONSES, '0');
   assert.equal(projected.env.PROJECT_ONLY, 'keep');
+  // Every other managed key still projects normally alongside the preserved opt-out.
+  assert.equal(projected.env.OTEL_BLRP_MAX_EXPORT_BATCH_SIZE, '100');
+
+  // Documented, not accidental: now that this sync has written every other
+  // managed key to match the projection, this "0" is indistinguishable from
+  // a Prism-owned one — checkOtelSettings correctly reports it as drift (it
+  // can no longer prove it is standalone), and the *next* sync removes it and
+  // projects the managed "1" instead. A user who wants to stay opted out
+  // needs to reassert "0" after each sync that changes the projection (e.g.
+  // a re-run of setup or config).
+  assert.deepEqual(settings.checkOtelSettings({ projectDir }), {
+    ok: false,
+    mismatches: ['OTEL_LOG_ASSISTANT_RESPONSES'],
+    assistantResponseConflict: null,
+  });
+  assert.equal(settings.syncOtelSettings({ scope: 'project', projectDir }), true);
+  assert.equal(readJson(projectFile).env.OTEL_LOG_ASSISTANT_RESPONSES, '1');
+  assert.deepEqual(settings.checkOtelSettings({ projectDir }), {
+    ok: true,
+    mismatches: [],
+    assistantResponseConflict: null,
+  });
+});
+
+test('checkOtelSettings flags a stale Prism-owned opt-out but not a standalone one', () => {
+  const settings = require('../lib/settings');
+  const projectFile = settings.pathForScope('project', projectDir);
+  const expected = settings.buildExpectedOtelEnv();
+
+  // Every other managed key already matches the current projection: this "0"
+  // is Prism-owned, not a standalone user choice, and must surface as drift
+  // so doctor/status point the user at setup/config to repair it.
+  writeJson(projectFile, {
+    env: { ...expected.otelEnv, OTEL_LOG_ASSISTANT_RESPONSES: '0' },
+  });
+  assert.deepEqual(settings.checkOtelSettings({ projectDir }), {
+    ok: false,
+    mismatches: ['OTEL_LOG_ASSISTANT_RESPONSES'],
+    assistantResponseConflict: null,
+  });
+
+  // A standalone "0" alongside otherwise-unconfigured keys is a genuine
+  // opt-out and must not be reported as drift.
+  writeJson(projectFile, { env: { OTEL_LOG_ASSISTANT_RESPONSES: '0' } });
+  assert.deepEqual(settings.checkOtelSettings({ projectDir }), {
+    ok: false,
+    // Every other managed key is still unset in this fixture, so those
+    // report as ordinary drift; only the opt-out itself must be absent.
+    mismatches: settings.OTEL_KEYS.filter((key) => key !== 'OTEL_LOG_ASSISTANT_RESPONSES'),
+    assistantResponseConflict: null,
+  });
+});
+
+test('sync never shadows an opt-out effective from a lower-precedence scope than the install scope', () => {
+  const settings = require('../lib/settings');
+  const userFile = settings.pathForScope('user', projectDir);
+  const projectFile = settings.pathForScope('project', projectDir);
+  writeJson(settings.INSTALLED_PLUGINS, { plugins: { [settings.PLUGIN_ID]: [
+    { scope: 'project', projectPath: projectDir },
+  ] } });
+  // The opt-out lives in the LOWER-precedence user layer; the install scope
+  // (project) outranks it. Before the cross-scope fix, syncing project wrote
+  // "1" there and that unconditionally won the user -> project -> local
+  // merge, silently turning assistant-response capture back on.
+  writeJson(userFile, { env: { OTEL_LOG_ASSISTANT_RESPONSES: '0' } });
+
+  assert.equal(settings.syncOtelSettings({ projectDir }), true);
+
+  assert.equal(
+    Object.hasOwn(readJson(projectFile).env, 'OTEL_LOG_ASSISTANT_RESPONSES'),
+    false,
+  );
+  assert.equal(readJson(userFile).env.OTEL_LOG_ASSISTANT_RESPONSES, '0');
+  assert.equal(
+    settings.readEffectiveSettings(projectDir).env.OTEL_LOG_ASSISTANT_RESPONSES,
+    '0',
+  );
+  assert.deepEqual(settings.checkOtelSettings({ projectDir }), {
+    ok: true,
+    mismatches: [],
+    assistantResponseConflict: null,
+  });
+
+  // Unlike the same-scope case, this exclusion does not expire on the next
+  // sync: project's own file never receives the key at all (there is nothing
+  // in project's file for a later sync to judge "Prism-owned"), so the
+  // user-layer opt-out survives indefinitely, not just for one pass.
+  assert.equal(settings.syncOtelSettings({ projectDir }), true);
+  assert.equal(
+    Object.hasOwn(readJson(projectFile).env, 'OTEL_LOG_ASSISTANT_RESPONSES'),
+    false,
+  );
+  assert.equal(
+    settings.readEffectiveSettings(projectDir).env.OTEL_LOG_ASSISTANT_RESPONSES,
+    '0',
+  );
+});
+
+test('checkOtelSettings reports a higher-precedence opt-out as a cross-scope conflict, not fixable drift', () => {
+  const settings = require('../lib/settings');
+  const userFile = settings.pathForScope('user', projectDir);
+  const localFile = settings.pathForScope('local', projectDir);
+  writeJson(settings.INSTALLED_PLUGINS, { plugins: { [settings.PLUGIN_ID]: [{ scope: 'user' }] } });
+  // The opt-out lives in the HIGHER-precedence local layer; the install scope
+  // (user) is outranked by it. Writing into user is harmless to the merged
+  // outcome (local still wins) but can never fix it either.
+  writeJson(localFile, { env: { OTEL_LOG_ASSISTANT_RESPONSES: '0' } });
+
+  assert.equal(settings.syncOtelSettings({ projectDir }), true);
+
+  assert.equal(readJson(userFile).env.OTEL_LOG_ASSISTANT_RESPONSES, '1');
+  assert.equal(
+    settings.readEffectiveSettings(projectDir).env.OTEL_LOG_ASSISTANT_RESPONSES,
+    '0',
+  );
+  const result = settings.checkOtelSettings({ projectDir });
+  assert.equal(result.ok, true);
+  assert.equal(result.mismatches.includes('OTEL_LOG_ASSISTANT_RESPONSES'), false);
+  assert.deepEqual(result.assistantResponseConflict, {
+    key: 'OTEL_LOG_ASSISTANT_RESPONSES',
+    source: 'local',
+    installScope: 'user',
+  });
+
+  // Re-running sync cannot fix it: it can only write to the user scope, and
+  // local always wins that merge regardless of what user's file says.
+  assert.equal(settings.syncOtelSettings({ projectDir }), true);
+  assert.equal(
+    settings.readEffectiveSettings(projectDir).env.OTEL_LOG_ASSISTANT_RESPONSES,
+    '0',
+  );
+});
+
+test('activation removes a stale legacy opt-out for an upgrading install that predates newer managed keys', () => {
+  const settings = require('../lib/settings');
+  const dataDir = path.join(homeDir, 'plugin-data');
+  const projectFile = settings.pathForScope('project', projectDir);
+  const expected = settings.buildExpectedOtelEnv();
+
+  // Simulates an installation from before OTEL_BLRP_MAX_EXPORT_BATCH_SIZE (and
+  // the explicit OTEL_LOG_ASSISTANT_RESPONSES projection) existed: it has
+  // every legacy-era key the old Prism version wrote, matching today's
+  // projection, but none of the newer keys — an upgrading user cannot have
+  // written a key that did not exist yet.
+  writeJson(projectFile, {
+    env: {
+      CLAUDE_CODE_ENABLE_TELEMETRY: expected.otelEnv.CLAUDE_CODE_ENABLE_TELEMETRY,
+      OTEL_LOGS_EXPORTER: expected.otelEnv.OTEL_LOGS_EXPORTER,
+      OTEL_METRICS_EXPORTER: expected.otelEnv.OTEL_METRICS_EXPORTER,
+      OTEL_METRIC_EXPORT_INTERVAL: expected.otelEnv.OTEL_METRIC_EXPORT_INTERVAL,
+      OTEL_EXPORTER_OTLP_PROTOCOL: expected.otelEnv.OTEL_EXPORTER_OTLP_PROTOCOL,
+      OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: expected.otelEnv.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT,
+      OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: expected.otelEnv.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT,
+      OTEL_EXPORTER_OTLP_HEADERS: 'x-api-key=old,x-prism-plugin-version=0.7.1',
+      OTEL_LOG_USER_PROMPTS: expected.otelEnv.OTEL_LOG_USER_PROMPTS,
+      OTEL_LOG_TOOL_DETAILS: expected.otelEnv.OTEL_LOG_TOOL_DETAILS,
+      OTEL_LOG_ASSISTANT_RESPONSES: '0',
+    },
+  });
+
+  const result = settings.syncPluginVersionMetadata({
+    scope: 'project',
+    projectDir,
+    dataDir,
+    pluginVersion: '0.7.2',
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.assistantResponseOptOutRemoved, true);
+  assert.equal(
+    Object.hasOwn(readJson(projectFile).env, 'OTEL_LOG_ASSISTANT_RESPONSES'),
+    false,
+  );
 });
 
 test('sync installs a stable executable helper in plugin data and projects its exact path', () => {
@@ -241,6 +422,7 @@ test('sync installs a stable executable helper in plugin data and projects its e
   assert.deepEqual(settings.checkOtelSettings({ projectDir, dataDir }), {
     ok: true,
     mismatches: [],
+    assistantResponseConflict: null,
   });
 });
 

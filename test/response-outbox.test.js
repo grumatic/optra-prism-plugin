@@ -133,7 +133,13 @@ test('duplicate idempotent delivery is acknowledged without duplicate local stat
 });
 
 test('every machine-coded admission rejection is terminal and unknown codes are not', () => {
-  for (const code of ['invalid_host_prompt_id', 'unrecognized_source', 'empty_prompt_text']) {
+  for (const code of [
+    'invalid_host_prompt_id',
+    'unrecognized_source',
+    'empty_prompt_text',
+    'prompt_body_exceeds_limit',
+    'response_body_exceeds_limit',
+  ]) {
     const body = JSON.stringify({ error: { code } });
     assert.equal(outbox.terminalRejectionCode({
       status: 400,
