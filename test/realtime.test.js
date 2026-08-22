@@ -351,7 +351,7 @@ test('Stop publishes one minimal first response before malformed configuration c
   assert.equal(session.readSummary(sessionId).turnLog.length, 1);
 });
 
-test('Stop leaves a captured turn unconsumed when its minimal durable response exceeds 2MiB', () => {
+test('Stop consumes a captured turn even when the raw response is far larger than MAX_ENTRY_BYTES, because it is clamped to the wire limit before enqueueing', () => {
   const home = temp('prism-realtime-response-overflow-home-');
   const data = temp('prism-realtime-response-overflow-data-');
   const sessionId = 'response-overflow';
@@ -364,14 +364,20 @@ test('Stop leaves a captured turn unconsumed when its minimal durable response e
     input: JSON.stringify({
       session_id: sessionId,
       prompt_id: promptId,
-      last_assistant_message: 'x'.repeat(2 * 1024 * 1024),
+      // Several times MAX_ENTRY_BYTES raw — would have overflowed the old
+      // unclamped entry cap, but clampToWireLimit bounds response_text
+      // before this ever reaches enqueueDetailed's size check.
+      last_assistant_message: 'x'.repeat(8 * 1024 * 1024),
     }),
     env: runtimeEnv(home, data, { apiKey: '', ingest_url: 'http://127.0.0.1:1', show_realtime_summary: false }),
   });
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stderr, /Response capture pending: oversized response/);
-  assert.equal(session.readTurn(sessionId).active.status, 'captured');
-  assert.deepEqual(require('../lib/response-outbox').listPending(), []);
+  assert.doesNotMatch(result.stderr, /oversized response/);
+  assert.equal(session.readTurn(sessionId).active.status, 'consumed');
+  // The unreachable ingest_url leaves delivery itself pending retry; what
+  // this test pins is that the entry was durably enqueued at all rather
+  // than rejected up front as oversized.
+  assert.equal(require('../lib/response-outbox').listPending().length, 1);
 });
 
 test('control, stale, expired, prompt mismatch, and transcript lag leave active records unconsumed', async () => {

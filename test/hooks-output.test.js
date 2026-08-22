@@ -802,14 +802,8 @@ test('normal prompts bind the captured server id to an opaque frozen payload', (
   assert.equal(sent.untruncated_sha256, crypto.createHash('sha256').update(prompt, 'utf8').digest('hex'));
 });
 
-test('a prompt over the 2000-char slice carries truncation evidence for the full untruncated body', () => {
-  const home = makeTempDir('prism-truncated-home-');
-  const dataDir = makeTempDir('prism-truncated-data-');
-  const marker = path.join(home, 'prompt.json');
+function writePromptMarkerInterceptor(home) {
   const interceptor = path.join(home, 'prompt-interceptor.js');
-  // Multibyte filler: each character is 1 UTF-16 code unit but 3 UTF-8 bytes,
-  // so char-count truncation evidence must not be confused with byte counts.
-  const prompt = `${'가'.repeat(2500)}tail-marker-beyond-slice`;
   fs.writeFileSync(interceptor, [
     "const events = require('node:events');",
     "const fs = require('node:fs');",
@@ -821,92 +815,85 @@ test('a prompt over the 2000-char slice carries truncation evidence for the full
     '  request.destroy = () => {};',
     '  request.end = () => {',
     "    if (url.pathname === '/v1/prompts') fs.writeFileSync(process.env.PRISM_PROMPT_MARKER, body);",
+    "    if (url.pathname === '/v1/prompts/response') fs.writeFileSync(process.env.PRISM_RESPONSE_MARKER, body);",
     "    const response = Object.assign(new events.EventEmitter(), { headers: { 'content-type': 'application/json' } });",
-    '    response.statusCode = 201;',
+    "    response.statusCode = url.pathname === '/v1/prompts' ? 201 : 202;",
     '    callback(response);',
-    "    response.emit('data', Buffer.from('{\"id\":\"5e1f8f6e-4b2a-4c3d-9e0f-1a2b3c4d5e6f\"}'));",
+    "    if (url.pathname === '/v1/prompts') response.emit('data', Buffer.from('{\"id\":\"5e1f8f6e-4b2a-4c3d-9e0f-1a2b3c4d5e6f\"}'));",
     "    response.emit('end');",
     '  };',
     '  return request;',
     '};',
     '',
   ].join('\n'));
+  return interceptor;
+}
+
+test('a prompt whose escaped size exceeds MAX_PROMPT_BODY_BYTES is clamped at the byte limit, carrying truncation evidence for the full untruncated body', () => {
+  const home = makeTempDir('prism-clamped-home-');
+  const dataDir = makeTempDir('prism-clamped-data-');
+  const marker = path.join(home, 'prompt.json');
+  const interceptor = writePromptMarkerInterceptor(home);
+  // Multibyte filler: each character is 1 UTF-16 code unit but 3 UTF-8
+  // bytes, so char-count evidence must not be confused with the byte-bounded
+  // clamp, and MAX_PROMPT_BODY_BYTES / 3 chars alone already crosses the limit.
+  const { MAX_PROMPT_BODY_BYTES } = require('../lib/body-clamp');
+  const prompt = `${'가'.repeat(Math.ceil(MAX_PROMPT_BODY_BYTES / 3) + 100)}tail-marker-beyond-limit`;
 
   const result = spawnSync(process.execPath, [SUBMIT_HANDLER], {
     cwd: ROOT,
     encoding: 'utf8',
     input: JSON.stringify({
-      session_id: 'truncated-capture-session',
+      session_id: 'clamped-capture-session',
       cwd: ROOT,
       prompt,
-      prompt_id: 'submit-host-prompt-id-truncated',
+      prompt_id: 'submit-host-prompt-id-clamped',
     }),
     env: runtimeEnv(home, dataDir, {
-      apiKey: 'prism_truncated_capture',
+      apiKey: 'prism_clamped_capture',
       ingest_url: 'http://127.0.0.1:12345',
     }, {
       PRISM_PROMPT_MARKER: marker,
       NODE_OPTIONS: `--require=${interceptor}`,
     }),
-    timeout: 3000,
+    timeout: 8000,
   });
 
   assert.equal(result.status, 0, result.stderr);
   const sent = JSON.parse(fs.readFileSync(marker, 'utf8'));
-  assert.equal(sent.prompt_text.length, 2000);
+  assert.equal(Buffer.byteLength(JSON.stringify(sent.prompt_text), 'utf8') <= MAX_PROMPT_BODY_BYTES, true);
+  assert.equal(
+    Buffer.byteLength(JSON.stringify(`${sent.prompt_text}가`), 'utf8') > MAX_PROMPT_BODY_BYTES,
+    true,
+  );
   assert.equal(sent.truncated, true);
   assert.equal(sent.original_char_count, prompt.length);
   assert.notEqual(sent.original_char_count, Buffer.byteLength(prompt, 'utf8'));
   assert.equal(sent.untruncated_sha256, crypto.createHash('sha256').update(prompt, 'utf8').digest('hex'));
   assert.notEqual(
     sent.untruncated_sha256,
-    crypto.createHash('sha256').update(prompt.slice(0, 2000), 'utf8').digest('hex'),
+    crypto.createHash('sha256').update(sent.prompt_text, 'utf8').digest('hex'),
   );
 });
-test('truncation never splits a surrogate pair straddling the 2000-unit boundary', () => {
-  const home = makeTempDir('prism-surrogate-home-');
-  const dataDir = makeTempDir('prism-surrogate-data-');
+
+test('a prompt whose escaped size is within MAX_PROMPT_BODY_BYTES is sent unclamped with truncated=false', () => {
+  const home = makeTempDir('prism-unclamped-home-');
+  const dataDir = makeTempDir('prism-unclamped-data-');
   const marker = path.join(home, 'prompt.json');
-  const interceptor = path.join(home, 'prompt-interceptor.js');
-  // An emoji (a surrogate pair: 2 UTF-16 units) placed so its high surrogate
-  // lands exactly at index 1999 and its low surrogate at index 2000 — a
-  // plain slice(0, 2000) cuts the pair apart, leaving prompt_text ending in
-  // a lone high surrogate. JSON.stringify escapes that as a bare \uD83D with
-  // no matching low-surrogate escape, which serde_json rejects as invalid.
-  const prompt = `${'x'.repeat(1999)}\u{1F600}tail-marker-beyond-slice`;
-  fs.writeFileSync(interceptor, [
-    "const events = require('node:events');",
-    "const fs = require('node:fs');",
-    "const http = require('node:http');",
-    'http.request = (url, options, callback) => {',
-    '  let body = "";',
-    '  const request = new events.EventEmitter();',
-    '  request.write = (chunk) => { body += chunk; };',
-    '  request.destroy = () => {};',
-    '  request.end = () => {',
-    "    if (url.pathname === '/v1/prompts') fs.writeFileSync(process.env.PRISM_PROMPT_MARKER, body);",
-    "    const response = Object.assign(new events.EventEmitter(), { headers: { 'content-type': 'application/json' } });",
-    '    response.statusCode = 201;',
-    '    callback(response);',
-    "    response.emit('data', Buffer.from('{\"id\":\"5e1f8f6e-4b2a-4c3d-9e0f-1a2b3c4d5e6f\"}'));",
-    "    response.emit('end');",
-    '  };',
-    '  return request;',
-    '};',
-    '',
-  ].join('\n'));
+  const interceptor = writePromptMarkerInterceptor(home);
+  const prompt = 'a short prompt well under the byte limit';
 
   const result = spawnSync(process.execPath, [SUBMIT_HANDLER], {
     cwd: ROOT,
     encoding: 'utf8',
     input: JSON.stringify({
-      session_id: 'surrogate-capture-session',
+      session_id: 'unclamped-capture-session',
       cwd: ROOT,
       prompt,
-      prompt_id: 'submit-host-prompt-id-surrogate',
+      prompt_id: 'submit-host-prompt-id-unclamped',
     }),
     env: runtimeEnv(home, dataDir, {
-      apiKey: 'prism_surrogate_capture',
+      apiKey: 'prism_unclamped_capture',
       ingest_url: 'http://127.0.0.1:12345',
     }, {
       PRISM_PROMPT_MARKER: marker,
@@ -917,16 +904,205 @@ test('truncation never splits a surrogate pair straddling the 2000-unit boundary
 
   assert.equal(result.status, 0, result.stderr);
   const sent = JSON.parse(fs.readFileSync(marker, 'utf8'));
-  // The orphan high surrogate is dropped rather than kept dangling, so this
-  // truncation lands one unit short of the 2000-unit cap.
-  assert.equal(sent.prompt_text.length, 1999);
-  assert.equal(sent.prompt_text, 'x'.repeat(1999));
-  const lastUnit = sent.prompt_text.charCodeAt(sent.prompt_text.length - 1);
-  assert.equal(lastUnit >= 0xd800 && lastUnit <= 0xdbff, false);
-  assert.equal(sent.truncated, true);
+  assert.equal(sent.prompt_text, prompt);
+  assert.equal(sent.truncated, false);
   assert.equal(sent.original_char_count, prompt.length);
   assert.equal(sent.untruncated_sha256, crypto.createHash('sha256').update(prompt, 'utf8').digest('hex'));
 });
+
+test('an oversized cwd is truncated to MAX_CWD_BYTES rather than left unbounded', () => {
+  const home = makeTempDir('prism-cwd-cap-home-');
+  const dataDir = makeTempDir('prism-cwd-cap-data-');
+  const marker = path.join(home, 'prompt.json');
+  const interceptor = writePromptMarkerInterceptor(home);
+  const MAX_CWD_BYTES = 8 * 1024;
+  const degenerateCwd = `/${'x'.repeat(MAX_CWD_BYTES * 2)}`;
+
+  const result = spawnSync(process.execPath, [SUBMIT_HANDLER], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    input: JSON.stringify({
+      session_id: 'cwd-cap-capture-session',
+      cwd: degenerateCwd,
+      prompt: 'prompt with a degenerate cwd',
+      prompt_id: 'submit-host-prompt-id-cwd-cap',
+    }),
+    env: runtimeEnv(home, dataDir, {
+      apiKey: 'prism_cwd_cap_capture',
+      ingest_url: 'http://127.0.0.1:12345',
+    }, {
+      PRISM_PROMPT_MARKER: marker,
+      NODE_OPTIONS: `--require=${interceptor}`,
+    }),
+    timeout: 3000,
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const sent = JSON.parse(fs.readFileSync(marker, 'utf8'));
+  assert.equal(Buffer.byteLength(sent.cwd, 'utf8') <= MAX_CWD_BYTES, true);
+  assert.equal(sent.cwd, degenerateCwd.slice(0, sent.cwd.length));
+});
+
+test('a prompt well under the byte limit that ends in a lone high surrogate is sent without the orphan unit', () => {
+  const home = makeTempDir('prism-unclamped-surrogate-home-');
+  const dataDir = makeTempDir('prism-unclamped-surrogate-data-');
+  const marker = path.join(home, 'prompt.json');
+  const interceptor = writePromptMarkerInterceptor(home);
+  // A lone high surrogate with no low surrogate following it — JSON.parse
+  // permits this even though it is not valid UTF-16 text on its own.
+  // JSON.stringify re-emits it as a bare \uD83D escape, which serde_json on
+  // the server rejects; the guard must drop it even though this input is
+  // far under the byte limit and never reaches the binary-search clamp.
+  const prompt = JSON.parse('"a short prompt ending in a lone surrogate\\ud83d"');
+
+  const result = spawnSync(process.execPath, [SUBMIT_HANDLER], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    input: JSON.stringify({
+      session_id: 'unclamped-surrogate-capture-session',
+      cwd: ROOT,
+      prompt,
+      prompt_id: 'submit-host-prompt-id-unclamped-surrogate',
+    }),
+    env: runtimeEnv(home, dataDir, {
+      apiKey: 'prism_unclamped_surrogate_capture',
+      ingest_url: 'http://127.0.0.1:12345',
+    }, {
+      PRISM_PROMPT_MARKER: marker,
+      NODE_OPTIONS: `--require=${interceptor}`,
+    }),
+    timeout: 3000,
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const sent = JSON.parse(fs.readFileSync(marker, 'utf8'));
+  assert.equal(sent.prompt_text, prompt.slice(0, -1));
+  const lastUnit = sent.prompt_text.charCodeAt(sent.prompt_text.length - 1);
+  assert.equal(lastUnit >= 0xd800 && lastUnit <= 0xdbff, false);
+});
+
+test('Stop clamps a response whose escaped size exceeds MAX_PROMPT_BODY_BYTES, carrying truncation evidence for the full untruncated body', () => {
+  const home = makeTempDir('prism-response-clamped-home-');
+  const dataDir = makeTempDir('prism-response-clamped-data-');
+  const promptMarker = path.join(home, 'prompt.json');
+  const responseMarker = path.join(home, 'response.json');
+  const transcript = path.join(home, 'transcript.jsonl');
+  const interceptor = writePromptMarkerInterceptor(home);
+  const { MAX_PROMPT_BODY_BYTES } = require('../lib/body-clamp');
+  const response = `${'나'.repeat(Math.ceil(MAX_PROMPT_BODY_BYTES / 3) + 100)}tail-marker-beyond-limit`;
+  fs.writeFileSync(transcript, '');
+
+  const env = runtimeEnv(home, dataDir, {
+    apiKey: 'prism_response_clamped',
+    ingest_url: 'http://127.0.0.1:12345',
+  }, {
+    PRISM_PROMPT_MARKER: promptMarker,
+    PRISM_RESPONSE_MARKER: responseMarker,
+    NODE_OPTIONS: `--require=${interceptor}`,
+  });
+
+  const submit = spawnSync(process.execPath, [SUBMIT_HANDLER], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    input: JSON.stringify({
+      session_id: 'response-clamped-session',
+      cwd: ROOT,
+      prompt: 'prompt for a clamped response',
+      prompt_id: 'response-clamped-prompt-id',
+      transcript_path: transcript,
+    }),
+    env,
+    timeout: 3000,
+  });
+  assert.equal(submit.status, 0, submit.stderr);
+
+  const stop = spawnSync(process.execPath, [STOP_HANDLER], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    input: JSON.stringify({
+      session_id: 'response-clamped-session',
+      cwd: ROOT,
+      prompt_id: 'response-clamped-prompt-id',
+      last_assistant_message: response,
+      transcript_path: transcript,
+    }),
+    env,
+    timeout: 8000,
+  });
+
+  assert.equal(stop.status, 0, stop.stderr);
+  const sent = JSON.parse(fs.readFileSync(responseMarker, 'utf8'));
+  assert.equal(Buffer.byteLength(JSON.stringify(sent.response_text), 'utf8') <= MAX_PROMPT_BODY_BYTES, true);
+  assert.equal(
+    Buffer.byteLength(JSON.stringify(`${sent.response_text}나`), 'utf8') > MAX_PROMPT_BODY_BYTES,
+    true,
+  );
+  assert.equal(sent.truncated, true);
+  assert.equal(sent.original_char_count, response.length);
+  assert.equal(sent.untruncated_sha256, crypto.createHash('sha256').update(response, 'utf8').digest('hex'));
+  assert.notEqual(
+    sent.untruncated_sha256,
+    crypto.createHash('sha256').update(sent.response_text, 'utf8').digest('hex'),
+  );
+});
+
+test('a response well under the byte limit that ends in a lone high surrogate is sent without the orphan unit', () => {
+  const home = makeTempDir('prism-response-unclamped-surrogate-home-');
+  const dataDir = makeTempDir('prism-response-unclamped-surrogate-data-');
+  const promptMarker = path.join(home, 'prompt.json');
+  const responseMarker = path.join(home, 'response.json');
+  const transcript = path.join(home, 'transcript.jsonl');
+  const interceptor = writePromptMarkerInterceptor(home);
+  // As above: far under the byte limit, so the early-return path must still
+  // drop the trailing lone high surrogate rather than skip the guard.
+  const response = JSON.parse('"a short reply ending in a lone surrogate\\ud83d"');
+  fs.writeFileSync(transcript, '');
+
+  const env = runtimeEnv(home, dataDir, {
+    apiKey: 'prism_response_unclamped_surrogate',
+    ingest_url: 'http://127.0.0.1:12345',
+  }, {
+    PRISM_PROMPT_MARKER: promptMarker,
+    PRISM_RESPONSE_MARKER: responseMarker,
+    NODE_OPTIONS: `--require=${interceptor}`,
+  });
+
+  const submit = spawnSync(process.execPath, [SUBMIT_HANDLER], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    input: JSON.stringify({
+      session_id: 'response-unclamped-surrogate-session',
+      cwd: ROOT,
+      prompt: 'prompt for a surrogate-ending response',
+      prompt_id: 'response-unclamped-surrogate-prompt-id',
+      transcript_path: transcript,
+    }),
+    env,
+    timeout: 3000,
+  });
+  assert.equal(submit.status, 0, submit.stderr);
+
+  const stop = spawnSync(process.execPath, [STOP_HANDLER], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    input: JSON.stringify({
+      session_id: 'response-unclamped-surrogate-session',
+      cwd: ROOT,
+      prompt_id: 'response-unclamped-surrogate-prompt-id',
+      last_assistant_message: response,
+      transcript_path: transcript,
+    }),
+    env,
+    timeout: 3000,
+  });
+
+  assert.equal(stop.status, 0, stop.stderr);
+  const sent = JSON.parse(fs.readFileSync(responseMarker, 'utf8'));
+  assert.equal(sent.response_text, response.slice(0, -1));
+  const lastUnit = sent.response_text.charCodeAt(sent.response_text.length - 1);
+  assert.equal(lastUnit >= 0xd800 && lastUnit <= 0xdbff, false);
+});
+
 test('Stop without an exact captured prompt is a zero-effect skip', () => {
   const home = makeTempDir('prism-stop-home-');
   const dataDir = makeTempDir('prism-stop-data-');

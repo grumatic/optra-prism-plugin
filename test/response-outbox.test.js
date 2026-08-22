@@ -89,7 +89,11 @@ function fencedResponse(sessionId, epoch, clientEventId, submitPromptId, serverP
 test('terminal retention policy constants remain bounded', () => {
   assert.equal(outbox.MAX_TERMINAL_REJECTED_ENTRIES, 32);
   assert.equal(outbox.MAX_TERMINAL_REJECTED_BYTES, 64 * 1024 * 1024);
-  assert.equal(outbox.MAX_ENTRY_BYTES, 2 * 1024 * 1024);
+  // MAX_WIRE_BYTES (see lib/body-clamp.js) + 128 KiB envelope margin.
+  assert.equal(outbox.MAX_ENTRY_BYTES, Math.ceil((6 * 1024 * 1024 - 128 * 1024) / 2) + 128 * 1024);
+  assert.equal(outbox.MAX_ENTRY_BYTES, 3211264);
+  assert.equal(outbox.MAX_PENDING_ENTRIES, 512);
+  assert.equal(outbox.MAX_PENDING_BYTES, 128 * 1024 * 1024);
   assert.equal(outbox.TERMINAL_REJECTED_RETENTION_MS, 7 * 24 * 60 * 60 * 1000);
   assert.equal(outbox.ORPHAN_TEMP_AGE_MS, 5 * 60 * 1000);
 });
@@ -108,6 +112,91 @@ test('failed delivery remains queued and is redelivered by the next drain', asyn
   assert.equal(sends, 1);
   assert.deepEqual(second.map(({ id, acked }) => ({ id, acked })), [{ id: 'response-retry', acked: true }]);
   assert.deepEqual(outbox.listPending(), []);
+});
+
+test('an entry that keeps failing is demoted behind a fresher one instead of head-of-line-blocking it forever', async () => {
+  // Oldest by createdAt, so a pure age-ordered schedule would always attempt
+  // this one first, ahead of anything enqueued afterward.
+  assert.equal(outbox.enqueue({
+    ...responseEntry('perpetually-failing'),
+    createdAt: new Date(0).toISOString(),
+  }), true);
+
+  // Fail it enough times to accumulate a durable attempt count.
+  for (let i = 0; i < 3; i += 1) {
+    await outbox.drain(async () => ({ status: 503, body: 'unavailable' }));
+  }
+  const [failing] = outbox.listPending();
+  assert.equal(failing.id, 'perpetually-failing');
+  assert.equal(failing.deliveryAttempts, 3);
+
+  assert.equal(outbox.enqueue({
+    ...responseEntry('fresh-after-failures'),
+    createdAt: new Date(1000).toISOString(),
+  }), true);
+
+  // With limit: 1, an age-only schedule would retry the perpetually-failing
+  // entry (older createdAt) again and starve the fresh one. Demotion by
+  // attempt count means the fresh entry — 0 attempts vs. 3 — goes first.
+  const attempted = [];
+  const outcomes = await outbox.drain(async (entry) => {
+    attempted.push(entry.id);
+    return entry.id === 'fresh-after-failures'
+      ? { status: 202, body: 'accepted' }
+      : { status: 503, body: 'unavailable' };
+  }, { limit: 1 });
+
+  assert.deepEqual(attempted, ['fresh-after-failures']);
+  assert.equal(outcomes[0].acked, true);
+  assert.deepEqual(outbox.listPending().map((entry) => entry.id), ['perpetually-failing']);
+});
+
+test('eviction order is independent of delivery-attempt mtime bumps: a chronically-failing old entry is evicted before fresh unattempted prompts', async () => {
+  assert.equal(outbox.enqueue({
+    ...promptEntry('old-failing-prompt'),
+    createdAt: new Date(0).toISOString(),
+  }), true);
+
+  // Each failed attempt rewrites the file (bumpDeliveryAttempts), which
+  // refreshes its mtime well past every entry enqueued afterward. Eviction
+  // must still treat this as the OLDEST entry by createdAt, not the newest
+  // by mtime.
+  for (let i = 0; i < 5; i += 1) {
+    await outbox.drain(async () => ({ status: 503, body: 'unavailable' }));
+  }
+  const [failing] = outbox.listPending();
+  assert.equal(failing.id, 'old-failing-prompt');
+  assert.equal(failing.deliveryAttempts, 5);
+
+  for (let index = 0; index < outbox.MAX_PENDING_ENTRIES; index += 1) {
+    assert.equal(outbox.enqueue({
+      ...promptEntry(`fresh-prompt-${index}`),
+      createdAt: new Date((index + 1) * 1000).toISOString(),
+    }), true);
+  }
+
+  const pending = outbox.listPending();
+  assert.equal(pending.length, outbox.MAX_PENDING_ENTRIES);
+  assert.equal(pending.some((entry) => entry.id === 'old-failing-prompt'), false);
+  assert.equal(pending.some((entry) => entry.id === 'fresh-prompt-0'), true);
+  assert.equal(pending.some((entry) => entry.id === `fresh-prompt-${outbox.MAX_PENDING_ENTRIES - 1}`), true);
+});
+
+test('a corrupt (unparseable) dependency file does not permanently block its response', async () => {
+  const prompt = promptEntry('corrupt-dependency-prompt');
+  assert.equal(outbox.enqueue(prompt), true);
+  // Corrupt the durable prompt file in place: it exists on disk but fails
+  // JSON.parse, the way disk corruption or a partial write would leave it.
+  fs.writeFileSync(entryFile(prompt.id), 'not valid json{{{');
+
+  const response = { ...responseEntry('response-with-corrupt-dependency'), dependsOn: prompt.id };
+  assert.equal(outbox.enqueue(response), true);
+
+  const outcomes = await outbox.drain(async () => ({ status: 202, body: 'accepted' }));
+  const responseOutcome = outcomes.find((outcome) => outcome.id === response.id);
+  assert.ok(responseOutcome, 'response entry was attempted despite its corrupt dependency');
+  assert.equal(responseOutcome.acked, true);
+  assert.deepEqual(outbox.listPending().map((entry) => entry.id), []);
 });
 
 test('duplicate idempotent delivery is acknowledged without duplicate local state', async () => {
@@ -159,6 +248,60 @@ test('every machine-coded admission rejection is terminal and unknown codes are 
     bodyBytes: Buffer.byteLength(unknown),
     bodyTruncated: false,
   }), null);
+});
+
+test('an HTTP 413 is terminal only for ingest\'s exact fixed PayloadTooLarge shape', async () => {
+  assert.equal(outbox.isTerminalHttp413({
+    status: 413,
+    mediaType: 'text/plain',
+    body: 'Request body too large',
+    bodyTruncated: false,
+  }), true);
+  for (const result of [
+    // Status-only match with a different body is not ingest's fixed shape.
+    { status: 413, body: '' },
+    { status: 413, mediaType: 'text/plain', body: 'Payload Too Large' },
+    // A proxy-style 413 in front of an old pre-contract server: wrong media
+    // type (e.g. an nginx/CDN HTML error page) must never settle terminal.
+    { status: 413, mediaType: 'text/html', body: '<html><body>413 Request Entity Too Large</body></html>' },
+    // A misconfigured ingress emitting the right words but truncated or with
+    // extra content is not the exact fixed string either.
+    { status: 413, mediaType: 'text/plain', body: 'Request body too large\n' },
+    { status: 413, mediaType: 'text/plain', body: 'Request body too larg' },
+    { status: 413, mediaType: 'text/plain', body: 'Request body too large', bodyTruncated: true },
+    { status: 400, mediaType: 'application/json', body: JSON.stringify({ error: { code: 'prompt_body_exceeds_limit' } }) },
+    { status: 200, body: '' },
+    undefined,
+    null,
+  ]) assert.notEqual(outbox.isTerminalHttp413(result), true);
+
+  const terminal = responseEntry('terminal-http-413');
+  assert.equal(outbox.enqueue(terminal), true);
+  const [terminalOutcome] = await outbox.drain(async () => ({
+    status: 413,
+    mediaType: 'text/plain',
+    body: 'Request body too large',
+    bodyTruncated: false,
+  }));
+  assert.equal(terminalOutcome.terminal, true);
+  assert.equal(terminalOutcome.terminalReason, 'http_413');
+  assert.equal(terminalOutcome.primaryRemoved, true);
+  assert.deepEqual(outbox.listPending(), []);
+  assert.equal(outbox.isTerminalRejected(terminal.id), true);
+
+  // A proxy-style (or misordered-deploy) 413 stays retryable — the entry
+  // survives in the pending spool for the next drain rather than being lost.
+  const retryable = responseEntry('retryable-html-413');
+  assert.equal(outbox.enqueue(retryable), true);
+  const [retryableOutcome] = await outbox.drain(async () => ({
+    status: 413,
+    mediaType: 'text/html',
+    body: '<html><body>413 Request Entity Too Large</body></html>',
+  }));
+  assert.notEqual(retryableOutcome.terminal, true);
+  assert.equal(retryableOutcome.acked, false);
+  assert.deepEqual(outbox.listPending().map((entry) => entry.id), [retryable.id]);
+  assert.equal(outbox.isTerminalRejected(retryable.id), false);
 });
 
 test('terminal rejection requires the exact bounded JSON envelope and isolates the original intent', async () => {
@@ -218,7 +361,7 @@ test('missing terminal media type and sender errors remain pending for retry', a
   assert.deepEqual(outbox.listPending(), []);
 });
 
-test('outbox entry serialization accepts exactly 2MiB and rejects one additional byte', () => {
+test('outbox entry serialization accepts exactly MAX_ENTRY_BYTES and rejects one additional byte', () => {
   const base = {
     ...responseEntry('serialized-boundary'),
     createdAt: '2026-01-01T00:00:00.000Z',
@@ -235,6 +378,36 @@ test('outbox entry serialization accepts exactly 2MiB and rejects one additional
     id: 'serialized-boundary-over',
     payload: { response_text: `${exact.payload.response_text}x` },
   }).outcome, 'oversized');
+});
+
+test('a real clamped body plus a maximal realistic envelope fits MAX_ENTRY_BYTES (regression guard on the margin)', () => {
+  const { MAX_PROMPT_BODY_BYTES, MAX_WIRE_BYTES, clampToWireLimit } = require('../lib/body-clamp');
+  const sessionId = 's'.repeat(1024); // validSessionId's max (lib/session.js)
+  const submitPromptId = 'h'.repeat(1024); // MAX_HOST_PROMPT_ID_BYTES (lib/host-prompt-id.js)
+  const clientEventId = '5e1f8f6e-4b2a-4c3d-9e0f-1a2b3c4d5e6f';
+  const serverPromptId = '11111111-1111-4111-8111-111111111111';
+  const epoch = Number.MAX_SAFE_INTEGER;
+
+  const buildEntry = (rawText) => {
+    const clamped = clampToWireLimit(rawText, MAX_PROMPT_BODY_BYTES, MAX_WIRE_BYTES);
+    const entry = fencedResponse(sessionId, epoch, clientEventId, submitPromptId, serverPromptId, new Date().toISOString());
+    entry.payload.response_text = clamped;
+    return { entry, clamped };
+  };
+
+  // Plain content: the decoded bound binds, so the escaped field lands near
+  // MAX_PROMPT_BODY_BYTES (2 MiB), not the larger MAX_WIRE_BYTES.
+  const plain = buildEntry('x'.repeat(MAX_WIRE_BYTES));
+  assert.equal(outbox.enqueueDetailed(plain.entry).outcome, 'created');
+  assert.equal(outbox.markAcked(plain.entry.id), true);
+
+  // Escape-heavy content: the wire bound binds, so the escaped field can
+  // reach the full MAX_WIRE_BYTES (~2.9375 MiB) — this is the case that
+  // actually exercises the MAX_ENTRY_BYTES margin.
+  const escapeHeavy = buildEntry('"\\\n\t\r'.repeat(Math.ceil(MAX_WIRE_BYTES / 6)));
+  assert.equal(Buffer.byteLength(JSON.stringify(escapeHeavy.clamped), 'utf8') > MAX_PROMPT_BODY_BYTES, true);
+  assert.equal(outbox.enqueueDetailed(escapeHeavy.entry).outcome, 'created');
+  assert.equal(outbox.markAcked(escapeHeavy.entry.id), true);
 });
 
 test('terminal retention evicts the oldest filename tie and reaps expired entries and temps', async () => {
@@ -459,6 +632,33 @@ test('response-only cap fails closed without evicting an existing response', () 
   assert.equal(pending.some((entry) => entry.id === 'response-cap-0'), true);
   assert.equal(pending.some((entry) => entry.id === 'response-cap-overflow'), false);
 });
+test('MAX_PENDING_BYTES evicts oldest prompts first, never responses, ahead of the count cap', () => {
+  const entryBytes = 3 * 1024 * 1024;
+  assert.equal(outbox.enqueue({
+    ...responseEntry('big-response-protected'),
+    createdAt: new Date(0).toISOString(),
+    payload: { response_text: 'x'.repeat(1024) },
+  }), true);
+
+  const bigText = 'x'.repeat(entryBytes);
+  const entryCount = Math.ceil(outbox.MAX_PENDING_BYTES / entryBytes) + 5;
+  for (let index = 0; index < entryCount; index += 1) {
+    assert.equal(outbox.enqueue({
+      ...promptEntry(`big-prompt-${index}`),
+      payload: { prompt_text: bigText },
+      createdAt: new Date((index + 1) * 1000).toISOString(),
+    }), true);
+  }
+
+  const pending = outbox.listPending();
+  const totalBytes = pending.reduce((sum, entry) => sum + outbox.serializedEntryBytes(entry), 0);
+  assert.equal(totalBytes <= outbox.MAX_PENDING_BYTES, true);
+  assert.equal(pending.length < entryCount + 1, true);
+  assert.equal(pending.some((entry) => entry.id === 'big-response-protected'), true);
+  assert.equal(pending.some((entry) => entry.id === 'big-prompt-0'), false);
+  assert.equal(pending.some((entry) => entry.id === `big-prompt-${entryCount - 1}`), true);
+});
+
 test('keeps a successful prompt queued until its server id promotion is durable', async () => {
   const intent = {
     id: 'prompt-promotion',
