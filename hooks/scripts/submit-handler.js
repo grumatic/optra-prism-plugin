@@ -16,9 +16,13 @@ let drain;
 let readGit;
 let writeGit;
 let collectGitContext;
+let MAX_PROMPT_BODY_BYTES;
+let MAX_WIRE_BYTES;
+let clampToWireLimit;
 const systemMessages = [];
 
 const MAX_SYSTEM_MESSAGE_LENGTH = 10_000;
+const MAX_CWD_BYTES = 8 * 1024;
 function readHookStdin() {
   return new Promise((resolve) => {
     let input = '';
@@ -39,40 +43,31 @@ function transcriptBoundary(transcriptPath) {
   try { return { byteOffset: fs.statSync(transcriptPath).size, lineOffset: 0 }; } catch { return { byteOffset: 0, lineOffset: 0 }; }
 }
 
-// prompt.slice(0, 2000) can split a surrogate pair (an astral character, e.g.
-// an emoji), leaving a lone high surrogate as the last UTF-16 code unit.
-// JSON.stringify emits that as an unpaired \uXXXX escape, which a strict
-// UTF-8 JSON parser (serde_json on the server) rejects outright — turning
-// the whole submission into an unclassifiable permanent retry and losing the
-// capture. Drop the orphan rather than emit it.
-function truncatedPromptText(prompt) {
-  const sliced = prompt.slice(0, 2000);
-  const lastUnit = sliced.charCodeAt(sliced.length - 1);
-  const isLoneHighSurrogate = lastUnit >= 0xd800 && lastUnit <= 0xdbff;
-  return isLoneHighSurrogate ? sliced.slice(0, -1) : sliced;
-}
-
 function frozenPayload(data, prompt, clientEventId, git, hostPromptId) {
   // `prompt` here is already the trimmed body (see normalizedPrompt in
   // main()), not the raw hook input — the evidence fields below describe
   // that trimmed body, not whatever whitespace the host originally sent.
   //
-  // Hash the untruncated prompt once, before slicing, so the server can prove
-  // what the full body was without the plugin reading or storing it twice.
-  // original_char_count and the truncated-vs-not decision are both in UTF-16
-  // code units (JS string length / .slice semantics) — the same unit
-  // prompt_text's 2000-unit cutoff uses, not a byte or codepoint count.
+  // Hash the untruncated prompt once, before clamping, so the server can
+  // prove what the full body was without the plugin reading or storing it
+  // twice. original_char_count is in UTF-16 code units (JS string length);
+  // the clamp itself is byte-bounded (see lib/body-clamp.js).
   const untruncatedSha256 = crypto.createHash('sha256').update(prompt, 'utf8').digest('hex');
+  const clampedPrompt = clampToWireLimit(prompt, MAX_PROMPT_BODY_BYTES, MAX_WIRE_BYTES);
   const payload = {
-    prompt_text: truncatedPromptText(prompt),
+    prompt_text: clampedPrompt,
     source: 'claude-code',
     tool_session_id: data.session_id || '',
     client_event_id: clientEventId,
     original_char_count: prompt.length,
     untruncated_sha256: untruncatedSha256,
-    truncated: prompt.length > 2000,
+    truncated: clampedPrompt !== prompt,
   };
-  if (data.cwd) payload.cwd = data.cwd;
+  // A path this long is degenerate — truncate silently, no evidence fields
+  // needed (unlike prompt_text, cwd carries no server-side contract limit;
+  // this cap exists only to close the last unbounded contributor to
+  // MAX_ENTRY_BYTES's envelope margin, see lib/response-outbox.js).
+  if (data.cwd) payload.cwd = clampToWireLimit(data.cwd, MAX_CWD_BYTES, MAX_CWD_BYTES);
   if (git) payload.metadata = { git };
   if (hostPromptId) payload.host_prompt_id = hostPromptId;
   // Client-observed submit time. The outbox can deliver this payload long
@@ -174,6 +169,7 @@ async function main() {
   const normalizedPrompt = prompt.trim();
 
   ({ collectGitContext } = require('../../lib/git'));
+  ({ MAX_PROMPT_BODY_BYTES, MAX_WIRE_BYTES, clampToWireLimit } = require('../../lib/body-clamp'));
   const git = await gitMetadataForPrompt(data);
   const clientEventId = crypto.randomUUID();
   const payload = frozenPayload(data, normalizedPrompt, clientEventId, git, hostPromptId);
