@@ -6,6 +6,7 @@
 
 const crypto = require('crypto');
 const { readStdin } = require('../../lib/stdin');
+const { MAX_PROMPT_BODY_BYTES, MAX_WIRE_BYTES, clampToWireLimit } = require('../../lib/body-clamp');
 const {
   readTurn,
   updateSummary,
@@ -106,13 +107,18 @@ async function recoverSubmittingTurn(turn, data) {
 
 function minimalResponseEntry(data, turn) {
   const active = turn.active;
+  const responseText = data.last_assistant_message;
+  const clampedResponseText = clampToWireLimit(responseText, MAX_PROMPT_BODY_BYTES, MAX_WIRE_BYTES);
   const responsePayload = {
     tool_session_id: data.session_id,
     prompt_id: active.serverPromptId,
     client_event_id: active.clientEventId,
     host_prompt_id: active.submitPromptId,
     response_operation_id: responseOperationId(data, active),
-    response_text: data.last_assistant_message,
+    response_text: clampedResponseText,
+    original_char_count: responseText.length,
+    untruncated_sha256: sha256(responseText),
+    truncated: clampedResponseText !== responseText,
   };
   return {
     id: responsePayload.response_operation_id,
