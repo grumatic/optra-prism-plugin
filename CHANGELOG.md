@@ -5,6 +5,21 @@ All notable changes to the Prism plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.8] - 2026-08-22
+
+### Added
+- Prompt and response capture requests now include truncation evidence — the original character count, a SHA-256 digest of the full body, and a truncation flag — for backends that accept these fields.
+- The managed OpenTelemetry environment now pins log export batching to a batch size of 100 on a one-second schedule, and sets assistant-response logging explicitly rather than leaving it to inherited defaults.
+
+### Changed
+- The client-side 2000-character prompt cap is removed. Captured prompt and response bodies now clamp at the backend's contract limit (2 MiB) instead, with lone surrogates scrubbed so a clamp can no longer split a pair; truncation is now rare and, when it happens, is flagged by the truncation-evidence fields.
+- Backend rejections for an oversized prompt or response body (`prompt_body_exceeds_limit`, `response_body_exceeds_limit`), and the ingest service's own payload-too-large (413) response, are now treated as terminal delivery outcomes; other 413 responses remain retryable.
+- An assistant-response logging opt-out is now preserved across settings scopes; a conflicting higher-precedence opt-out is reported by `/prism:doctor` and `/prism:status` as a cross-scope conflict instead of fixable drift.
+- The delivery outbox now enforces a 128 MiB pending-byte budget and demotes repeatedly failed entries behind fresh ones, so a stuck entry can no longer block new captures.
+
+### Fixed
+- Truncation no longer splits a surrogate pair or emits a lone surrogate.
+
 ## [0.7.7] - 2026-08-21
 
 ### Added
