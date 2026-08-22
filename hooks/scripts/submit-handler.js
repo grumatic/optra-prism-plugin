@@ -16,9 +16,13 @@ let drain;
 let readGit;
 let writeGit;
 let collectGitContext;
+let MAX_PROMPT_BODY_BYTES;
+let MAX_WIRE_BYTES;
+let clampToWireLimit;
 const systemMessages = [];
 
 const MAX_SYSTEM_MESSAGE_LENGTH = 10_000;
+const MAX_CWD_BYTES = 8 * 1024;
 function readHookStdin() {
   return new Promise((resolve) => {
     let input = '';
@@ -40,13 +44,19 @@ function transcriptBoundary(transcriptPath) {
 }
 
 function frozenPayload(data, prompt, clientEventId, git, hostPromptId) {
+  const untruncatedSha256 = crypto.createHash('sha256').update(prompt, 'utf8').digest('hex');
+  const clampedPrompt = clampToWireLimit(prompt, MAX_PROMPT_BODY_BYTES, MAX_WIRE_BYTES);
   const payload = {
-    prompt_text: prompt.slice(0, 2000),
+    prompt_text: clampedPrompt,
     source: 'claude-code',
     tool_session_id: data.session_id || '',
     client_event_id: clientEventId,
+    original_char_count: prompt.length,
+    untruncated_sha256: untruncatedSha256,
+    truncated: clampedPrompt !== prompt,
   };
-  if (data.cwd) payload.cwd = data.cwd;
+  // cwd carries no server-side contract limit; this cap only bounds the outbox entry's envelope margin.
+  if (data.cwd) payload.cwd = clampToWireLimit(data.cwd, MAX_CWD_BYTES, MAX_CWD_BYTES);
   if (git) payload.metadata = { git };
   if (hostPromptId) payload.host_prompt_id = hostPromptId;
   // Client-observed submit time. The outbox can deliver this payload long
@@ -148,6 +158,7 @@ async function main() {
   const normalizedPrompt = prompt.trim();
 
   ({ collectGitContext } = require('../../lib/git'));
+  ({ MAX_PROMPT_BODY_BYTES, MAX_WIRE_BYTES, clampToWireLimit } = require('../../lib/body-clamp'));
   const git = await gitMetadataForPrompt(data);
   const clientEventId = crypto.randomUUID();
   const payload = frozenPayload(data, normalizedPrompt, clientEventId, git, hostPromptId);
