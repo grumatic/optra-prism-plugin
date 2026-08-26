@@ -817,6 +817,8 @@ test('normal prompts bind the captured server id to an opaque frozen payload', (
   assert.equal(turn.active.frozenPayloadHash, crypto.createHash('sha256').update(JSON.stringify(sent)).digest('hex'));
   assert.equal(JSON.stringify(turn).includes(prompt), false);
   assert.equal(sent.truncated, false);
+  assert.equal(Object.hasOwn(sent, 'prompt_size_clamped'), false);
+  assert.equal(Object.hasOwn(sent.metadata, 'prompt_size_clamped'), false);
   assert.equal(sent.original_char_count, prompt.length);
   assert.equal(sent.untruncated_sha256, crypto.createHash('sha256').update(prompt, 'utf8').digest('hex'));
 });
@@ -886,6 +888,8 @@ test('a prompt whose escaped size exceeds MAX_PROMPT_BODY_BYTES is clamped at th
     true,
   );
   assert.equal(sent.truncated, true);
+  assert.equal(Object.hasOwn(sent, 'prompt_size_clamped'), false);
+  assert.equal(sent.metadata.prompt_size_clamped, true);
   assert.equal(sent.original_char_count, prompt.length);
   assert.notEqual(sent.original_char_count, Buffer.byteLength(prompt, 'utf8'));
   assert.equal(sent.untruncated_sha256, crypto.createHash('sha256').update(prompt, 'utf8').digest('hex'));
@@ -925,6 +929,8 @@ test('a prompt whose escaped size is within MAX_PROMPT_BODY_BYTES is sent unclam
   const sent = JSON.parse(fs.readFileSync(marker, 'utf8'));
   assert.equal(sent.prompt_text, prompt);
   assert.equal(sent.truncated, false);
+  assert.equal(Object.hasOwn(sent, 'prompt_size_clamped'), false);
+  assert.equal(Object.hasOwn(sent.metadata, 'prompt_size_clamped'), false);
   assert.equal(sent.original_char_count, prompt.length);
   assert.equal(sent.untruncated_sha256, crypto.createHash('sha256').update(prompt, 'utf8').digest('hex'));
 });
@@ -996,6 +1002,9 @@ test('a prompt well under the byte limit that ends in a lone high surrogate is s
   assert.equal(result.status, 0, result.stderr);
   const sent = JSON.parse(fs.readFileSync(marker, 'utf8'));
   assert.equal(sent.prompt_text, prompt.slice(0, -1));
+  assert.equal(sent.truncated, true);
+  assert.equal(Object.hasOwn(sent, 'prompt_size_clamped'), false);
+  assert.equal(Object.hasOwn(sent.metadata, 'prompt_size_clamped'), false);
   const lastUnit = sent.prompt_text.charCodeAt(sent.prompt_text.length - 1);
   assert.equal(lastUnit >= 0xd800 && lastUnit <= 0xdbff, false);
 });

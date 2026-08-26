@@ -192,6 +192,32 @@ test('sendPrompt preserves the Hook prompt request and adds plugin provenance', 
   assertRequest(request, '/v1/prompts', expectedBody);
 });
 
+test('sendPrompt preserves prompt metadata with bounded size-clamp evidence', async () => {
+  const { ingest, requestReceived } = await loadIngestWithCapture(API_KEY, 'accepted', true);
+  const [result, request] = await Promise.all([
+    ingest.sendPrompt({
+      prompt_text: 'bounded prefix',
+      tool_session_id: 'session-prompt-size-clamp',
+      metadata: {
+        producer_evidence: { schema_version: 1 },
+        prompt_size_clamped: true,
+      },
+    }),
+    requestReceived,
+  ]);
+
+  assert.equal(result.status, 202);
+  assert.deepEqual(JSON.parse(request.body), {
+    prompt_text: 'bounded prefix',
+    source: 'claude-code',
+    tool_session_id: 'session-prompt-size-clamp',
+    metadata: {
+      producer_evidence: { schema_version: 1 },
+      prompt_size_clamped: true,
+    },
+  });
+});
+
 test('sendPrompt preserves valid opaque host IDs and rejects invalid present IDs before POST', async () => {
   assert.equal(validHostPromptId('x'.repeat(MAX_HOST_PROMPT_ID_BYTES)), true);
   assert.equal(validHostPromptId(`${'가'.repeat(341)}x`), true);

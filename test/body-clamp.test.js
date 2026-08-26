@@ -1,6 +1,11 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
-const { MAX_PROMPT_BODY_BYTES, MAX_WIRE_BYTES, clampToWireLimit } = require('../lib/body-clamp');
+const {
+  MAX_PROMPT_BODY_BYTES,
+  MAX_WIRE_BYTES,
+  clampToWireLimit,
+  clampToWireLimitWithEvidence,
+} = require('../lib/body-clamp');
 
 function fits(text, maxDecodedBytes, maxEscapedBytes) {
   return Buffer.byteLength(text, 'utf8') <= maxDecodedBytes
@@ -33,6 +38,31 @@ test('constants: MAX_PROMPT_BODY_BYTES is the server contract value; MAX_WIRE_BY
 test('text under both bounds passes through unchanged', () => {
   const text = 'a short prompt';
   assert.equal(clampToWireLimit(text, MAX_PROMPT_BODY_BYTES, MAX_WIRE_BYTES), text);
+  assert.deepEqual(
+    clampToWireLimitWithEvidence(text, MAX_PROMPT_BODY_BYTES, MAX_WIRE_BYTES),
+    { text, sizeClamped: false },
+  );
+});
+
+test('size-clamp evidence distinguishes every bounded prefix clamp from surrogate scrubbing', () => {
+  const cases = [
+    ['ASCII', 'x'.repeat(200), 64, 10_000],
+    ['CJK', '가'.repeat(200), 64, 10_000],
+    ['emoji', '\u{1F600}'.repeat(200), 64, 10_000],
+    ['control', '\x01'.repeat(200), 10_000, 64],
+  ];
+  for (const [name, text, decoded, escaped] of cases) {
+    const result = clampToWireLimitWithEvidence(text, decoded, escaped);
+    assert.equal(result.sizeClamped, true, name);
+    assert.equal(fits(result.text, decoded, escaped), true, name);
+    assert.notEqual(result.text, text, name);
+  }
+
+  const loneSurrogate = JSON.parse('"hello\\ud83d"');
+  assert.deepEqual(
+    clampToWireLimitWithEvidence(loneSurrogate, MAX_PROMPT_BODY_BYTES, MAX_WIRE_BYTES),
+    { text: 'hello', sizeClamped: false },
+  );
 });
 
 test('ASCII text is clamped to the exact decoded-byte boundary when the decoded bound binds first', () => {

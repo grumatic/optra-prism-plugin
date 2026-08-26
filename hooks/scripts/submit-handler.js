@@ -19,6 +19,7 @@ let collectGitContext;
 let MAX_PROMPT_BODY_BYTES;
 let MAX_WIRE_BYTES;
 let clampToWireLimit;
+let clampToWireLimitWithEvidence;
 const systemMessages = [];
 
 const MAX_SYSTEM_MESSAGE_LENGTH = 10_000;
@@ -51,7 +52,11 @@ function frozenPayload(data, prompt, clientEventId, git, hostPromptId, producerE
   // twice. original_char_count is in UTF-16 code units (JS string length);
   // the clamp itself is byte-bounded (see lib/body-clamp.js).
   const untruncatedSha256 = crypto.createHash('sha256').update(prompt, 'utf8').digest('hex');
-  const clampedPrompt = clampToWireLimit(prompt, MAX_PROMPT_BODY_BYTES, MAX_WIRE_BYTES);
+  const { text: clampedPrompt, sizeClamped: promptSizeClamped } = clampToWireLimitWithEvidence(
+    prompt,
+    MAX_PROMPT_BODY_BYTES,
+    MAX_WIRE_BYTES,
+  );
   const payload = {
     prompt_text: clampedPrompt,
     source: 'claude-code',
@@ -72,6 +77,11 @@ function frozenPayload(data, prompt, clientEventId, git, hostPromptId, producerE
   payload.metadata = {
     ...(git ? { git } : {}),
     ...(producerEvidence ? { producer_evidence: producerEvidence } : {}),
+    // Metadata is deliberately extensible on the legacy prompt contract.
+    // Emit this only for an actual decoded/wire size prefix clamp: false is
+    // indistinguishable from older plugin payloads, and `truncated` still
+    // records lone-surrogate scrubbing separately.
+    ...(promptSizeClamped ? { prompt_size_clamped: true } : {}),
   };
   if (hostPromptId) payload.host_prompt_id = hostPromptId;
   // Client-observed submit time. The outbox can deliver this payload long
@@ -207,7 +217,12 @@ async function main() {
   const normalizedPrompt = prompt.trim();
 
   ({ collectGitContext } = require('../../lib/git'));
-  ({ MAX_PROMPT_BODY_BYTES, MAX_WIRE_BYTES, clampToWireLimit } = require('../../lib/body-clamp'));
+  ({
+    MAX_PROMPT_BODY_BYTES,
+    MAX_WIRE_BYTES,
+    clampToWireLimit,
+    clampToWireLimitWithEvidence,
+  } = require('../../lib/body-clamp'));
   const git = await gitMetadataForPrompt(data);
   const clientEventId = crypto.randomUUID();
   const payload = frozenPayload(
