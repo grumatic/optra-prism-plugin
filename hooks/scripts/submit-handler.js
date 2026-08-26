@@ -16,6 +16,7 @@ let drain;
 let readGit;
 let writeGit;
 let collectGitContext;
+let unavailablePromptGitMetadata;
 let MAX_PROMPT_BODY_BYTES;
 let MAX_WIRE_BYTES;
 let clampToWireLimit;
@@ -102,28 +103,36 @@ async function gitMetadataForPrompt(data) {
     return null;
   }
 
-  let record = readGit(data.session_id);
-  const refreshedAt = record && record.refreshedAt ? Date.parse(record.refreshedAt) : NaN;
-  if (
-    !record
-    || record.canonicalCwd !== canonicalCwd
+  const cached = readGit(data.session_id);
+  const refreshedAt = cached && cached.refreshedAt ? Date.parse(cached.refreshedAt) : NaN;
+  const needsRefresh = !cached
+    || cached.canonicalCwd !== canonicalCwd
     || !Number.isFinite(refreshedAt)
-    || Date.now() - refreshedAt >= 30_000
-  ) {
+    || Date.now() - refreshedAt >= 30_000;
+
+  // Decide from the envelope this call itself observed (fresh, or the still-
+  // valid cache), never from writeGit's merged return: the preserve-last-good
+  // branch there can rewrite canonicalCwd to a stale value and fail the guard
+  // below for what is actually a fresh, matching observation.
+  let envelope = cached;
+  if (needsRefresh) {
     try {
       const context = await collectGitContext(canonicalCwd);
-      record = writeGit(data.session_id, context);
+      envelope = context;
+      writeGit(data.session_id, context);
     } catch {
       return null;
     }
   }
 
-  return record
-    && record.status === 'ok'
-    && record.canonicalCwd === canonicalCwd
-    && record.value
-    ? record.value
-    : null;
+  if (!envelope || envelope.canonicalCwd !== canonicalCwd) return null;
+  if (envelope.status === 'ok' && envelope.value) return envelope.value;
+  // A preserved-last-good value is never sent here: a non-'ok' status always
+  // carries this attempt's own reason, never the stale value's timestamp.
+  if (envelope.status !== 'ok' && envelope.reason) {
+    return unavailablePromptGitMetadata(envelope.reason, envelope.attemptedAt);
+  }
+  return null;
 }
 
 function payloadHash(payload) {
@@ -217,6 +226,7 @@ async function main() {
   const normalizedPrompt = prompt.trim();
 
   ({ collectGitContext } = require('../../lib/git'));
+  ({ unavailablePromptGitMetadata } = require('../../lib/git-evidence-contract'));
   ({
     MAX_PROMPT_BODY_BYTES,
     MAX_WIRE_BYTES,
