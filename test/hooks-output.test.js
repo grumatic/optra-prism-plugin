@@ -440,7 +440,7 @@ test('non-string prompts advance only control barriers without posting', () => {
   }
 });
 
-test('a present invalid host prompt ID keeps the legacy prompt path and records an evidence gap', () => {
+test('a present invalid host prompt ID fails closed without an orphan prompt while recording an evidence gap', () => {
   const home = makeTempDir('prism-invalid-host-home-');
   const dataDir = makeTempDir('prism-invalid-host-data-');
   const sessionId = 'invalid-host-submit';
@@ -455,12 +455,27 @@ test('a present invalid host prompt ID keeps the legacy prompt path and records 
   const turn = readSessionRecord(dataDir, () => session.readTurn(sessionId));
   assert.equal(turn.epoch, 2);
   assert.equal(turn.kind, 'normal-pending');
-  assert.equal(turn.active.status, 'submitting');
-  const [pending] = readSessionRecord(dataDir, () => require('../lib/response-outbox').listPending());
-  assert.equal(pending.kind, 'prompt');
-  assert.equal(Object.hasOwn(pending.payload.metadata, 'producer_evidence'), false);
+  assert.equal(turn.active.status, 'invalidated');
+  assert.deepEqual(readSessionRecord(dataDir, () => require('../lib/response-outbox').listPending()), []);
   const terminal = path.join(dataDir, 'runtime', 'outbox-terminal-rejected');
   assert.equal(readAllFiles(terminal).includes('prompt_producer_evidence_invalid'), true);
+});
+
+test('an absent host prompt ID retains the legacy prompt fallback', () => {
+  const home = makeTempDir('prism-hostless-prompt-home-');
+  const dataDir = makeTempDir('prism-hostless-prompt-data-');
+  const sessionId = 'hostless-submit';
+  const result = spawnSync(process.execPath, [SUBMIT_HANDLER], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    input: JSON.stringify({ session_id: sessionId, prompt: 'legacy prompt' }),
+    env: runtimeEnv(home, dataDir, { apiKey: 'prism_hostless', ingest_url: 'http://127.0.0.1:9' }),
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const [pending] = readSessionRecord(dataDir, () => require('../lib/response-outbox').listPending());
+  assert.equal(pending.kind, 'prompt');
+  assert.equal(Object.hasOwn(pending.payload, 'host_prompt_id'), false);
+  assert.equal(Object.hasOwn(pending.payload.metadata, 'producer_evidence'), false);
 });
 test('SessionStart accepts an opaque config key without fetch, OTEL repair, or env-file writes', () => {
   const home = makeTempDir('prism-session-start-config-home-');
