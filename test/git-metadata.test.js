@@ -563,35 +563,6 @@ test('a pre-existing v0.7.8 git record makes readGit return null so the submit p
   });
 });
 
-test('this slice adds no evidence-outbox surface and stays isolated in its own strings', () => {
-  for (const forbidden of ['lib/git-evidence-outbox.js', 'lib/git-evidence-delivery.js', 'lib/git-evidence-capability.js']) {
-    assert.equal(fs.existsSync(path.join(ROOT, forbidden)), false, forbidden);
-  }
-
-  const offenders = [];
-  for (const dir of ['lib', 'hooks', 'test']) {
-    const files = [];
-    (function walk(current) {
-      for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
-        if (entry.name === 'node_modules') continue;
-        const full = path.join(current, entry.name);
-        if (entry.isDirectory()) walk(full);
-        else if (entry.name.endsWith('.js')) files.push(full);
-      }
-    })(path.join(ROOT, dir));
-    for (const file of files) {
-      // This guard test itself legitimately names the forbidden strings as
-      // assertion literals; every other file must stay free of them.
-      if (file === __filename) continue;
-      const source = fs.readFileSync(file, 'utf8');
-      if (source.includes('/v1/git-evidence') || source.includes('git-evidence/v1')) {
-        offenders.push(path.relative(ROOT, file));
-      }
-    }
-  }
-  assert.deepEqual(offenders, []);
-});
-
 test('git binary absent from PATH omits metadata.git entirely and still captures the prompt (fail-open)', () => {
   const home = tempDir('prism-git-meta-nogit-home-');
   const dataDir = tempDir('prism-git-meta-nogit-data-');

@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawn, spawnSync } = require('node:child_process');
 const { afterEach, test } = require('node:test');
-const { buildBinding } = require('../lib/binding');
+const { buildBinding, bindingDigest } = require('../lib/binding');
 
 const ROOT = path.resolve(__dirname, '..');
 const SUBMIT_HANDLER = path.join(ROOT, 'hooks', 'scripts', 'submit-handler.js');
@@ -1325,7 +1325,7 @@ test('SessionStart drain aborts a trickling POST at its deadline', async () => {
       CLAUDE_PLUGIN_ROOT: ROOT,
       PRISM_API_KEY: apiKey,
       PRISM_INGEST_URL: server.url,
-    });
+    }, 5000);
     const elapsedMs = Date.now() - startedAt;
 
     await Promise.race([
@@ -1335,7 +1335,15 @@ test('SessionStart drain aborts a trickling POST at its deadline', async () => {
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.timedOut, false);
     assert.ok(elapsedMs >= 1700, `SessionStart drain ended too early after ${elapsedMs}ms`);
-    assert.ok(elapsedMs <= 2600, `SessionStart drain exceeded its budget at ${elapsedMs}ms`);
+    // SessionStart's git-evidence/v1 steps run after the outbox recoverOutbox
+    // drain (2000ms budget): resumeEvidenceCapture is a near-instant no-op
+    // here (this session owns no git-capture marker), the capability refresh
+    // is bounded at CAPABILITY_REQUEST_TIMEOUT_MS (1000ms) against the same
+    // trickling server, and the evidence-backlog drain never runs because
+    // that refresh cannot report a supported capability. So the combined
+    // ceiling is the outbox drain plus the one bounded capability request,
+    // with slack for process/IPC overhead.
+    assert.ok(elapsedMs <= 4200, `SessionStart drain exceeded its budget at ${elapsedMs}ms`);
     assert.equal(readSessionRecord(dataDir, () => require('../lib/response-outbox').listPending()).length, 1);
   } finally {
     await server.close();
@@ -1813,4 +1821,132 @@ test('real-host fixture completes submit-to-stop correlation without leaking pro
   assert.equal(readSessionRecord(dataDir, () => session.readSummary(fixture.stop.session_id)).contextHealth.turnCount, 1);
   assert.equal(readAllFiles(home).includes(SENTINEL), false);
   assert.equal(readAllFiles(dataDir).includes(SENTINEL), false);
+});
+
+function runEvidenceProbeTurn({
+  home, dataDir, repo, env, sessionId, promptId,
+}) {
+  const transcript = path.join(home, `transcript-${sessionId}.jsonl`);
+  fs.writeFileSync(transcript, '');
+  const promptSubmit = {
+    ...PREFLIGHT_FIXTURE.userPromptSubmit,
+    session_id: sessionId,
+    prompt_id: promptId,
+    prompt: `${PREFLIGHT_FIXTURE.userPromptSubmit.prompt} ${SENTINEL}`,
+    transcript_path: transcript,
+    cwd: repo,
+  };
+  const stopEvent = {
+    ...PREFLIGHT_FIXTURE.stop,
+    session_id: sessionId,
+    prompt_id: promptId,
+    transcript_path: transcript,
+    cwd: repo,
+  };
+
+  const submit = spawnSync(process.execPath, [SUBMIT_HANDLER], {
+    cwd: ROOT, encoding: 'utf8', input: JSON.stringify(promptSubmit), env,
+  });
+  assert.equal(submit.status, 0, submit.stderr);
+  assert.equal(submit.stderr, '');
+  assert.equal(assertJsonOrEmpty(submit.stdout), null);
+
+  fs.writeFileSync(transcript, [
+    JSON.stringify({ type: 'user', prompt_id: promptId, message: { role: 'user', content: 'request' } }),
+    JSON.stringify({
+      type: 'assistant',
+      uuid: `fixture-assistant-${sessionId}`,
+      message: {
+        role: 'assistant',
+        stop_reason: 'end_turn',
+        content: stopEvent.last_assistant_message,
+        model: 'claude-sonnet-4-6',
+        usage: {
+          input_tokens: 100, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 10,
+        },
+      },
+    }),
+    '',
+  ].join('\n'));
+  const stop = spawnSync(process.execPath, [STOP_HANDLER], {
+    cwd: ROOT, encoding: 'utf8', input: JSON.stringify(stopEvent), env,
+  });
+  assert.equal(stop.status, 0, stop.stderr);
+  assert.equal(stop.stderr, '');
+  // Prompt/response capture (the hook's actual stdout contract) is intact
+  // regardless of what happens to git evidence in the background.
+  assert.match(assertJsonOrEmpty(stop.stdout).systemMessage, /^\[Prism\] B live · refactor \(t1\) · /);
+  assert.equal(readSessionRecord(dataDir, () => session.readTurn(sessionId)).active.status, 'consumed');
+  assert.equal(readAllFiles(home).includes(SENTINEL), false);
+  assert.equal(readAllFiles(dataDir).includes(SENTINEL), false);
+}
+
+test('git_evidence_after_response_v1: an open capability gate and an unwritable evidence spool never affect prompt/response capture', () => {
+  const home = makeTempDir('prism-evidence-after-response-home-');
+  const dataDir = makeTempDir('prism-evidence-after-response-data-');
+  const repo = makeGitRepoWithRemote();
+
+  const apiKey = 'prism_evidence_after_response';
+  const ingestUrl = 'http://127.0.0.1:9';
+  const interceptor = writeSuccessfulIngestInterceptor(home);
+  const env = runtimeEnv(home, dataDir, {
+    apiKey,
+    ingest_url: ingestUrl,
+    show_realtime_summary: true,
+  }, {
+    NODE_OPTIONS: `--require=${interceptor}`,
+  });
+
+  // A real `supported` capability snapshot for this exact binding, written
+  // directly (no live config fetch involved) so neither turn below can be
+  // short-circuited at the capability gate — each must actually reach git
+  // resolution and attempt the spool write.
+  const digest = bindingDigest(apiKey, ingestUrl);
+  const runtimeDir = path.join(dataDir, 'runtime');
+  fs.mkdirSync(runtimeDir, { recursive: true, mode: 0o700 });
+  const nowIso = new Date().toISOString();
+  fs.writeFileSync(
+    path.join(runtimeDir, `git-evidence-capability-${digest}.json`),
+    JSON.stringify({
+      schema_version: 'git-evidence-capability-cache/v1',
+      binding_digest: digest,
+      checked_at: nowIso,
+      last_success_at: nowIso,
+      state: 'supported',
+      endpoint: '/v1/git-evidence',
+      versions: ['git-evidence/v1'],
+    }),
+    { mode: 0o600 },
+  );
+
+  const evidenceOutboxDir = path.join(runtimeDir, 'git-evidence-outbox');
+  const readEvidenceCounts = () => readSessionRecord(dataDir, () => require('../lib/git-evidence-outbox').evidenceCounts());
+
+  // Phase 1 — positive control: the spool is writable, so a real capture
+  // must actually enqueue an entry. Without this control, "nothing pending"
+  // in phase 2 would be indistinguishable from the gate never having opened
+  // at all (the exact vacuousness this test exists to rule out).
+  runEvidenceProbeTurn({
+    home, dataDir, repo, env, sessionId: '00000000-0000-4000-8000-0000000000b1', promptId: '00000000-0000-4000-8000-0000000000b2',
+  });
+  const afterWritable = readEvidenceCounts();
+  assert.equal(afterWritable.pending, 1, 'a real capture attempt must enqueue when the spool is writable');
+  assert.equal(afterWritable.terminal, 0);
+
+  // Phase 2 — the evidence spool directory exists but is not writable. The
+  // capability gate is the same open gate as phase 1 (proven above to reach
+  // git resolution and enqueue), so this turn's capture attempt must fail
+  // closed at the write step, not at the gate.
+  fs.chmodSync(evidenceOutboxDir, 0o500);
+  try {
+    runEvidenceProbeTurn({
+      home, dataDir, repo, env, sessionId: '00000000-0000-4000-8000-0000000000b3', promptId: '00000000-0000-4000-8000-0000000000b4',
+    });
+    const afterUnwritable = readEvidenceCounts();
+    assert.equal(afterUnwritable.pending, 1, 'no new entry from the unwritable-spool turn');
+    assert.equal(afterUnwritable.terminal, 0);
+    assert.equal(readSessionRecord(dataDir, () => session.readGitCapture('00000000-0000-4000-8000-0000000000b3')), null);
+  } finally {
+    fs.chmodSync(evidenceOutboxDir, 0o700);
+  }
 });

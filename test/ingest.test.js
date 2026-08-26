@@ -188,6 +188,7 @@ test('sendPrompt preserves the Hook prompt request and adds plugin provenance', 
     bodyBytes: 8,
     bodyTruncated: false,
     mediaType: 'text/plain',
+    retryAfterSeconds: null,
   });
   assertRequest(request, '/v1/prompts', expectedBody);
 });
@@ -334,6 +335,7 @@ test('sendResponse preserves the Hook response request and adds plugin provenanc
     bodyBytes: 8,
     bodyTruncated: false,
     mediaType: 'text/plain',
+    retryAfterSeconds: null,
   });
   assertRequest(request, '/v1/prompts/response', expectedBody);
   assert.equal(Object.hasOwn(JSON.parse(request.body), 'response_content_hash'), false);
@@ -430,6 +432,7 @@ test('sendPrompt preserves a legacy API key from config in the request header', 
     bodyBytes: 8,
     bodyTruncated: false,
     mediaType: 'text/plain',
+    retryAfterSeconds: null,
   });
   assertRequest(request, '/v1/prompts', input, LEGACY_API_KEY);
 });
