@@ -43,11 +43,9 @@ function transcriptBoundary(transcriptPath) {
   try { return { byteOffset: fs.statSync(transcriptPath).size, lineOffset: 0 }; } catch { return { byteOffset: 0, lineOffset: 0 }; }
 }
 
-function frozenPayload(data, prompt, clientEventId, git, hostPromptId) {
-  // `prompt` here is already the trimmed body (see normalizedPrompt in
-  // main()), not the raw hook input — the evidence fields below describe
-  // that trimmed body, not whatever whitespace the host originally sent.
-  //
+function frozenPayload(data, prompt, clientEventId, git, hostPromptId, producerEvidence) {
+  // `prompt` is the legacy trimmed body. Producer evidence is separately
+  // frozen from raw hook context before that normalization (in main()).
   // Hash the untruncated prompt once, before clamping, so the server can
   // prove what the full body was without the plugin reading or storing it
   // twice. original_char_count is in UTF-16 code units (JS string length);
@@ -68,7 +66,13 @@ function frozenPayload(data, prompt, clientEventId, git, hostPromptId) {
   // this cap exists only to close the last unbounded contributor to
   // MAX_ENTRY_BYTES's envelope margin, see lib/response-outbox.js).
   if (data.cwd) payload.cwd = clampToWireLimit(data.cwd, MAX_CWD_BYTES, MAX_CWD_BYTES);
-  if (git) payload.metadata = { git };
+  // producerEvidence is frozen immediately after JSON parsing, before trim,
+  // clamp, or asynchronous git collection. It is execution context only:
+  // neither a literal tag nor absent agent context establishes a producer.
+  payload.metadata = {
+    ...(git ? { git } : {}),
+    ...(producerEvidence ? { producer_evidence: producerEvidence } : {}),
+  };
   if (hostPromptId) payload.host_prompt_id = hostPromptId;
   // Client-observed submit time. The outbox can deliver this payload long
   // after submit, and the server's receipt time would misplace the turn.
@@ -116,6 +120,32 @@ function payloadHash(payload) {
   return crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex');
 }
 
+function receiveEvidenceValidation(data) {
+  const { validHostPromptId } = require('../../lib/host-prompt-id');
+  if (!data || typeof data.session_id !== 'string' || data.session_id.length === 0
+    || Buffer.byteLength(data.session_id, 'utf8') > 1024 || !validHostPromptId(data.prompt_id)) {
+    return { ok: false, reason: 'prompt_producer_evidence_invalid' };
+  }
+  const { optionalContextState } = require('../../lib/producer-evidence');
+  const context = optionalContextState(data);
+  return context.ok
+    ? { ok: true }
+    : { ok: false, reason: `prompt_producer_evidence_${context.reason}` };
+}
+
+function recordReceiveEvidenceGap(data, reason) {
+  const { recordTerminalGap } = require('../../lib/response-outbox');
+  const session = data && typeof data.session_id === 'string' ? data.session_id : '';
+  const prompt = data && typeof data.prompt_id === 'string' ? data.prompt_id : '';
+  const id = crypto.createHash('sha256')
+    .update(`prism.prompt-producer-evidence.receive-gap.v1\n${reason}\n${session}\n${prompt}`)
+    .digest('hex');
+  recordTerminalGap(id, reason, {
+    hook_event_name: 'UserPromptSubmit',
+    observed_at: new Date().toISOString(),
+  });
+}
+
 let activeBarrier;
 let activeSessionId;
 
@@ -133,6 +163,9 @@ function emitSystemMessages() {
 
 async function main() {
   const data = await readHookStdin();
+  const observedAt = new Date().toISOString();
+  const { observeUserPromptSubmit } = require('../../lib/producer-evidence');
+  const producerEvidence = observeUserPromptSubmit(data, observedAt);
   const prompt = data && data.prompt;
   const isStringPrompt = typeof prompt === 'string';
   const isControlPrompt = !isStringPrompt || isPrismControlPrompt(prompt);
@@ -163,8 +196,8 @@ async function main() {
 
   if (isControlPrompt) return;
   const { validHostPromptId } = require('../../lib/host-prompt-id');
-  const hostPromptPresent = data && typeof data === 'object' && Object.hasOwn(data, 'prompt_id');
-  if (hostPromptPresent && !validHostPromptId(data.prompt_id)) return;
+  const receiveEvidence = receiveEvidenceValidation(data);
+  if (!receiveEvidence.ok) recordReceiveEvidenceGap(data, receiveEvidence.reason);
   const hostPromptId = validHostPromptId(data && data.prompt_id) ? data.prompt_id : null;
   const normalizedPrompt = prompt.trim();
 
@@ -172,7 +205,14 @@ async function main() {
   ({ MAX_PROMPT_BODY_BYTES, MAX_WIRE_BYTES, clampToWireLimit } = require('../../lib/body-clamp'));
   const git = await gitMetadataForPrompt(data);
   const clientEventId = crypto.randomUUID();
-  const payload = frozenPayload(data, normalizedPrompt, clientEventId, git, hostPromptId);
+  const payload = frozenPayload(
+    data,
+    normalizedPrompt,
+    clientEventId,
+    git,
+    hostPromptId,
+    receiveEvidence.ok ? producerEvidence : null,
+  );
   const activeRecord = {
     epoch: barrier.epoch,
     clientEventId,
