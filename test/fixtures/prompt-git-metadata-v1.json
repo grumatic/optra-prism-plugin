@@ -1,0 +1,14 @@
+{
+  "schema_version": "prompt-git-metadata/v1",
+  "observed_at": "2026-07-29T05:06:07.123Z",
+  "host": "github.com",
+  "owner": "example-group",
+  "owner_path": "example-org/example-group",
+  "repo": "example-repo",
+  "branch": "main",
+  "head": "3333333333333333333333333333333333333333",
+  "dirty": false,
+  "worktree": true,
+  "root_fingerprint": "1111111111111111111111111111111111111111111111111111111111111111",
+  "coverage": "ready"
+}

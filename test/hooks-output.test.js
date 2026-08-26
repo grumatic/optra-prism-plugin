@@ -3,7 +3,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawn, spawnSync } = require('node:child_process');
+const { execFileSync, spawn, spawnSync } = require('node:child_process');
 const { afterEach, test } = require('node:test');
 const { buildBinding } = require('../lib/binding');
 
@@ -24,6 +24,23 @@ function makeTempDir(prefix) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   tempDirs.push(dir);
   return dir;
+}
+
+// A throwaway repository with a known remote, so git-metadata assertions do
+// not depend on this checkout's own `origin` (which may be absent, e.g. a
+// shallow CI clone, or point somewhere else entirely).
+function makeGitRepoWithRemote() {
+  const repo = makeTempDir('prism-hooks-git-repo-');
+  const git = (args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8' });
+  git(['init']);
+  git(['config', 'user.email', 'test@example.test']);
+  git(['config', 'user.name', 'Prism Test']);
+  fs.writeFileSync(path.join(repo, 'tracked.txt'), 'initial\n');
+  git(['add', 'tracked.txt']);
+  git(['commit', '-m', 'initial']);
+  git(['remote', 'add', 'origin', 'https://github.com/acme/widget.git']);
+  git(['checkout', '-B', 'main']);
+  return repo;
 }
 
 function writeRuntimeConfig(home, value) {
@@ -749,6 +766,7 @@ test('SessionStart projects activated metadata before one combined restart and u
 test('normal prompts bind the captured server id to an opaque frozen payload', () => {
   const home = makeTempDir('prism-normal-home-');
   const dataDir = makeTempDir('prism-normal-data-');
+  const gitRepo = makeGitRepoWithRemote();
   const transcript = path.join(home, 'transcript.jsonl');
   const marker = path.join(home, 'prompt.json');
   const interceptor = path.join(home, 'prompt-interceptor.js');
@@ -782,7 +800,7 @@ test('normal prompts bind the captured server id to an opaque frozen payload', (
     encoding: 'utf8',
     input: JSON.stringify({
       session_id: 'normal-capture-session',
-      cwd: ROOT,
+      cwd: gitRepo,
       prompt,
       transcript_path: transcript,
       prompt_id: 'submit-host-prompt-id',
@@ -809,10 +827,20 @@ test('normal prompts bind the captured server id to an opaque frozen payload', (
   assert.ok(Number.isFinite(Date.parse(sent.submitted_at)));
   assert.equal(turn.active.serverPromptId, '5e1f8f6e-4b2a-4c3d-9e0f-1a2b3c4d5e6f');
   assert.deepEqual(Object.keys(sent.metadata.git).sort(), [
-    'branch', 'dirty', 'head', 'host', 'owner', 'repo', 'worktree',
+    'branch', 'coverage', 'dirty', 'head', 'host', 'observed_at',
+    'owner', 'owner_path', 'repo', 'root_fingerprint', 'schema_version', 'worktree',
   ]);
-  assert.equal(typeof sent.metadata.git.dirty, 'boolean');
+  assert.equal(sent.metadata.git.schema_version, 'prompt-git-metadata/v1');
+  assert.equal(sent.metadata.git.coverage, 'ready');
+  assert.equal(sent.metadata.git.host, 'github.com');
+  assert.equal(sent.metadata.git.owner, 'acme');
+  assert.equal(sent.metadata.git.owner_path, 'acme');
+  assert.equal(sent.metadata.git.repo, 'widget');
+  assert.equal(sent.metadata.git.branch, 'main');
+  assert.equal(sent.metadata.git.dirty, false);
+  assert.equal(sent.metadata.git.worktree, false);
   assert.match(sent.metadata.git.head, /^[a-f0-9]{40,64}$/);
+  assert.match(sent.metadata.git.root_fingerprint, /^[a-f0-9]{64}$/);
   assert.deepEqual(turn.active.transcriptBoundary, { byteOffset: 64 * 1024 * 1024, lineOffset: 0 });
   assert.equal(turn.active.frozenPayloadHash, crypto.createHash('sha256').update(JSON.stringify(sent)).digest('hex'));
   assert.equal(JSON.stringify(turn).includes(prompt), false);

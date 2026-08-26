@@ -37,10 +37,22 @@ function makeRepo() {
 function withDataDir(dataDir, action) {
   const previous = process.env.CLAUDE_PLUGIN_DATA;
   process.env.CLAUDE_PLUGIN_DATA = dataDir;
-  try { return action(); } finally {
+  const restore = () => {
     if (previous === undefined) delete process.env.CLAUDE_PLUGIN_DATA;
     else process.env.CLAUDE_PLUGIN_DATA = previous;
+  };
+  let result;
+  try {
+    result = action();
+  } catch (error) {
+    restore();
+    throw error;
   }
+  if (result && typeof result.then === 'function') {
+    return result.then((value) => { restore(); return value; }, (error) => { restore(); throw error; });
+  }
+  restore();
+  return result;
 }
 
 afterEach(() => {
@@ -62,7 +74,7 @@ test('parses sanitized ssh, https, and credential-bearing remotes without retain
   }
 });
 
-test('collects nearest repositories, dirty state, and linked worktrees', async () => {
+test('collects nearest repositories, dirty state, and linked worktrees', () => withDataDir(tempDir('prism-git-data-'), async () => {
   const repo = makeRepo();
   const clean = await collectGitContext(repo);
   assert.equal(clean.status, 'ok');
@@ -95,9 +107,9 @@ test('collects nearest repositories, dirty state, and linked worktrees', async (
   const worktreeContext = await collectGitContext(worktree);
   assert.equal(worktreeContext.status, 'ok');
   assert.equal(worktreeContext.value.worktree, true);
-});
+}));
 
-test('reports non-repositories and missing or timed-out git as fail-open states', async () => {
+test('reports non-repositories and missing or timed-out git as fail-open states', () => withDataDir(tempDir('prism-git-data-'), async () => {
   const plain = tempDir('prism-not-repo-');
   assert.equal((await collectGitContext(plain)).status, 'not_repo');
 
@@ -117,8 +129,8 @@ test('reports non-repositories and missing or timed-out git as fail-open states'
   } finally {
     process.env.PATH = originalPath;
   }
-});
-test('enforces a shared output budget across git commands', async () => {
+}));
+test('enforces a shared output budget across git commands', () => withDataDir(tempDir('prism-git-data-'), async () => {
   const repo = makeRepo();
   const fakeBin = tempDir('prism-output-budget-bin-');
   const payload = path.join(fakeBin, 'payload');
@@ -163,37 +175,39 @@ test('enforces a shared output budget across git commands', async () => {
     if (originalCallLog === undefined) delete process.env.PRISM_GIT_CALL_LOG;
     else process.env.PRISM_GIT_CALL_LOG = originalCallLog;
   }
-});
+}));
 
 test('preserves the last good git value across consecutive transient refresh failures', () => {
   const dataDir = tempDir('prism-git-state-');
   const sessionId = 'git-last-good';
-  const value = {
-    host: 'github.com', owner: 'acme', repo: 'widget', branch: 'main',
-    head: 'a'.repeat(40), dirty: false, worktree: false,
-  };
+  const value = JSON.parse(fs.readFileSync(
+    path.join(__dirname, 'fixtures', 'prompt-git-metadata-v1.json'),
+    'utf8',
+  ));
   const refreshedAt = '2026-07-16T00:00:00.000Z';
   withDataDir(dataDir, () => {
     const ok = session.writeGit(sessionId, {
       status: 'ok', value, canonicalCwd: '/repo',
-      attemptedAt: refreshedAt, refreshedAt,
+      attemptedAt: refreshedAt, refreshedAt, reason: null,
     });
     assert.equal(ok.status, 'ok');
     const failed = session.writeGit(sessionId, {
       status: 'transient_error', value: null, canonicalCwd: '/other',
-      attemptedAt: '2026-07-16T00:00:01.000Z', refreshedAt: null,
+      attemptedAt: '2026-07-16T00:00:01.000Z', refreshedAt: null, reason: 'git_timeout',
     });
     assert.equal(failed.status, 'transient_error');
     assert.deepEqual(failed.value, value);
     assert.equal(failed.canonicalCwd, '/repo');
+    assert.equal(failed.reason, 'git_timeout');
     const retried = session.writeGit(sessionId, {
       status: 'transient_error', value: null, canonicalCwd: '/another-repo',
-      attemptedAt: '2026-07-16T00:00:02.000Z', refreshedAt: null,
+      attemptedAt: '2026-07-16T00:00:02.000Z', refreshedAt: null, reason: 'git_output_limit',
     });
     assert.equal(retried.status, 'transient_error');
     assert.deepEqual(retried.value, value);
     assert.equal(retried.canonicalCwd, '/repo');
     assert.equal(retried.refreshedAt, refreshedAt);
+    assert.equal(retried.reason, 'git_output_limit');
   });
 });
 
