@@ -440,7 +440,7 @@ test('non-string prompts advance only control barriers without posting', () => {
   }
 });
 
-test('a present invalid host prompt ID advances the barrier without creating a new active turn or outbox intent', () => {
+test('a present invalid host prompt ID keeps the legacy prompt path and records an evidence gap', () => {
   const home = makeTempDir('prism-invalid-host-home-');
   const dataDir = makeTempDir('prism-invalid-host-data-');
   const sessionId = 'invalid-host-submit';
@@ -455,8 +455,12 @@ test('a present invalid host prompt ID advances the barrier without creating a n
   const turn = readSessionRecord(dataDir, () => session.readTurn(sessionId));
   assert.equal(turn.epoch, 2);
   assert.equal(turn.kind, 'normal-pending');
-  assert.equal(turn.active.status, 'invalidated');
-  assert.deepEqual(readSessionRecord(dataDir, () => require('../lib/response-outbox').listPending()), []);
+  assert.equal(turn.active.status, 'submitting');
+  const [pending] = readSessionRecord(dataDir, () => require('../lib/response-outbox').listPending());
+  assert.equal(pending.kind, 'prompt');
+  assert.equal(Object.hasOwn(pending.payload.metadata, 'producer_evidence'), false);
+  const terminal = path.join(dataDir, 'runtime', 'outbox-terminal-rejected');
+  assert.equal(readAllFiles(terminal).includes('prompt_producer_evidence_invalid'), true);
 });
 test('SessionStart accepts an opaque config key without fetch, OTEL repair, or env-file writes', () => {
   const home = makeTempDir('prism-session-start-config-home-');

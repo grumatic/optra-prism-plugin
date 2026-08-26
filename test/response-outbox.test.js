@@ -114,6 +114,65 @@ test('failed delivery remains queued and is redelivered by the next drain', asyn
   assert.deepEqual(outbox.listPending(), []);
 });
 
+test('response delivery stays ahead of prompts and evidence, and evidence is last', async () => {
+  assert.equal(outbox.enqueue({ id: 'evidence', kind: 'prompt_evidence', payload: { client_event_id: 'a'.repeat(64), producer_evidence: {} } }), true);
+  assert.equal(outbox.enqueue(promptEntry('prompt')), true);
+  assert.equal(outbox.enqueue(responseEntry('response')), true);
+  const delivered = [];
+  await outbox.drain(async (entry) => {
+    delivered.push(entry.id);
+    return { status: 202, body: 'accepted' };
+  }, { prioritizeIds: ['evidence'] });
+  assert.deepEqual(delivered, ['response', 'prompt', 'evidence']);
+});
+
+test('evidence survives a transient failure and an unrecognized success ACK, then replays after restart semantics', async () => {
+  const evidence = { id: 'evidence-replay', kind: 'prompt_evidence', payload: { client_event_id: 'b'.repeat(64), producer_evidence: {} } };
+  assert.equal(outbox.enqueue(evidence), true);
+  await outbox.drain(async () => ({ status: 503, body: 'unavailable' }));
+  assert.equal(outbox.listPending().length, 1);
+  // A 2xx response alone must not delete evidence; the dedicated delivery
+  // adapter sets ack only after the exact server receipt is validated.
+  await outbox.drain(async () => ({ status: 202, body: '{}', ack: false }));
+  assert.equal(outbox.listPending().length, 1);
+  const replay = await outbox.drain(async () => ({ status: 202, body: '{}', ack: true }));
+  assert.equal(replay[0].acked, true);
+  assert.deepEqual(outbox.listPending(), []);
+});
+
+test('evidence capacity eviction writes a terminal tombstone before removing the pending intent', () => {
+  const evidence = { id: 'evidence-evicted', kind: 'prompt_evidence', payload: { client_event_id: 'c'.repeat(64), producer_evidence: {} } };
+  assert.equal(outbox.enqueue(evidence), true);
+  for (let index = 0; index < outbox.MAX_PENDING_ENTRIES; index += 1) {
+    assert.equal(outbox.enqueue(promptEntry(`prompt-for-evidence-eviction-${index}`)), true);
+  }
+  assert.equal(outbox.listPending().some((entry) => entry.id === evidence.id), false);
+  const terminalFile = path.join(outbox.getTerminalRejectedDir(), `${crypto.createHash('sha256').update(evidence.id).digest('hex')}.json`);
+  assert.equal(JSON.parse(fs.readFileSync(terminalFile, 'utf8')).terminalReason, 'outbox_evicted_capacity');
+});
+
+test('producer evidence terminal codes distinguish semantic and raw body limits', () => {
+  for (const [status, code] of [
+    [413, 'prompt_evidence_exceeds_limit'],
+    [413, 'prompt_evidence_request_too_large'],
+    [413, 'prompt_producer_evidence_exceeds_limit'],
+    [400, 'prompt_producer_evidence_identity_mismatch'],
+  ]) {
+    const body = JSON.stringify({ error: { code } });
+    assert.equal(outbox.terminalRejectionCode({ status, mediaType: 'application/json', body }), code);
+  }
+});
+
+test('a 413 evidence size rejection tombstones the actual server code and removes the pending intent', async () => {
+  const intent = { id: 'evidence-size-terminal', kind: 'prompt_evidence', payload: { client_event_id: 'd'.repeat(64), producer_evidence: {} } };
+  assert.equal(outbox.enqueue(intent), true);
+  const body = JSON.stringify({ error: { code: 'prompt_evidence_exceeds_limit' } });
+  const [outcome] = await outbox.drain(async () => ({ status: 413, mediaType: 'application/json', body }));
+  assert.equal(outcome.terminal, true);
+  assert.equal(outcome.terminalReason, 'prompt_evidence_exceeds_limit');
+  assert.deepEqual(outbox.listPending(), []);
+});
+
 test('an entry that keeps failing is demoted behind a fresher one instead of head-of-line-blocking it forever', async () => {
   // Oldest by createdAt, so a pure age-ordered schedule would always attempt
   // this one first, ahead of anything enqueued afterward.
@@ -341,7 +400,7 @@ test('terminal rejection requires the exact bounded JSON envelope and isolates t
   const [stored] = fs.readdirSync(outbox.getTerminalRejectedDir())
     .filter((name) => name.endsWith('.json'))
     .map((name) => JSON.parse(fs.readFileSync(path.join(outbox.getTerminalRejectedDir(), name), 'utf8')));
-  assert.deepEqual(stored, { ...intent, createdAt: stored.createdAt });
+  assert.deepEqual(stored, { ...intent, createdAt: stored.createdAt, terminalReason: 'invalid_host_prompt_id' });
   assert.equal(Object.hasOwn(stored, 'body'), false);
 });
 
