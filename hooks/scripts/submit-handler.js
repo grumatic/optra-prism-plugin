@@ -196,6 +196,11 @@ async function main() {
 
   if (isControlPrompt) return;
   const { validHostPromptId } = require('../../lib/host-prompt-id');
+  const hostPromptPresent = data && typeof data === 'object' && Object.hasOwn(data, 'prompt_id');
+  if (hostPromptPresent && !validHostPromptId(data.prompt_id)) {
+    recordReceiveEvidenceGap(data, 'prompt_producer_evidence_invalid');
+    return;
+  }
   const receiveEvidence = receiveEvidenceValidation(data);
   if (!receiveEvidence.ok) recordReceiveEvidenceGap(data, receiveEvidence.reason);
   const hostPromptId = validHostPromptId(data && data.prompt_id) ? data.prompt_id : null;
