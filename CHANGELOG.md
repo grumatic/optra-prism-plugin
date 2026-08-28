@@ -5,6 +5,32 @@ All notable changes to the Prism plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-08-28
+
+### Added
+- User prompt capture now preserves bounded producer evidence observed at `UserPromptSubmit`, including the source session, host prompt ID, hook event, observation time, and optional agent execution context without inferring a message sender.
+- Successful `SendMessage` tool uses now enqueue a deterministic, body-free evidence occurrence for the dedicated prompt-evidence ingest route. The durable outbox retries transient failures, removes acknowledged occurrences, and isolates terminal rejections without treating evidence as a prompt or response.
+- Prompt capture now attaches a versioned repository snapshot to each captured prompt: the schema version, the observation time, a sanitized lower-case remote host, the full owner or group path alongside the existing owner name, the branch, the head commit, the working-tree dirty flag, the linked-worktree flag, and an install-local keyed fingerprint of the repository root. Backends that do not recognize the object store it unchanged.
+- The snapshot carries an explicit coverage state. When the repository cannot be identified — the directory is not a repository, Git timed out or produced more output than the collector accepts, the install-local key is missing or unusable, or there is no usable remote — the snapshot records that reason instead of omitting the evidence silently.
+- After an assistant response is safely recorded, the plugin can now report the commits made during that turn: for each commit, its identity, its parent, and the number of added and deleted lines. Nothing else about the change is collected — no file paths, no diff text, no commit messages, and no author details.
+- The report is sent only when the configured Prism service tells the plugin it accepts it. The service is asked at most once every five minutes, the answer is cached per configured key and destination, and an answer older than one hour stops the reporting until a fresh one arrives. Until then the plugin behaves exactly as the previous release did.
+- Commit reports use their own queue on disk, separate from prompt and response capture. A full, failing, or unreachable report queue cannot delay, drop, or reorder a captured prompt or response.
+- A report that cannot be produced records why instead of disappearing: the turn's starting point was unavailable, the final repository state could not be read, the starting point is not an ancestor of the final state, the range is too large to send, or a binary or submodule change could not be resolved. Line counts are never estimated in any of those cases.
+
+### Changed
+- Actual prompt size clamps are identified separately from lone-surrogate scrubbing, allowing compatible backends to distinguish a body truncated at the 2 MiB or escaped-wire limit without reducing the existing capture limits.
+- Evidence intents use a bounded, lower-priority outbox lane so prompt and response delivery ordering and response preservation remain authoritative.
+- The repository host is now normalized to lower case, and nested groups are reported as a full owner path rather than only the segment next to the repository name. The previously sent host, owner, repository, branch, head, dirty, and worktree fields keep their existing names and values.
+- `/prism:status` now reports whether commit reporting is active and how many reports are queued or settled, as counts and reasons only.
+
+### Fixed
+- An explicitly invalid host prompt ID is rejected before capture instead of falling back to a legacy hostless prompt that cannot be correlated with its response. Hosts that omit the field retain the legacy fallback.
+
+### Security
+- Remote URLs are reduced to host and path before they leave the machine: credentials, ports, query strings, and fragments are discarded, and a remote that resolves to a relative path, an absolute local path, or a `file:` URL is dropped rather than sent. The repository fingerprint is an HMAC keyed by a 32-byte secret created once per install with owner-only permissions, so no absolute path or unkeyed path hash is transmitted, and the key is never rotated or overwritten.
+- Only committed work is measured. Staged, unstaged, and untracked changes are never counted; the working-tree flag remains a coverage signal and nothing more.
+- Queued reports are stored with owner-only permissions, are never overwritten in place, and are removed after thirty days. Diagnostic output shows counts and reasons only, never repository names, branches, commit identifiers, or paths.
+
 ## [0.7.8] - 2026-08-22
 
 ### Added
