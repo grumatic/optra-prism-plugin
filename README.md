@@ -39,14 +39,19 @@ Claude Code 2.1.161+ is required for core telemetry and Score v3 support. Claude
 
 ## What It Does
 
-Four hooks run automatically:
+Five hooks run automatically:
 
 | Hook | Purpose |
 |------|---------|
 | **SessionStart** | Activates version metadata, checks for a newer stable release, and loads Prism runtime configuration |
 | **UserPromptSubmit** | Detects a reloaded plugin version, then reviews and captures prompts for scoring |
 | **CwdChanged** | Refreshes sanitized Git repository metadata when the runtime supplies a valid working-directory change |
+| **PostToolUse (SendMessage)** | Captures successful agent-to-agent send evidence without storing the message body |
 | **Stop** | Captures prompt/response pairs for analytics, tracks turns, and relays the server-side PRISM realtime score |
+
+Prompt capture uses a legacy correlation fallback only when an older host omits
+`prompt_id`. A host that explicitly supplies an invalid `prompt_id` is rejected
+without enqueueing a prompt.
 
 ## Commands
 

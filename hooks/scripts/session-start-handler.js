@@ -55,6 +55,33 @@ async function recoverOutbox(report) {
   }
 }
 
+// Resolves this session's pending git-capture marker, if any. Never affects
+// the hook's exit code or stdout.
+async function resumeEvidence(sessionId, report) {
+  try {
+    const { resumeEvidenceCapture } = require('./stop-handler');
+    await resumeEvidenceCapture(sessionId);
+  } catch {
+    report('git evidence resume failed');
+  }
+}
+
+// Refreshes the git-evidence/v1 capability at most once every five minutes,
+// then drains the backlog when the gate is open. Runs after recoverOutbox so
+// a slow config endpoint can never delay prompt/response recovery.
+async function drainEvidenceBacklog(report) {
+  try {
+    const { refreshCapability, capabilityAllowsEvidence } = require('../../lib/git-evidence-capability');
+    const { drainEvidence } = require('../../lib/git-evidence-delivery');
+    const snapshot = await refreshCapability();
+    if (capabilityAllowsEvidence(snapshot)) {
+      await drainEvidence({ limit: 8, maxElapsedMs: 750 });
+    }
+  } catch {
+    report('git evidence drain failed');
+  }
+}
+
 async function main() {
   const data = await readHookStdin();
   let debug = false;
@@ -73,6 +100,8 @@ async function main() {
   }
   if (!validLifecycle) return 0;
   await recoverOutbox(report);
+  await resumeEvidence(data.session_id, report);
+  await drainEvidenceBacklog(report);
 
   try {
     const { collectPluginNotices } = require('../../lib/plugin-activation');
@@ -102,6 +131,8 @@ if (require.main === module) {
 module.exports = {
   advanceLifecycle,
   recoverOutbox,
+  resumeEvidence,
+  drainEvidenceBacklog,
   main,
   readHookStdin,
 };
