@@ -16,9 +16,11 @@ let drain;
 let readGit;
 let writeGit;
 let collectGitContext;
+let unavailablePromptGitMetadata;
 let MAX_PROMPT_BODY_BYTES;
 let MAX_WIRE_BYTES;
 let clampToWireLimit;
+let clampToWireLimitWithEvidence;
 const systemMessages = [];
 
 const MAX_SYSTEM_MESSAGE_LENGTH = 10_000;
@@ -43,9 +45,19 @@ function transcriptBoundary(transcriptPath) {
   try { return { byteOffset: fs.statSync(transcriptPath).size, lineOffset: 0 }; } catch { return { byteOffset: 0, lineOffset: 0 }; }
 }
 
-function frozenPayload(data, prompt, clientEventId, git, hostPromptId) {
+function frozenPayload(data, prompt, clientEventId, git, hostPromptId, producerEvidence) {
+  // `prompt` is the legacy trimmed body. Producer evidence is separately
+  // frozen from raw hook context before that normalization (in main()).
+  // Hash the untruncated prompt once, before clamping, so the server can
+  // prove what the full body was without the plugin reading or storing it
+  // twice. original_char_count is in UTF-16 code units (JS string length);
+  // the clamp itself is byte-bounded (see lib/body-clamp.js).
   const untruncatedSha256 = crypto.createHash('sha256').update(prompt, 'utf8').digest('hex');
-  const clampedPrompt = clampToWireLimit(prompt, MAX_PROMPT_BODY_BYTES, MAX_WIRE_BYTES);
+  const { text: clampedPrompt, sizeClamped: promptSizeClamped } = clampToWireLimitWithEvidence(
+    prompt,
+    MAX_PROMPT_BODY_BYTES,
+    MAX_WIRE_BYTES,
+  );
   const payload = {
     prompt_text: clampedPrompt,
     source: 'claude-code',
@@ -55,9 +67,23 @@ function frozenPayload(data, prompt, clientEventId, git, hostPromptId) {
     untruncated_sha256: untruncatedSha256,
     truncated: clampedPrompt !== prompt,
   };
-  // cwd carries no server-side contract limit; this cap only bounds the outbox entry's envelope margin.
+  // A path this long is degenerate — truncate silently, no evidence fields
+  // needed (unlike prompt_text, cwd carries no server-side contract limit;
+  // this cap exists only to close the last unbounded contributor to
+  // MAX_ENTRY_BYTES's envelope margin, see lib/response-outbox.js).
   if (data.cwd) payload.cwd = clampToWireLimit(data.cwd, MAX_CWD_BYTES, MAX_CWD_BYTES);
-  if (git) payload.metadata = { git };
+  // producerEvidence is frozen immediately after JSON parsing, before trim,
+  // clamp, or asynchronous git collection. It is execution context only:
+  // neither a literal tag nor absent agent context establishes a producer.
+  payload.metadata = {
+    ...(git ? { git } : {}),
+    ...(producerEvidence ? { producer_evidence: producerEvidence } : {}),
+    // Metadata is deliberately extensible on the legacy prompt contract.
+    // Emit this only for an actual decoded/wire size prefix clamp: false is
+    // indistinguishable from older plugin payloads, and `truncated` still
+    // records lone-surrogate scrubbing separately.
+    ...(promptSizeClamped ? { prompt_size_clamped: true } : {}),
+  };
   if (hostPromptId) payload.host_prompt_id = hostPromptId;
   // Client-observed submit time. The outbox can deliver this payload long
   // after submit, and the server's receipt time would misplace the turn.
@@ -77,32 +103,66 @@ async function gitMetadataForPrompt(data) {
     return null;
   }
 
-  let record = readGit(data.session_id);
-  const refreshedAt = record && record.refreshedAt ? Date.parse(record.refreshedAt) : NaN;
-  if (
-    !record
-    || record.canonicalCwd !== canonicalCwd
+  const cached = readGit(data.session_id);
+  const refreshedAt = cached && cached.refreshedAt ? Date.parse(cached.refreshedAt) : NaN;
+  const needsRefresh = !cached
+    || cached.canonicalCwd !== canonicalCwd
     || !Number.isFinite(refreshedAt)
-    || Date.now() - refreshedAt >= 30_000
-  ) {
+    || Date.now() - refreshedAt >= 30_000;
+
+  // Decide from the envelope this call itself observed (fresh, or the still-
+  // valid cache), never from writeGit's merged return: the preserve-last-good
+  // branch there can rewrite canonicalCwd to a stale value and fail the guard
+  // below for what is actually a fresh, matching observation.
+  let envelope = cached;
+  if (needsRefresh) {
     try {
       const context = await collectGitContext(canonicalCwd);
-      record = writeGit(data.session_id, context);
+      envelope = context;
+      writeGit(data.session_id, context);
     } catch {
       return null;
     }
   }
 
-  return record
-    && record.status === 'ok'
-    && record.canonicalCwd === canonicalCwd
-    && record.value
-    ? record.value
-    : null;
+  if (!envelope || envelope.canonicalCwd !== canonicalCwd) return null;
+  if (envelope.status === 'ok' && envelope.value) return envelope.value;
+  // A preserved-last-good value is never sent here: a non-'ok' status always
+  // carries this attempt's own reason, never the stale value's timestamp.
+  if (envelope.status !== 'ok' && envelope.reason) {
+    return unavailablePromptGitMetadata(envelope.reason, envelope.attemptedAt);
+  }
+  return null;
 }
 
 function payloadHash(payload) {
   return crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+}
+
+function receiveEvidenceValidation(data) {
+  const { validHostPromptId } = require('../../lib/host-prompt-id');
+  if (!data || typeof data.session_id !== 'string' || data.session_id.length === 0
+    || Buffer.byteLength(data.session_id, 'utf8') > 1024 || !validHostPromptId(data.prompt_id)) {
+    return { ok: false, reason: 'prompt_producer_evidence_invalid' };
+  }
+  const { optionalContextState } = require('../../lib/producer-evidence');
+  const context = optionalContextState(data);
+  return context.ok
+    ? { ok: true }
+    : { ok: false, reason: `prompt_producer_evidence_${context.reason}` };
+}
+
+function recordReceiveEvidenceGap(data, reason) {
+  const { recordTerminalGap } = require('../../lib/response-outbox');
+  const session = data && typeof data.session_id === 'string' ? data.session_id : '';
+  const prompt = data && typeof data.prompt_id === 'string' ? data.prompt_id : '';
+  const id = crypto.createHash('sha256')
+    .update(`prism.prompt-producer-evidence.receive-gap.v1\n${reason}\n${session}\n${prompt}`)
+    .digest('hex');
+  recordTerminalGap(id, reason, {
+    hook_event_name: 'UserPromptSubmit',
+    observed_at: new Date().toISOString(),
+  });
 }
 
 let activeBarrier;
@@ -122,6 +182,9 @@ function emitSystemMessages() {
 
 async function main() {
   const data = await readHookStdin();
+  const observedAt = new Date().toISOString();
+  const { observeUserPromptSubmit } = require('../../lib/producer-evidence');
+  const producerEvidence = observeUserPromptSubmit(data, observedAt);
   const prompt = data && data.prompt;
   const isStringPrompt = typeof prompt === 'string';
   const isControlPrompt = !isStringPrompt || isPrismControlPrompt(prompt);
@@ -153,15 +216,33 @@ async function main() {
   if (isControlPrompt) return;
   const { validHostPromptId } = require('../../lib/host-prompt-id');
   const hostPromptPresent = data && typeof data === 'object' && Object.hasOwn(data, 'prompt_id');
-  if (hostPromptPresent && !validHostPromptId(data.prompt_id)) return;
+  if (hostPromptPresent && !validHostPromptId(data.prompt_id)) {
+    recordReceiveEvidenceGap(data, 'prompt_producer_evidence_invalid');
+    return;
+  }
+  const receiveEvidence = receiveEvidenceValidation(data);
+  if (!receiveEvidence.ok) recordReceiveEvidenceGap(data, receiveEvidence.reason);
   const hostPromptId = validHostPromptId(data && data.prompt_id) ? data.prompt_id : null;
   const normalizedPrompt = prompt.trim();
 
   ({ collectGitContext } = require('../../lib/git'));
-  ({ MAX_PROMPT_BODY_BYTES, MAX_WIRE_BYTES, clampToWireLimit } = require('../../lib/body-clamp'));
+  ({ unavailablePromptGitMetadata } = require('../../lib/git-evidence-contract'));
+  ({
+    MAX_PROMPT_BODY_BYTES,
+    MAX_WIRE_BYTES,
+    clampToWireLimit,
+    clampToWireLimitWithEvidence,
+  } = require('../../lib/body-clamp'));
   const git = await gitMetadataForPrompt(data);
   const clientEventId = crypto.randomUUID();
-  const payload = frozenPayload(data, normalizedPrompt, clientEventId, git, hostPromptId);
+  const payload = frozenPayload(
+    data,
+    normalizedPrompt,
+    clientEventId,
+    git,
+    hostPromptId,
+    receiveEvidence.ok ? producerEvidence : null,
+  );
   const activeRecord = {
     epoch: barrier.epoch,
     clientEventId,
