@@ -5,6 +5,16 @@ All notable changes to the Prism plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-09-15
+
+### Added
+- Five new host-observation occurrences — an input's recorded source, a queued instruction promoted mid-turn, an interrupt marker, `Stop` context (stop-hook-active and pending background work), and `SessionEnd` — are now collected as separate, idempotent outbox entries and sent to their own ingest routes. Each carries only what the host already recorded; the plugin classifies nothing.
+- A new `SessionEnd` hook performs one best-effort transcript read, durably enqueues the observations, and attempts delivery within the handler's remaining time budget. Any undelivered entries remain in the outbox for retry on the next session's start.
+- An ingest deployment that does not yet recognize a host-observation route (`404`/`405`) is remembered per kind per session, so the plugin stops asking again for the rest of that session without affecting prompt or response capture.
+
+### Changed
+- The `UserPromptSubmit`-source sidecar introduced in 0.8.0 (`prompt_input_origin` v1, the `prompt_input_origin_capability_version` prompt metadata marker) is replaced outright by the v2 `prompt_input_origin` host observation, which also considers the host's transcript-recorded source fields, not only the hook's own. The captured prompt payload is otherwise unchanged.
+
 ## [0.8.0] - 2026-08-28
 
 ### Added
