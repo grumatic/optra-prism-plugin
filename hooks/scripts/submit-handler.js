@@ -235,6 +235,40 @@ async function main() {
   } = require('../../lib/body-clamp'));
   const git = await gitMetadataForPrompt(data);
   const clientEventId = crypto.randomUUID();
+  const { readPluginVersion } = require('../../lib/plugin-version');
+  const collectorVersion = readPluginVersion();
+  const hookSource = typeof data.source === 'string' ? data.source : null;
+  if (hostPromptId) {
+    try {
+      const { recordHookSource } = require('../../lib/host-observation-collection');
+      recordHookSource(data.session_id, hostPromptId, hookSource);
+    } catch { /* best-effort: worst case the later Stop read sees no hook source */ }
+  }
+  // The previous active record's boundary/identity is captured here, before
+  // rotation, but the actual transcript read and outbox writes are deferred
+  // until after this submission's own prompt is enqueued and drained (design
+  // §5.1: this occurrence must never delay the prompt path). `barrier.active`
+  // is the in-memory record advanceBarrier already read; referencing it later
+  // is safe regardless of what attachActive subsequently persists.
+  const previousActive = barrier.active && barrier.active.submitPromptId ? barrier.active : null;
+  // Only enqueues locally; never sends anything itself, so calling it from
+  // any exit path below is safe and adds no network activity of its own.
+  function collectPreviousObservations() {
+    if (!previousActive) return;
+    try {
+      const { collectAndEnqueueHostObservations } = require('../../lib/host-observation-collection');
+      collectAndEnqueueHostObservations({
+        sessionId: data.session_id,
+        transcriptPath: data.transcript_path,
+        byteOffset: previousActive.transcriptBoundary && previousActive.transcriptBoundary.byteOffset,
+        hostPromptId: previousActive.submitPromptId,
+        clientEventId: previousActive.clientEventId,
+        promptOutboxId: `prompt-${previousActive.clientEventId}`,
+        collectorVersion,
+        observedAt,
+      });
+    } catch { /* the collection helper already records its own gap; this only guards a throw before that point */ }
+  }
   const payload = frozenPayload(
     data,
     normalizedPrompt,
@@ -263,6 +297,7 @@ async function main() {
       '[Prism] API key not configured. Run /prism:setup YOUR_KEY.',
       SHOW_REALTIME_SUMMARY,
     );
+    collectPreviousObservations();
     return;
   }
   if (!INGEST_URL) {
@@ -271,6 +306,7 @@ async function main() {
       '[Prism] ingest_url not configured. Run /prism:setup YOUR_KEY or /prism:config.',
       SHOW_REALTIME_SUMMARY,
     );
+    collectPreviousObservations();
     return;
   }
 
@@ -297,6 +333,7 @@ async function main() {
   }
   if (!enqueue(promptIntent)) {
     failBarrier(data.session_id, barrier.epoch);
+    collectPreviousObservations();
     return;
   }
 
@@ -306,6 +343,15 @@ async function main() {
     maxElapsedMs: 2000,
     prioritizeIds: [outboxId],
   });
+
+  // Only now — after this submission's own prompt is durably enqueued and
+  // drained — read whatever the host recorded past the previous active
+  // record's transcript boundary (design §5.3: "the next UserPromptSubmit"
+  // is one of the three read points, and this occurrence must never delay
+  // the prompt path). Deterministic ids make a duplicate read from Stop
+  // harmless. A failure here must never affect this submission, which has
+  // already completed by this point.
+  collectPreviousObservations();
 }
 
 main()
