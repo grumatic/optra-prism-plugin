@@ -29,6 +29,13 @@ test('UserPromptSubmit evidence remains UNKNOWN for ordinary and literal agent-m
   }
 });
 
+// The v1 UserPromptSubmit.source sidecar (buildPromptInputOriginOccurrence,
+// deterministicPromptInputOriginId, PROMPT_INPUT_ORIGIN_CAPABILITY_VERSION)
+// is replaced outright by the v2 host observation contract: see
+// test/host-observation-collection.test.js and
+// test/host-observation-state.test.js for the hook `source` recording and
+// input-origin occurrence coverage, and the full-process coupling test below.
+
 test('successful SendMessage occurrence has stable identity and no raw message body', () => {
   const input = {
     hook_event_name: 'PostToolUse',
@@ -119,6 +126,66 @@ test('provided invalid receive agent context keeps legacy prompt delivery and re
     assert.equal(fs.readdirSync(path.join(dataDir, 'runtime', 'outbox-terminal-rejected'))
       .filter((name) => name.endsWith('.json'))
       .some((name) => fs.readFileSync(path.join(dataDir, 'runtime', 'outbox-terminal-rejected', name), 'utf8').includes('prompt_producer_evidence_exceeds_limit')), true);
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('the next UserPromptSubmit reads the previous prompt\'s recorded hook source into a v2 input-origin occurrence', () => {
+  const root = path.resolve(__dirname, '..');
+  const handler = path.join(root, 'hooks', 'scripts', 'submit-handler.js');
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-input-origin-submit-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-input-origin-home-'));
+  const transcript = path.join(home, 'transcript.jsonl');
+  fs.writeFileSync(transcript, '');
+  try {
+    fs.mkdirSync(path.join(home, '.prism'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.prism', 'config.json'), JSON.stringify({ apiKey: 'key', ingest_url: 'http://127.0.0.1:9' }));
+    const submit = (promptId, source, prompt) => spawnSync(process.execPath, [handler], {
+      cwd: root,
+      input: JSON.stringify({
+        hook_event_name: 'UserPromptSubmit',
+        session_id: 'session',
+        prompt_id: promptId,
+        source,
+        prompt,
+        transcript_path: transcript,
+      }),
+      encoding: 'utf8',
+      env: { ...process.env, CLAUDE_PLUGIN_DATA: dataDir, HOME: home },
+    });
+
+    const first = submit('host-prompt-1', 'user', 'first body');
+    assert.equal(first.status, 0, first.stderr);
+    const readPending = () => {
+      const outboxDir = path.join(dataDir, 'runtime', 'outbox');
+      return fs.readdirSync(outboxDir)
+        .filter((name) => name.endsWith('.json'))
+        .map((name) => JSON.parse(fs.readFileSync(path.join(outboxDir, name), 'utf8')));
+    };
+    const afterFirst = readPending();
+    // The first UserPromptSubmit has no previous active record to read, so
+    // it only records its own prompt intent — never emits input-origin for
+    // itself.
+    assert.deepEqual(afterFirst.map((entry) => entry.kind).sort(), ['prompt']);
+    const firstPrompt = afterFirst[0];
+    // Prompt payload metadata carries no classification or capability marker
+    // (design §5.1): the legacy contract is byte-identical to develop.
+    assert.equal(Object.hasOwn(firstPrompt.payload.metadata, 'prompt_input_origin_capability_version'), false);
+
+    const second = submit('host-prompt-2', 'sdk', 'second body');
+    assert.equal(second.status, 0, second.stderr);
+    const afterSecond = readPending();
+    const origin = afterSecond.find((entry) => entry.kind === 'prompt_input_origin');
+    const secondPrompt = afterSecond.find((entry) => entry.id !== firstPrompt.id && entry.kind === 'prompt');
+    assert.ok(origin, 'expected a v2 prompt_input_origin occurrence for the first prompt');
+    assert.ok(secondPrompt);
+    assert.equal(origin.dependsOn, firstPrompt.id);
+    assert.equal(origin.payload.host_prompt_id, 'host-prompt-1');
+    assert.equal(origin.payload.prompt_client_event_id, firstPrompt.payload.client_event_id);
+    assert.equal(origin.payload.hook_source, 'user');
+    assert.equal(origin.payload.observation_basis, 'hook_field');
   } finally {
     fs.rmSync(dataDir, { recursive: true, force: true });
     fs.rmSync(home, { recursive: true, force: true });

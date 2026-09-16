@@ -193,6 +193,102 @@ test('sendPrompt preserves the Hook prompt request and adds plugin provenance', 
   assertRequest(request, '/v1/prompts', expectedBody);
 });
 
+test('sendHostObservation posts each kind to its own route with the exact frozen payload', async () => {
+  const { HOST_OBSERVATION_KINDS } = require('../lib/host-observations');
+  const adapterEventId = '0'.repeat(64);
+  const commonFields = (wireSchemaVersion) => ({
+    schema_version: wireSchemaVersion,
+    adapter_event_id: adapterEventId,
+    source_session_id: 'session',
+    collector_version: '0.9.0',
+    host_version: null,
+    observed_at: '2026-09-15T00:00:00.000Z',
+  });
+  const payloadsByKind = {
+    prompt_input_origin: {
+      ...commonFields(HOST_OBSERVATION_KINDS.prompt_input_origin.wireSchemaVersion),
+      host_prompt_id: 'host-prompt',
+      prompt_client_event_id: 'client-event',
+      hook_source: 'user',
+      transcript_prompt_source: null,
+      transcript_origin_kind: null,
+      transcript_is_meta: null,
+      transcript_row_uuid: null,
+      observation_basis: 'hook_field',
+    },
+    queued_input: {
+      ...commonFields(HOST_OBSERVATION_KINDS.queued_input.wireSchemaVersion),
+      attachment_row_uuid: 'attachment-row',
+      source_uuid: null,
+      parent_row_uuid: null,
+      origin_kind: 'human',
+      is_meta: false,
+      command_mode: null,
+      prompt_text: 'queued instruction',
+      untruncated_sha256: '1'.repeat(64),
+      original_char_count: 18,
+      attached_under_host_prompt_id: 'host-prompt',
+      host_timestamp: null,
+    },
+    turn_interrupt_marker: {
+      ...commonFields(HOST_OBSERVATION_KINDS.turn_interrupt_marker.wireSchemaVersion),
+      marker_kind: 'user',
+      target_host_prompt_id: 'host-prompt',
+      interrupted_message_id: null,
+      row_uuid: 'row-uuid',
+      host_timestamp: null,
+    },
+    stop_context: {
+      ...commonFields(HOST_OBSERVATION_KINDS.stop_context.wireSchemaVersion),
+      host_prompt_id: 'host-prompt',
+      stop_ordinal: 0,
+      stop_hook_active: false,
+      background_task_count: 0,
+      session_cron_count: 0,
+    },
+    session_end: {
+      ...commonFields(HOST_OBSERVATION_KINDS.session_end.wireSchemaVersion),
+      reason: 'other',
+      last_active_host_prompt_id: 'host-prompt',
+    },
+  };
+
+  for (const [kind, config] of Object.entries(HOST_OBSERVATION_KINDS)) {
+    const { ingest, requestReceived } = await loadIngestWithCapture(API_KEY, JSON.stringify({
+      ack_version: 1,
+      occurrence_id: 'occurrence',
+      client_event_id: adapterEventId,
+      status: 'accepted',
+    }));
+    const payload = payloadsByKind[kind];
+    const [result, request] = await Promise.all([
+      ingest.sendHostObservation(kind, payload),
+      requestReceived,
+    ]);
+    assert.equal(result.status, 202, kind);
+    assertRequest(request, config.route, payload);
+    await closeServer();
+  }
+});
+
+test('sendHostObservation rejects an unknown kind and a shape mismatch', async () => {
+  const { ingest } = await loadIngestWithCapture();
+  await assert.rejects(() => ingest.sendHostObservation('not_a_kind', {}), TypeError);
+  await assert.rejects(() => ingest.sendHostObservation('stop_context', {
+    schema_version: 1,
+    adapter_event_id: '0'.repeat(64),
+    source_session_id: 'session',
+    collector_version: '0.9.0',
+    host_version: null,
+    observed_at: '2026-09-15T00:00:00.000Z',
+    host_prompt_id: 'host-prompt',
+    stop_ordinal: -1, // invalid: must be >= 0
+    stop_hook_active: false,
+    background_task_count: 0,
+    session_cron_count: 0,
+  }), TypeError);
+});
+
 test('sendPrompt preserves prompt metadata with bounded size-clamp evidence', async () => {
   const { ingest, requestReceived } = await loadIngestWithCapture(API_KEY, 'accepted', true);
   const [result, request] = await Promise.all([

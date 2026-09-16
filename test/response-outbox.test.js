@@ -116,14 +116,15 @@ test('failed delivery remains queued and is redelivered by the next drain', asyn
 
 test('response delivery stays ahead of prompts and evidence, and evidence is last', async () => {
   assert.equal(outbox.enqueue({ id: 'evidence', kind: 'prompt_evidence', payload: { client_event_id: 'a'.repeat(64), producer_evidence: {} } }), true);
+  assert.equal(outbox.enqueue({ id: 'input-origin', kind: 'prompt_input_origin', payload: { source_event_id: 'b'.repeat(64) } }), true);
   assert.equal(outbox.enqueue(promptEntry('prompt')), true);
   assert.equal(outbox.enqueue(responseEntry('response')), true);
   const delivered = [];
   await outbox.drain(async (entry) => {
     delivered.push(entry.id);
     return { status: 202, body: 'accepted' };
-  }, { prioritizeIds: ['evidence'] });
-  assert.deepEqual(delivered, ['response', 'prompt', 'evidence']);
+  }, { prioritizeIds: ['evidence', 'input-origin'] });
+  assert.deepEqual(delivered, ['response', 'prompt', 'evidence', 'input-origin']);
 });
 
 test('evidence survives a transient failure and an unrecognized success ACK, then replays after restart semantics', async () => {
@@ -157,6 +158,9 @@ test('producer evidence terminal codes distinguish semantic and raw body limits'
     [413, 'prompt_evidence_request_too_large'],
     [413, 'prompt_producer_evidence_exceeds_limit'],
     [400, 'prompt_producer_evidence_identity_mismatch'],
+    [400, 'host_observation_invalid_identity'],
+    [413, 'host_observation_request_too_large'],
+    [415, 'host_observation_unsupported_media_type'],
   ]) {
     const body = JSON.stringify({ error: { code } });
     assert.equal(outbox.terminalRejectionCode({ status, mediaType: 'application/json', body }), code);
@@ -928,4 +932,108 @@ test('logs prompt eviction at the outbox cap', () => {
     }), true);
   }
   assert.match(fs.readFileSync(path.join(process.env.CLAUDE_PLUGIN_DATA, 'debug.log'), 'utf8'), /DROP outbox prompt beyond cap/);
+});
+
+// ─── Host observation kinds (contract §1, §5) ───
+
+function hostObservationEntry(kind, id, extra = {}) {
+  const commonByKind = {
+    prompt_input_origin: { schema_version: 2 },
+    queued_input: { schema_version: 1 },
+    turn_interrupt_marker: { schema_version: 1 },
+    stop_context: { schema_version: 1 },
+    session_end: { schema_version: 1 },
+  };
+  return {
+    id,
+    kind,
+    payload: {
+      ...commonByKind[kind],
+      adapter_event_id: crypto.createHash('sha256').update(id).digest('hex'),
+      source_session_id: 'session-a',
+      collector_version: '0.9.0',
+      host_version: null,
+      observed_at: new Date().toISOString(),
+      ...extra,
+    },
+  };
+}
+
+test('validEntry accepts every host observation kind', () => {
+  const kinds = ['prompt_input_origin', 'queued_input', 'turn_interrupt_marker', 'stop_context', 'session_end'];
+  for (const kind of kinds) {
+    assert.equal(outbox.enqueue(hostObservationEntry(kind, `host-observation-${kind}`)), true, kind);
+  }
+  assert.equal(outbox.listPending().length, kinds.length);
+});
+
+test('queued_input shares the prompt eviction tier while the other four host observation kinds evict with prompt_evidence', () => {
+  const origin = hostObservationEntry('prompt_input_origin', 'evict-origin', { createdAt: new Date(0).toISOString() });
+  const queued = hostObservationEntry('queued_input', 'evict-queued', { createdAt: new Date(1).toISOString() });
+  assert.equal(outbox.enqueue({ ...origin, createdAt: new Date(0).toISOString() }), true);
+  assert.equal(outbox.enqueue({ ...queued, createdAt: new Date(1).toISOString() }), true);
+  // Exactly one entry beyond MAX_PENDING_ENTRIES forces exactly one
+  // eviction, which should land on the sole prompt_evidence-tier entry
+  // (origin) rather than the older-but-prompt-tier queued_input.
+  for (let index = 0; index < outbox.MAX_PENDING_ENTRIES - 1; index += 1) {
+    assert.equal(outbox.enqueue({
+      ...promptEntry(`evict-prompt-${index}`),
+      createdAt: new Date(index + 2).toISOString(),
+    }), true);
+  }
+  const pending = outbox.listPending();
+  assert.equal(pending.some((entry) => entry.id === origin.id), false, 'prompt_input_origin should evict first');
+  assert.equal(pending.some((entry) => entry.id === queued.id), true, 'queued_input shares the prompt tier and survives longer');
+  const terminalFile = entryFile(origin.id);
+  const terminalDir = outbox.getTerminalRejectedDir();
+  const tombstoned = fs.readdirSync(terminalDir).some((name) => {
+    const value = JSON.parse(fs.readFileSync(path.join(terminalDir, name), 'utf8'));
+    return value.id === origin.id && value.terminalReason === 'outbox_evicted_capacity';
+  });
+  assert.equal(tombstoned, true);
+  void terminalFile;
+});
+
+test('drain sends every host observation kind only after prompts, alongside prompt_evidence', async () => {
+  assert.equal(outbox.enqueue(promptEntry('drain-order-prompt')), true);
+  assert.equal(outbox.enqueue(hostObservationEntry('stop_context', 'drain-order-stop-context')), true);
+  assert.equal(outbox.enqueue({ id: 'drain-order-evidence', kind: 'prompt_evidence', payload: { client_event_id: 'e'.repeat(64), producer_evidence: {} } }), true);
+
+  const order = [];
+  await outbox.drain(async (entry) => {
+    order.push(entry.kind);
+    return { status: 202, body: '' };
+  });
+  assert.equal(order[0], 'prompt');
+  assert.deepEqual(new Set(order.slice(1)), new Set(['stop_context', 'prompt_evidence']));
+});
+
+test('a 404 or 405 on a host observation route settles it terminal and marks the kind unsupported for the session', async () => {
+  const { isKindUnsupported } = require('../lib/host-observation-state');
+  const entry = hostObservationEntry('session_end', 'unsupported-session-end');
+  assert.equal(outbox.enqueue(entry), true);
+  const [outcome] = await outbox.drain(async () => ({ status: 404, body: 'not found', mediaType: 'text/plain' }));
+  assert.equal(outcome.terminal, true);
+  assert.equal(outcome.terminalReason, 'server_unsupported');
+  assert.deepEqual(outbox.listPending(), []);
+  assert.equal(isKindUnsupported('session-a', 'session_end'), true);
+});
+
+test('a 405 on a host observation route is treated the same as a 404', async () => {
+  const entry = hostObservationEntry('turn_interrupt_marker', 'method-not-allowed-marker');
+  assert.equal(outbox.enqueue(entry), true);
+  const [outcome] = await outbox.drain(async () => ({ status: 405, body: '', mediaType: 'text/plain' }));
+  assert.equal(outcome.terminal, true);
+  assert.equal(outcome.terminalReason, 'server_unsupported');
+  assert.deepEqual(outbox.listPending(), []);
+});
+
+test('a coded 400/409/413/415 rejection on a host observation route still terminates as before', async () => {
+  const entry = hostObservationEntry('queued_input', 'coded-rejection-queued-input');
+  assert.equal(outbox.enqueue(entry), true);
+  const body = JSON.stringify({ error: { code: 'host_observation_invalid_payload' } });
+  const [outcome] = await outbox.drain(async () => ({ status: 400, mediaType: 'application/json', body }));
+  assert.equal(outcome.terminal, true);
+  assert.equal(outcome.terminalReason, 'host_observation_invalid_payload');
+  assert.deepEqual(outbox.listPending(), []);
 });

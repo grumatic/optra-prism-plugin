@@ -126,6 +126,22 @@ function interceptor(home, statusCode = 202) {
     '  request.end = () => {',
     "    const response = Object.assign(new events.EventEmitter(), { headers: { 'content-type': 'application/json' } });",
     "    if (url.pathname === '/v1/score_v3/realtime/sub-sessions') { response.statusCode = 200; callback(response); response.emit('data', Buffer.from(realtimeRows)); response.emit('end'); return; }",
+    // Host observations (Stop always enqueues at least stop_context) are an
+    // idempotent, ack-shaped route (contract §5): always accept them so
+    // they never linger in the outbox and mask what these tests assert
+    // about prompt/response delivery.
+    "    if (url.pathname.startsWith('/v1/host-observations/') || url.pathname.startsWith('/v1/prompt-evidence')) {",
+    "      let clientEventId = '';",
+    '      try {',
+    '        const parsed = JSON.parse(body);',
+    "        clientEventId = parsed.adapter_event_id || parsed.client_event_id || parsed.source_event_id || '';",
+    '      } catch {}',
+    '      response.statusCode = 200;',
+    '      callback(response);',
+    "      response.emit('data', Buffer.from(JSON.stringify({ ack_version: 1, occurrence_id: 'occurrence', client_event_id: clientEventId, status: 'accepted' })));",
+    "      response.emit('end');",
+    '      return;',
+    '    }',
     `    response.statusCode = ${statusCode}; callback(response);`,
     "    if (url.pathname === '/v1/prompts/response') fs.writeFileSync(process.env.RESPONSE_MARKER, body);",
     "    response.emit('end');",
@@ -211,6 +227,68 @@ test('exact Stop consumes one proven multi-assistant turn and separates totals f
   ]);
   assert.equal(session.readTurn('exact-stop').active.status, 'consumed');
 });
+test('Stop enqueues stop_context and the observations recorded past the transcript boundary', async () => {
+  const home = temp('prism-realtime-host-observation-home-');
+  const data = temp('prism-realtime-host-observation-data-');
+  const file = path.join(home, 'transcript.jsonl');
+  const marker = path.join(home, 'response.json');
+  const promptId = 'host-observation-prompt';
+  const text = 'final assistant content';
+  fs.writeFileSync(file, [
+    transcript(promptId, text, [{ input: 1, output: 1, model: 'claude-sonnet-4-6' }]).trimEnd(),
+    JSON.stringify({
+      type: 'attachment',
+      uuid: 'queued-row-uuid',
+      parentUuid: 'parent-row-uuid',
+      timestamp: '2026-07-02T00:00:01.000Z',
+      attachment: {
+        type: 'queued_command', prompt: 'queued follow-up', source_uuid: 'source-uuid', origin: { kind: 'human' }, isMeta: false, commandMode: 'default',
+      },
+    }),
+    JSON.stringify({
+      type: 'user',
+      uuid: 'marker-row-uuid',
+      promptId,
+      timestamp: '2026-07-02T00:00:02.000Z',
+      message: { role: 'user', content: [{ type: 'text', text: '[Request interrupted by user]' }] },
+    }),
+    '',
+  ].join('\n'));
+  process.env.CLAUDE_PLUGIN_DATA = data;
+  active('host-observation-stop', promptId, file);
+  const result = spawnSync(process.execPath, [STOP], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    input: JSON.stringify({
+      session_id: 'host-observation-stop',
+      prompt_id: promptId,
+      transcript_path: file,
+      last_assistant_message: text,
+      stop_hook_active: true,
+      background_tasks: [{ id: 'bg-1' }],
+      session_crons: [],
+    }),
+    env: runtimeEnv(home, data, { apiKey: '', ingest_url: 'http://127.0.0.1:1', show_realtime_summary: false }, { RESPONSE_MARKER: marker }),
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const pending = require('../lib/response-outbox').listPending();
+  const stopContext = pending.find((entry) => entry.kind === 'stop_context');
+  const queuedInput = pending.find((entry) => entry.kind === 'queued_input');
+  const marker2 = pending.find((entry) => entry.kind === 'turn_interrupt_marker');
+  assert.ok(stopContext, 'expected a stop_context entry');
+  assert.equal(stopContext.payload.host_prompt_id, promptId);
+  assert.equal(stopContext.payload.stop_ordinal, 0);
+  assert.equal(stopContext.payload.stop_hook_active, true);
+  assert.equal(stopContext.payload.background_task_count, 1);
+  assert.equal(stopContext.payload.session_cron_count, 0);
+  assert.ok(queuedInput, 'expected a queued_input entry');
+  assert.equal(queuedInput.payload.attached_under_host_prompt_id, promptId);
+  assert.equal(queuedInput.payload.prompt_text, 'queued follow-up');
+  assert.ok(marker2, 'expected a turn_interrupt_marker entry');
+  assert.equal(marker2.payload.marker_kind, 'user');
+  assert.equal(marker2.payload.target_host_prompt_id, promptId);
+});
+
 test('proven usage prices only strict RFC3339 transcript timestamps', async () => {
   const dir = temp('prism-realtime-timestamps-');
   const file = path.join(dir, 'timestamps.jsonl');
@@ -376,8 +454,10 @@ test('Stop consumes a captured turn even when the raw response is far larger tha
   assert.equal(session.readTurn(sessionId).active.status, 'consumed');
   // The unreachable ingest_url leaves delivery itself pending retry; what
   // this test pins is that the entry was durably enqueued at all rather
-  // than rejected up front as oversized.
-  assert.equal(require('../lib/response-outbox').listPending().length, 1);
+  // than rejected up front as oversized. Stop also always enqueues its own
+  // stop_context host observation, so filter to the response entry.
+  const pending = require('../lib/response-outbox').listPending();
+  assert.equal(pending.filter((entry) => entry.kind === 'response').length, 1);
 });
 
 test('control, stale, expired, prompt mismatch, and transcript lag leave active records unconsumed', async () => {
@@ -728,9 +808,12 @@ test('concurrent Stop hooks have exactly one compare-and-swap winner', async () 
   assert.deepEqual(results.map((result) => result.code), [0, 0]);
   assert.equal(results.filter((result) => result.stdout.includes('Realtime summary unavailable')).length, 1);
   assert.equal(session.readTurn('concurrent-stop').active.status, 'consumed');
+  // Only one process wins the response CAS; a concurrent stop_context
+  // ordinal allocation (best-effort, unlocked) may add its own entry too.
   const pending = require('../lib/response-outbox').listPending();
-  assert.equal(pending.length, 1);
-  assert.equal(pending[0].payload.response_text, text);
+  const responses = pending.filter((entry) => entry.kind === 'response');
+  assert.equal(responses.length, 1);
+  assert.equal(responses[0].payload.response_text, text);
   assert.equal(session.readSummary('concurrent-stop').turnLog.length, 1);
 });
 

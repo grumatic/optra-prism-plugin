@@ -563,7 +563,7 @@ test('a pre-existing v0.7.8 git record makes readGit return null so the submit p
   });
 });
 
-test('git binary absent from PATH omits metadata.git entirely and still captures the prompt (fail-open)', () => {
+test('git binary absent from PATH omits metadata.git and still captures the prompt (fail-open)', () => {
   const home = tempDir('prism-git-meta-nogit-home-');
   const dataDir = tempDir('prism-git-meta-nogit-data-');
   const marker = path.join(home, 'prompt.json');
@@ -581,8 +581,9 @@ test('git binary absent from PATH omits metadata.git entirely and still captures
 
   assert.equal(result.status, 0, result.stderr);
   const sent = JSON.parse(fs.readFileSync(marker, 'utf8'));
-  assert.equal('metadata' in sent, false);
-  assert.deepEqual(Object.keys(sent).sort(), [...V0_7_8_PAYLOAD_KEYS].sort());
+  assert.equal('git' in sent.metadata, false);
+  assert.deepEqual(Object.keys(sent.metadata), ['producer_evidence']);
+  assert.deepEqual(Object.keys(sent).sort(), [...V0_7_8_PAYLOAD_KEYS, 'metadata'].sort());
 });
 
 test('a timed-out git still captures the prompt and attaches the unavailable variant with git_timeout', () => {
@@ -607,7 +608,7 @@ test('a timed-out git still captures the prompt and attaches the unavailable var
   assert.equal(result.status, 0, result.stderr);
   const sent = JSON.parse(fs.readFileSync(marker, 'utf8'));
   assert.deepEqual(Object.keys(sent).sort(), [...V0_7_8_PAYLOAD_KEYS, 'metadata'].sort());
-  assert.deepEqual(Object.keys(sent.metadata), ['git']);
+  assert.deepEqual(Object.keys(sent.metadata).sort(), ['git', 'producer_evidence']);
   assert.deepEqual(sent.metadata.git, {
     schema_version: 'prompt-git-metadata/v1',
     observed_at: sent.metadata.git.observed_at,
