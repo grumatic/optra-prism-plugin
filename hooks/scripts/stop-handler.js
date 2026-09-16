@@ -432,6 +432,49 @@ async function enrichAfterPublication(data, active, summary, delivered) {
         };
       }) || updatedSummary;
     }
+    // Best-effort host observation collection (design §5.3: Stop is the
+    // first of three read points). Runs regardless of SHOW_REALTIME_SUMMARY
+    // and must never affect the realtime enrichment below.
+    try {
+      const { readPluginVersion } = require('../../lib/plugin-version');
+      const { collectAndEnqueueHostObservations, enqueueStopContext } = require('../../lib/host-observation-collection');
+      const collectorVersion = readPluginVersion();
+      const stopObservedAt = new Date().toISOString();
+      const collected = collectAndEnqueueHostObservations({
+        sessionId: data.session_id,
+        transcriptPath: data.transcript_path,
+        byteOffset: active.transcriptBoundary && active.transcriptBoundary.byteOffset,
+        hostPromptId: active.submitPromptId,
+        clientEventId: active.clientEventId,
+        promptOutboxId: `prompt-${active.clientEventId}`,
+        collectorVersion,
+        observedAt: stopObservedAt,
+      });
+      const enqueuedIds = collected.ok ? [...collected.enqueuedIds] : [];
+      const stopContextId = enqueueStopContext({
+        sessionId: data.session_id,
+        data,
+        hostPromptId: active.submitPromptId,
+        collectorVersion,
+        hostVersion: collected.ok ? collected.hostVersion : null,
+        observedAt: stopObservedAt,
+      });
+      if (stopContextId) enqueuedIds.push(stopContextId);
+
+      // main()'s own drain() already ran before this function was called, so
+      // these freshly-enqueued entries need their own small, separately
+      // budgeted delivery attempt — enqueue first (already durable above),
+      // then send them via prioritizeIds. drain() always attempts any other
+      // pending response/prompt ahead of evidence-tier entries regardless of
+      // prioritizeIds (by design — those are the durable, user-facing
+      // records), so the limit floor here keeps that headroom instead of
+      // starving our own entries behind a single stray one; it never
+      // enlarges the deadline, which bounds real elapsed time on its own.
+      if (enqueuedIds.length > 0 && API_KEY && INGEST_URL) {
+        const { deliverOutboxEntry } = require('../../lib/outbox-delivery');
+        await drain(deliverOutboxEntry, { limit: Math.max(enqueuedIds.length, 8), maxElapsedMs: 500, prioritizeIds: enqueuedIds });
+      }
+    } catch { /* best-effort: never block realtime enrichment or Stop */ }
     if (!SHOW_REALTIME_SUMMARY) return;
     if (!API_KEY || !INGEST_URL) {
       process.stdout.write(`${JSON.stringify({ systemMessage: '[Prism] Realtime summary unavailable: ingest is not configured.' })}\n`);
