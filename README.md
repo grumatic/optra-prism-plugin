@@ -21,6 +21,7 @@ Claude Code 2.1.161+ is required for core telemetry and Score v3 support. Claude
 | Core telemetry and Score v3 | 2.1.161+ | Continue raw ingest as best-effort |
 | Native assistant response | 2.1.193+ | Disable response-aware analysis |
 | Exact prompt correlation | 2.1.196+ | Use legacy session-order fallback |
+| OTEL telemetry from project and local settings | Ignored from 2.1.282 | Install at user scope; project and local installs capture prompts without OTEL telemetry |
 
 ## Quick Start
 
@@ -75,6 +76,20 @@ without enqueueing a prompt.
 - local: `<project>/.claude/settings.local.json`
 
 Settings are read in user → project → local order, with later values taking precedence. Setup writes only the installed scope and does not move or delete values from another settings layer.
+
+Claude Code 2.1.282 and later ignore telemetry variables in project and local settings; those layers can only turn telemetry off.
+On such a host, a project or local install sends no OTEL telemetry: setup writes no OTEL values there, removes the values Prism wrote earlier, and reports that telemetry is not collected.
+Prompt and hook capture continue.
+To collect telemetry, uninstall the project or local install, install Prism at user scope, and run `/prism:setup KEY` again.
+
+A user-scope install collects telemetry in every project.
+To run one session without Prism, pass the settings file that setup writes to the plugin data directory:
+
+```bash
+claude --settings ~/.claude/plugins/data/prism-optra-prism/prism-off.settings.json
+```
+
+That file disables the plugin and turns OTEL export off for that session only; `/prism:status` shows its exact path.
 
 Setup also installs a self-contained OTEL headers helper under the plugin data
 directory and records its absolute path in the same settings scope. The static
