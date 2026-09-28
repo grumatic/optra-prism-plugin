@@ -15,6 +15,7 @@ const EXPECTED_BOUNDARIES = {
   coreEvents: '2.1.161',
   nativeResponse: '2.1.193',
   promptCorrelation: '2.1.196',
+  projectTelemetryIgnored: '2.1.282',
 };
 
 function semverParts(version) {

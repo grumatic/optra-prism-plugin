@@ -4,6 +4,10 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { afterEach, beforeEach, test } = require('node:test');
+const { LEGACY_HOST_VERSION, pinClaudeHostVersion } = require('./helpers/claude-host');
+
+// These tests exercise hosts that still apply OTEL from project and local settings.
+pinClaudeHostVersion(LEGACY_HOST_VERSION);
 
 const ROOT = path.join(__dirname, '..');
 const MODULE_PATHS = ['../lib/setup', '../lib/settings', '../lib/config', '../lib/notify'];

@@ -7,6 +7,10 @@ const {
   beforeEach,
   test,
 } = require('node:test');
+const { LEGACY_HOST_VERSION, pinClaudeHostVersion } = require('./helpers/claude-host');
+
+// These tests exercise hosts that still apply OTEL from project and local settings.
+pinClaudeHostVersion(LEGACY_HOST_VERSION);
 
 const MODULE_PATHS = ['../lib/config-command', '../lib/config', '../lib/settings'];
 const API_KEY = 'secret opaque key';

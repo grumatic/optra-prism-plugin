@@ -3,6 +3,10 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { afterEach, beforeEach, test } = require('node:test');
+const { LEGACY_HOST_VERSION, pinClaudeHostVersion } = require('./helpers/claude-host');
+
+// These tests exercise hosts that still apply OTEL from project and local settings.
+pinClaudeHostVersion(LEGACY_HOST_VERSION);
 const { bindingDigest } = require('../lib/binding');
 
 const ROOT = path.resolve(__dirname, '..');
