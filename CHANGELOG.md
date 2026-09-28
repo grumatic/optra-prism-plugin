@@ -5,6 +5,16 @@ All notable changes to the Prism plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.2] - 2026-09-28
+
+### Changed
+- The restart notice after a version change appears only when the change takes effect at launch: the headers helper was newly registered, the static header is the only header source, or an OTEL environment value changed. When the Prism headers helper is already registered, it refreshes the plugin-version header without a restart and no notice is shown.
+- A settings change that does not come with a new version is reported as "Prism updated its telemetry settings" instead of as a version update.
+- The marketplace update check runs at most once every 15 minutes instead of once every 24 hours, and the update notice now accepts either `/reload-plugins` or a restart.
+
+### Fixed
+- An activation failure notice is shown once per session and version instead of on every session start and prompt.
+
 ## [0.9.1] - 2026-09-28
 
 ### Added
