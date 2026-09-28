@@ -202,14 +202,18 @@ async function main() {
 
   if (isStringPrompt) {
     try {
-      const { activatePluginVersion } = require('../../lib/plugin-activation');
+      const { activatePluginVersion, sessionActivationNotice } = require('../../lib/plugin-activation');
+      const dataDir = process.env.CLAUDE_PLUGIN_DATA;
       const activation = activatePluginVersion({
         pluginRoot: process.env.CLAUDE_PLUGIN_ROOT
           || require('node:path').resolve(__dirname, '../..'),
-        dataDir: process.env.CLAUDE_PLUGIN_DATA,
+        dataDir,
         projectDir: process.env.CLAUDE_PROJECT_DIR || data.cwd,
       });
-      queueSystemMessage(activation && activation.notice);
+      queueSystemMessage(sessionActivationNotice(activation, {
+        dataDir,
+        sessionId: data.session_id,
+      }));
     } catch {}
   }
 
