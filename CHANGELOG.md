@@ -5,6 +5,18 @@ All notable changes to the Prism plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1] - 2026-09-28
+
+### Added
+- A user-scope install now writes `prism-off.settings.json` to the plugin data directory. Launching Claude Code with `claude --settings <that file>` runs one session with the plugin disabled and OTEL export turned off, without changing the installation. `/prism:setup` and `/prism:status` show the exact path.
+
+### Changed
+- Claude Code 2.1.282 and later ignore telemetry variables in project and local settings. On such a host, a project or local install no longer writes OTEL values to its settings file and removes the values Prism wrote there earlier; values Prism did not write are kept. Prompt and hook capture are unchanged.
+- In that case `/prism:setup` reports that telemetry is not collected in the project and prints the commands to reinstall Prism at user scope, and a one-line notice appears when a session starts or resumes without telemetry on.
+
+### Fixed
+- `/prism:doctor` and `/prism:status` no longer report OTEL as configured when Claude Code ignores the settings that hold it. They judge OTEL by the telemetry switch the running session applied: a user install whose session started before setup reports that a restart is needed, a withheld project or local install fails the OTEL check and skips the headers-helper check, and project or local values the host ignores no longer count as overrides.
+
 ## [0.9.0] - 2026-09-15
 
 ### Added
