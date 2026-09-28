@@ -110,6 +110,7 @@ async function main() {
       pluginRoot: process.env.PRISM_PLUGIN_ROOT,
       dataDir: process.env.CLAUDE_PLUGIN_DATA,
       projectDir: process.env.CLAUDE_PROJECT_DIR || data.cwd,
+      sessionId: data.session_id,
     });
     if (result.notices.length > 0) {
       process.stdout.write(`${JSON.stringify({
