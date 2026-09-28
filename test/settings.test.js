@@ -665,6 +665,90 @@ test('version activation removes only the legacy Prism assistant-response opt-ou
   );
 });
 
+test('version sync needs no restart once the managed helper is already effective', () => {
+  const settings = require('../lib/settings');
+  const dataDir = path.join(homeDir, 'plugin-data');
+  const projectFile = settings.pathForScope('project', projectDir);
+
+  const first = settings.syncPluginVersionMetadata({
+    scope: 'project',
+    projectDir,
+    dataDir,
+    pluginVersion: '1.2.2',
+  });
+  assert.equal(first.ok, true);
+  assert.equal(first.restartRequired, true);
+
+  const second = settings.syncPluginVersionMetadata({
+    scope: 'project',
+    projectDir,
+    dataDir,
+    pluginVersion: '1.2.3',
+  });
+  assert.equal(second.ok, true);
+  assert.equal(second.changed, true);
+  assert.equal(second.restartRequired, false);
+  assert.equal(
+    readJson(projectFile).env.OTEL_EXPORTER_OTLP_HEADERS,
+    `x-api-key=${encodeURIComponent(API_KEY)},x-prism-plugin-version=1.2.3`,
+  );
+
+  const repeated = settings.syncPluginVersionMetadata({
+    scope: 'project',
+    projectDir,
+    dataDir,
+    pluginVersion: '1.2.3',
+  });
+  assert.equal(repeated.changed, false);
+  assert.equal(repeated.restartRequired, false);
+});
+
+test('version sync requires restart when the static header is the only header source', () => {
+  const settings = require('../lib/settings');
+  const dataDir = path.join(homeDir, 'plugin-data');
+  writeJson(settings.pathForScope('local', projectDir), {
+    otelHeadersHelper: '/usr/local/bin/company-otel-headers',
+  });
+
+  const result = settings.syncPluginVersionMetadata({
+    scope: 'project',
+    projectDir,
+    dataDir,
+    pluginVersion: '1.2.3',
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.helperConflict, true);
+  assert.equal(result.restartRequired, true);
+});
+
+test('removing the legacy assistant-response opt-out requires restart even with an effective helper', () => {
+  const settings = require('../lib/settings');
+  const dataDir = path.join(homeDir, 'plugin-data');
+  const projectFile = settings.pathForScope('project', projectDir);
+  const expected = settings.buildExpectedOtelEnv();
+  writeJson(projectFile, {
+    otelHeadersHelper: settings.helperPathForDataDir(dataDir),
+    env: {
+      ...expected.otelEnv,
+      OTEL_EXPORTER_OTLP_HEADERS:
+        `x-api-key=${encodeURIComponent(API_KEY)},x-prism-plugin-version=1.2.3`,
+      OTEL_LOG_ASSISTANT_RESPONSES: '0',
+    },
+  });
+
+  const result = settings.syncPluginVersionMetadata({
+    scope: 'project',
+    projectDir,
+    dataDir,
+    pluginVersion: '1.2.3',
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.assistantResponseOptOutRemoved, true);
+  assert.equal(result.restartRequired, true);
+});
+
 test('targeted sync fails when a higher-precedence layer overrides projected headers', () => {
   const settings = require('../lib/settings');
   const dataDir = path.join(homeDir, 'plugin-data');

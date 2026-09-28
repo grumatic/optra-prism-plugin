@@ -764,10 +764,10 @@ test('SessionStart projects activated metadata before one combined restart and u
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(assertJsonOrEmpty(result.stdout), {
     systemMessage:
-      `Prism has been updated to v${currentVersion}. `
-      + 'Restart Claude Code to apply the new telemetry metadata immediately.\n'
+      `Prism v${currentVersion} is active. `
+      + 'Restart Claude Code to apply its telemetry settings.\n'
       + 'Prism v999.0.0 is available. '
-      + 'Update the plugin, run `/reload-plugins`, then restart Claude Code.',
+      + 'Update the plugin, then run `/reload-plugins` or restart Claude Code.',
   });
   const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
   assert.equal(settings.unrelated, 'preserve');
@@ -780,6 +780,52 @@ test('SessionStart projects activated metadata before one combined restart and u
     settings.otelHeadersHelper,
     path.join(dataDir, 'bin', 'prism-otel-headers-helper.js'),
   );
+  assert.equal(fs.readFileSync(path.join(dataDir, 'last-version.txt'), 'utf8'), currentVersion);
+});
+
+test('SessionStart activates a new version without a restart notice when the helper is already registered', () => {
+  const home = makeTempDir('prism-session-helper-home-');
+  const dataDir = makeTempDir('prism-session-helper-data-');
+  const projectDir = path.join(home, 'project');
+  const settingsFile = path.join(projectDir, '.claude', 'settings.local.json');
+  const helperPath = path.join(dataDir, 'bin', 'prism-otel-headers-helper.js');
+  const apiKey = 'opaque session helper key';
+  fs.mkdirSync(projectDir);
+  seedInstalledPlugin(home, projectDir);
+  writeRuntimeConfig(home, {
+    apiKey,
+    ingest_url: 'https://ingest.example',
+    show_realtime_summary: false,
+  });
+  writeJsonFile(settingsFile, {
+    otelHeadersHelper: helperPath,
+    env: {
+      OTEL_EXPORTER_OTLP_HEADERS: `x-api-key=${encodeURIComponent(apiKey)},x-prism-plugin-version=0.0.1`,
+    },
+  });
+  fs.writeFileSync(path.join(dataDir, 'last-version.txt'), '0.0.1');
+  seedFreshPluginUpdateCache(dataDir, '0.0.1');
+
+  const currentVersion = require('../lib/plugin-update').readCurrentPluginVersion({
+    pluginRoot: ROOT,
+  });
+  const result = runSessionStart(home, dataDir, {
+    session_id: 'helper-activation-session',
+    source: 'startup',
+    cwd: projectDir,
+  }, {
+    CLAUDE_PROJECT_DIR: projectDir,
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(assertJsonOrEmpty(result.stdout), null);
+  const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+  assert.equal(
+    settings.env.OTEL_EXPORTER_OTLP_HEADERS,
+    `x-api-key=${encodeURIComponent(apiKey)},x-prism-plugin-version=${currentVersion}`,
+  );
+  assert.equal(settings.otelHeadersHelper, helperPath);
+  assert.equal(fs.statSync(helperPath).mode & 0o777, 0o700);
   assert.equal(fs.readFileSync(path.join(dataDir, 'last-version.txt'), 'utf8'), currentVersion);
 });
 
@@ -1625,7 +1671,7 @@ test('submit uses JSON system messages for missing configuration and suppresses 
   assert.equal(assertJsonOrEmpty(hidden.stdout), null);
 });
 
-test('first normal prompt after plugin reload always recommends restart and refreshes metadata', () => {
+test('first normal prompt after plugin reload recommends restart when it registers the helper', () => {
   const home = makeTempDir('prism-submit-version-home-');
   const dataDir = makeTempDir('prism-submit-version-data-');
   const projectDir = path.join(home, 'project');
@@ -1670,8 +1716,8 @@ test('first normal prompt after plugin reload always recommends restart and refr
   assert.equal(first.status, 0, first.stderr);
   assert.deepEqual(assertJsonOrEmpty(first.stdout), {
     systemMessage:
-      `Prism has been updated to v${currentVersion}. `
-      + 'Restart Claude Code to apply the new telemetry metadata immediately.',
+      `Prism v${currentVersion} is active. `
+      + 'Restart Claude Code to apply its telemetry settings.',
   });
   const projected = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
   assert.equal(projected.env.OTEL_LOGS_EXPORTER, 'intentionally-stale');
@@ -1743,8 +1789,8 @@ test('first Prism control after plugin reload recommends restart without posting
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(assertJsonOrEmpty(result.stdout), {
     systemMessage:
-      `Prism has been updated to v${currentVersion}. `
-      + 'Restart Claude Code to apply the new telemetry metadata immediately.',
+      `Prism v${currentVersion} is active. `
+      + 'Restart Claude Code to apply its telemetry settings.',
   });
   assert.equal(fs.existsSync(postMarker), false);
   const turn = JSON.parse(fs.readFileSync(turnFile(dataDir, 'submit-control-version'), 'utf8'));

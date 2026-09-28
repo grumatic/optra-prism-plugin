@@ -6,6 +6,8 @@ const {
   activationFailureNotice,
   activatedNotice,
   collectPluginNotices,
+  sessionActivationNotice,
+  settingsUpdatedNotice,
   updateAvailableNotice,
 } = require('../lib/plugin-activation');
 
@@ -31,7 +33,12 @@ function activationFixture(overrides = {}) {
 }
 
 test('projects metadata before advancing the active version and recommending restart', () => {
-  const fixture = activationFixture();
+  const fixture = activationFixture({
+    syncMetadataFn: (input) => {
+      fixture.calls.sync.push(input);
+      return { ok: true, restartRequired: true, helperConfigured: true, helperConflict: false };
+    },
+  });
   const result = activatePluginVersion(fixture.options);
 
   assert.equal(result.versionChanged, true);
@@ -50,6 +57,25 @@ test('projects metadata before advancing the active version and recommending res
   }]);
 });
 
+test('a version change refreshed by an effective helper advances the marker without a restart notice', () => {
+  const fixture = activationFixture({
+    syncMetadataFn: (input) => {
+      fixture.calls.sync.push(input);
+      return { ok: true, changed: true, restartRequired: false, helperConfigured: true };
+    },
+  });
+  const result = activatePluginVersion(fixture.options);
+
+  assert.equal(result.versionChanged, true);
+  assert.equal(result.markerWritten, true);
+  assert.equal(result.notice, null);
+  assert.equal(result.noticeKind, null);
+  assert.deepEqual(fixture.calls.writes, [{
+    dataDir: '/plugin/data',
+    version: '1.2.3',
+  }]);
+});
+
 test('checks metadata idempotently even when another scope already advanced the shared marker', () => {
   const fixture = activationFixture({
     readActiveVersionFn: () => '1.2.3',
@@ -62,7 +88,7 @@ test('checks metadata idempotently even when another scope already advanced the 
   assert.deepEqual(fixture.calls.writes, []);
 });
 
-test('still recommends restart when the shared marker advanced before this scope was projected', () => {
+test('reports updated settings, not a version update, when the marker is already current', () => {
   const fixture = activationFixture({
     readActiveVersionFn: () => '1.2.3',
     syncMetadataFn: (input) => {
@@ -70,6 +96,7 @@ test('still recommends restart when the shared marker advanced before this scope
       return {
         ok: true,
         changed: true,
+        restartRequired: true,
         helperConfigured: true,
         helperConflict: false,
       };
@@ -78,8 +105,19 @@ test('still recommends restart when the shared marker advanced before this scope
   const result = activatePluginVersion(fixture.options);
 
   assert.equal(result.versionChanged, false);
-  assert.equal(result.notice, activatedNotice('1.2.3'));
+  assert.equal(result.notice, settingsUpdatedNotice());
+  assert.equal(result.noticeKind, 'settings-updated');
   assert.deepEqual(fixture.calls.writes, []);
+});
+
+test('a settings change that the helper refreshes shows no notice when the marker is current', () => {
+  const fixture = activationFixture({
+    readActiveVersionFn: () => '1.2.3',
+    syncMetadataFn: () => ({ ok: true, changed: true, restartRequired: false }),
+  });
+  const result = activatePluginVersion(fixture.options);
+
+  assert.equal(result.notice, null);
 });
 
 test('does not advance the marker when metadata projection fails', () => {
@@ -105,6 +143,7 @@ test('reports metadata failure when the shared marker is already current', () =>
   assert.equal(result.metadataSynced, false);
   assert.equal(result.markerWritten, false);
   assert.equal(result.notice, activationFailureNotice('1.2.3'));
+  assert.equal(result.noticeKind, 'activation-failure');
   assert.deepEqual(fixture.calls.writes, []);
 });
 
@@ -147,6 +186,7 @@ test('reports activation failure instead of success when marker publication fail
 test('first activation seeds the marker without an update restart notice', () => {
   const fixture = activationFixture({
     readActiveVersionFn: () => null,
+    syncMetadataFn: () => ({ ok: true, changed: true, restartRequired: true }),
   });
   const result = activatePluginVersion(fixture.options);
 
@@ -187,4 +227,85 @@ test('non-startup sources never perform a network update check', async () => {
 
   assert.equal(checks, 0);
   assert.deepEqual(result.notices, []);
+});
+
+test('an activation failure is shown once per session and version', () => {
+  const claimed = new Set();
+  const claims = [];
+  const claimNoticeFn = (input) => {
+    claims.push(input);
+    const id = `${input.sessionId}|${input.key}`;
+    if (claimed.has(id)) return false;
+    claimed.add(id);
+    return true;
+  };
+  const failure = {
+    currentVersion: '1.2.3',
+    notice: activationFailureNotice('1.2.3'),
+    noticeKind: 'activation-failure',
+  };
+  const options = { dataDir: '/plugin/data', sessionId: 'session-a', claimNoticeFn };
+
+  assert.equal(sessionActivationNotice(failure, options), activationFailureNotice('1.2.3'));
+  assert.equal(sessionActivationNotice(failure, options), null);
+  assert.equal(
+    sessionActivationNotice(failure, { ...options, sessionId: 'session-b' }),
+    activationFailureNotice('1.2.3'),
+  );
+  assert.deepEqual(claims[0], {
+    dataDir: '/plugin/data',
+    sessionId: 'session-a',
+    key: 'activation-failure@1.2.3',
+  });
+});
+
+test('restart notices bypass the per-session claim and a failing claim fails open', () => {
+  let claims = 0;
+  const activated = {
+    currentVersion: '1.2.3',
+    notice: activatedNotice('1.2.3'),
+    noticeKind: 'activated',
+  };
+  assert.equal(sessionActivationNotice(activated, {
+    sessionId: 'session-a',
+    claimNoticeFn: () => {
+      claims += 1;
+      return false;
+    },
+  }), activatedNotice('1.2.3'));
+  assert.equal(claims, 0);
+
+  assert.equal(sessionActivationNotice({
+    currentVersion: '1.2.3',
+    notice: activationFailureNotice('1.2.3'),
+    noticeKind: 'activation-failure',
+  }, {
+    sessionId: 'session-a',
+    claimNoticeFn: () => {
+      throw new Error('unwritable');
+    },
+  }), activationFailureNotice('1.2.3'));
+});
+
+test('SessionStart suppresses a repeated activation failure within the same session', async () => {
+  const claimed = new Set();
+  const options = {
+    source: 'resume',
+    dataDir: '/plugin/data',
+    sessionId: 'session-a',
+    activateFn: () => ({
+      currentVersion: '1.2.3',
+      notice: activationFailureNotice('1.2.3'),
+      noticeKind: 'activation-failure',
+    }),
+    claimNoticeFn: ({ sessionId, key }) => {
+      const id = `${sessionId}|${key}`;
+      if (claimed.has(id)) return false;
+      claimed.add(id);
+      return true;
+    },
+  };
+
+  assert.deepEqual((await collectPluginNotices(options)).notices, [activationFailureNotice('1.2.3')]);
+  assert.deepEqual((await collectPluginNotices(options)).notices, []);
 });
