@@ -157,15 +157,18 @@ Debug output is written to `$CLAUDE_PLUGIN_DATA/debug.log` when Claude Code prov
 ## Auto-Updates
 
 On `SessionStart(startup)`, Prism checks the public marketplace metadata at most
-once every 24 hours and reuses a last-known-good cache on network or parse
+once every 15 minutes and reuses a last-known-good cache on network or parse
 failure. When a newer stable version is available, the session message tells
-you to update the plugin, run `/reload-plugins`, and restart Claude Code.
+you to update the plugin, then run `/reload-plugins` or restart Claude Code.
 
 After a new plugin version is activated, the first SessionStart or subsequent
 UserPromptSubmit updates the static plugin-version header and, when no unrelated
-helper conflicts, the stable helper before showing the restart message.
-Restarting is still the immediate, deterministic way to apply the new OTEL
-metadata; the helper is an eventual fallback when the restart is deferred.
+helper conflicts, the stable helper. A helper that was already registered
+refreshes the plugin-version header on Claude Code's helper schedule, so no
+restart message is shown for a version change alone. A restart message appears
+only for changes Claude Code reads at launch: a newly registered helper, a
+static header that is the only header source, or a changed OTEL environment
+value. An activation failure is reported once per session.
 
 ## License
 
