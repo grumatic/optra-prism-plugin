@@ -71,9 +71,11 @@ without enqueueing a prompt.
 
 `/prism:setup KEY` sends the non-empty key to the config endpoint, stores the key and resolved service URLs in that file, and projects OTEL values to the settings file for the installed plugin scope:
 
-- user: `~/.claude/settings.json`
+- user: `~/.claude/settings.json`, or `$CLAUDE_CONFIG_DIR/settings.json` when `CLAUDE_CONFIG_DIR` is set to an absolute path (`~` is not expanded)
 - project: `<project>/.claude/settings.json`
 - local: `<project>/.claude/settings.local.json`
+
+Claude Code also moves its `plugins/` tree under `CLAUDE_CONFIG_DIR`; Prism follows it. `CLAUDE_CODE_PLUGIN_CACHE_DIR` is not supported: the installer, setup, config, and uninstall refuse while it is set, and `/prism:status` and `/prism:doctor` report it. Setup, config, uninstall, and activation also refuse when the plugin root or plugin data directory does not match the config directory Claude Code installed the plugin under; `/prism:status` and `/prism:doctor` show the config directory and that check. `~/.prism` stays under your home directory and is shared by every config directory.
 
 Settings are read in user → project → local order, with later values taking precedence. Setup writes only the installed scope and does not move or delete values from another settings layer.
 
@@ -83,13 +85,13 @@ Prompt and hook capture continue.
 To collect telemetry, uninstall the project or local install, install Prism at user scope, and run `/prism:setup KEY` again.
 
 A user-scope install collects telemetry in every project.
-To run one session without Prism, pass the settings file that setup writes to the plugin data directory:
+To run one session without Prism, pass the settings file that setup writes to `~/.prism`; its path is the same for every Claude config directory:
 
 ```bash
-claude --settings ~/.claude/plugins/data/prism-optra-prism/prism-off.settings.json
+claude --settings ~/.prism/prism-off.settings.json
 ```
 
-That file disables the plugin and turns OTEL export off for that session only; `/prism:status` shows its exact path.
+That file disables the plugin and turns OTEL export off for that session only; `/prism:status` shows its exact path for a user-scope install. It is removed together with `~/.prism` and stays when uninstall preserves `~/.prism`. A copy that an earlier version wrote to the plugin data directory is left in place and keeps working until that config directory is uninstalled.
 
 Setup also installs a self-contained OTEL headers helper under the plugin data
 directory and records its absolute path in the same settings scope. The static
@@ -108,6 +110,19 @@ Use `/prism:config` to list the user-editable fields, their current values, acce
 Use `/prism:config set <field> <value>` to update a field, `/prism:config unset <field>` to remove it, and `/prism:config help` for the complete field reference. The API key is managed separately with `/prism:setup KEY`.
 
 After updating from v0.6.1 or earlier, run `/prism:setup KEY` once when `/prism:status` shows the API key or `ingest_url` as missing. This includes installations whose service URLs existed only in the legacy config cache, environment variables, or plugin Configure options.
+
+## Uninstall
+
+`/prism:uninstall` previews, then removes, the Prism install for the current Claude config directory only: its registry entry, settings, plugin data, and plugin cache. It never writes to or deletes anything inside another config directory.
+
+`~/.prism` (API key, config, binding) is shared by every config directory. Prism records each config directory where it has been seen in `~/.prism/installs.json`, which holds paths and timestamps only and keeps at most 32 directories. Uninstall reads the registry of every recorded directory, and of `~/.claude`, and keeps `~/.prism` when:
+
+- another directory still has a Prism install, or its registry cannot be verified;
+- the inventory is corrupt, or is full and some directories were not recorded.
+
+The preview and the result name the directories or the inventory condition that kept it, and apply checks again immediately before removing `~/.prism`. `/prism:status` and `/prism:doctor` list the other directories and their state.
+
+A session started with `--plugin-dir` is not recorded in `installed_plugins.json`. A config directory used only that way is recorded, then verifies as absent, so it does not protect `~/.prism`.
 
 ## How It Works
 
