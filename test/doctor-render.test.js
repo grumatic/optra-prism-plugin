@@ -78,7 +78,7 @@ test('doctor rejects an arbitrary executable at the expected helper path without
 
     assert.equal(result.status, 0, result.stderr);
     const report = JSON.parse(result.stdout);
-    assert.equal(report.checks.length, 4);
+    assert.equal(report.checks.length, 5);
     assert.deepEqual(
       report.checks.find((check) => check.id === 'api-key'),
       {

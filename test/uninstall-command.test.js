@@ -2034,7 +2034,10 @@ test('symlinked destructive target is rejected before registry or settings write
     ]);
 
     assert.equal(result.status, 2);
-    assert.match(result.stderr, /symbolic link/);
+    // The canonical context check now stops a data directory that resolves
+    // elsewhere before the symlink walk does; neither lets it be deleted.
+    assert.match(result.stderr, /symbolic link|does not match the marketplace plugin root/);
+    assert.doesNotMatch(result.stderr, /CLAUDE_CONFIG_DIR is not visible/);
     assert.deepEqual(snapshotTree(fx.homeDir), before);
     assert.equal(fs.readFileSync(path.join(externalDir, 'keep'), 'utf8'), 'present\n');
   } finally {

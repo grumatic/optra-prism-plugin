@@ -60,6 +60,14 @@ function writeJsonFile(file, value) {
   fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
+// The plugin runs from the repository checkout, outside the plugin cache, so
+// its data directory must be where Claude Code puts it under the config root.
+function makeDataDir(home) {
+  const dir = path.join(home, '.claude', 'plugins', 'data', 'prism-optra-prism');
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
 function seedInstalledPlugin(home, projectDir, scope = 'local') {
   writeJsonFile(path.join(home, '.claude', 'plugins', 'installed_plugins.json'), {
     plugins: {
@@ -332,7 +340,7 @@ afterEach(() => {
 
 test('/prism control prompts only create an opaque control barrier', () => {
   const home = makeTempDir('prism-hook-home-');
-  const dataDir = makeTempDir('prism-hook-data-');
+  const dataDir = makeDataDir(home);
   const fetchMarker = path.join(home, 'fetch-called');
   const fetchBlocker = path.join(home, 'block-fetch.js');
   fs.writeFileSync(fetchBlocker, [
@@ -381,7 +389,7 @@ test('case-insensitive and whitespace-prefixed Prism controls never post', () =>
     '\u00A0/PRISM:config x',
   ]) {
     const home = makeTempDir('prism-control-home-');
-    const dataDir = makeTempDir('prism-control-data-');
+    const dataDir = makeDataDir(home);
     const postMarker = path.join(home, 'posts');
     const result = spawnSync(process.execPath, [SUBMIT_HANDLER], {
       cwd: ROOT,
@@ -410,7 +418,7 @@ test('case-insensitive and whitespace-prefixed Prism controls never post', () =>
 
 test('submit does not activate plugin metadata when its control barrier fails', () => {
   const home = makeTempDir('prism-control-barrier-home-');
-  const dataDir = makeTempDir('prism-control-barrier-data-');
+  const dataDir = makeDataDir(home);
   const projectDir = path.join(home, 'project');
   const settingsFile = path.join(projectDir, '.claude', 'settings.local.json');
   fs.mkdirSync(projectDir);
@@ -453,7 +461,7 @@ test('non-string prompts advance only control barriers without posting', () => {
     ['missing', undefined],
   ]) {
     const home = makeTempDir(`prism-${label}-prompt-home-`);
-    const dataDir = makeTempDir(`prism-${label}-prompt-data-`);
+    const dataDir = makeDataDir(home);
     const sessionId = `${label}-prompt-session`;
     const postMarker = path.join(home, 'posts');
     const result = spawnSync(process.execPath, [SUBMIT_HANDLER], {
@@ -481,7 +489,7 @@ test('non-string prompts advance only control barriers without posting', () => {
 
 test('a present invalid host prompt ID fails closed without an orphan prompt while recording an evidence gap', () => {
   const home = makeTempDir('prism-invalid-host-home-');
-  const dataDir = makeTempDir('prism-invalid-host-data-');
+  const dataDir = makeDataDir(home);
   const sessionId = 'invalid-host-submit';
   seedActive(dataDir, sessionId);
   const result = spawnSync(process.execPath, [SUBMIT_HANDLER], {
@@ -502,7 +510,7 @@ test('a present invalid host prompt ID fails closed without an orphan prompt whi
 
 test('an absent host prompt ID retains the legacy prompt fallback', () => {
   const home = makeTempDir('prism-hostless-prompt-home-');
-  const dataDir = makeTempDir('prism-hostless-prompt-data-');
+  const dataDir = makeDataDir(home);
   const sessionId = 'hostless-submit';
   const result = spawnSync(process.execPath, [SUBMIT_HANDLER], {
     cwd: ROOT,
@@ -518,7 +526,7 @@ test('an absent host prompt ID retains the legacy prompt fallback', () => {
 });
 test('SessionStart accepts an opaque config key without fetch, OTEL repair, or env-file writes', () => {
   const home = makeTempDir('prism-session-start-config-home-');
-  const dataDir = makeTempDir('prism-session-start-config-data-');
+  const dataDir = makeDataDir(home);
   const envFile = path.join(home, 'session-env');
   const settingsFile = path.join(home, '.claude', 'settings.json');
   const fetchMarker = path.join(home, 'fetch-called');
@@ -572,7 +580,7 @@ test('SessionStart accepts an opaque config key without fetch, OTEL repair, or e
 
 test('SessionStart ignores hostile API key env and advances the barrier before a missing-config exit', () => {
   const home = makeTempDir('prism-session-start-missing-home-');
-  const dataDir = makeTempDir('prism-session-start-missing-data-');
+  const dataDir = makeDataDir(home);
   const sessionId = 'missing-key-session';
   seedActive(dataDir, sessionId);
 
@@ -590,7 +598,7 @@ test('SessionStart ignores hostile API key env and advances the barrier before a
 
 test('SessionStart reports an unsupported config ingest URL without claiming startup success', () => {
   const home = makeTempDir('prism-session-start-invalid-url-home-');
-  const dataDir = makeTempDir('prism-session-start-invalid-url-data-');
+  const dataDir = makeDataDir(home);
   const sessionId = 'invalid-url-session';
   seedActive(dataDir, sessionId);
   writeRuntimeConfig(home, {
@@ -607,7 +615,7 @@ test('SessionStart reports an unsupported config ingest URL without claiming sta
 
 test('SessionStart names both hosts and stops startup when the key is not bound to ingest_url', () => {
   const home = makeTempDir('prism-session-start-unbound-home-');
-  const dataDir = makeTempDir('prism-session-start-unbound-data-');
+  const dataDir = makeDataDir(home);
   const sessionId = 'unbound-pair-session';
   seedActive(dataDir, sessionId);
   writeRuntimeConfig(home, {
@@ -629,7 +637,7 @@ test('SessionStart names both hosts and stops startup when the key is not bound 
 
 test('SessionStart reports a malformed config instead of claiming the key is missing', () => {
   const home = makeTempDir('prism-session-start-malformed-home-');
-  const dataDir = makeTempDir('prism-session-start-malformed-data-');
+  const dataDir = makeDataDir(home);
   const sessionId = 'malformed-config-session';
   seedActive(dataDir, sessionId);
   const configFile = path.join(home, '.prism', 'config.json');
@@ -645,7 +653,7 @@ test('SessionStart reports a malformed config instead of claiming the key is mis
 
 test('SessionStart skips activation when the lifecycle barrier is unavailable', () => {
   const home = makeTempDir('prism-session-barrier-home-');
-  const dataDir = makeTempDir('prism-session-barrier-data-');
+  const dataDir = makeDataDir(home);
   const activationMarker = path.join(home, 'activation-called');
   const preload = path.join(home, 'fail-session-barrier.js');
   fs.writeFileSync(preload, [
@@ -691,7 +699,7 @@ test('SessionStart skips activation when the lifecycle barrier is unavailable', 
 
 test('SessionStart advances the current lifecycle barrier before cleanup and the shared outbox drain', () => {
   const home = makeTempDir('prism-session-order-home-');
-  const dataDir = makeTempDir('prism-session-order-data-');
+  const dataDir = makeDataDir(home);
   const sessionId = 'session-order';
   const marker = path.join(home, 'order');
   const preload = path.join(home, 'observe-order.js');
@@ -731,7 +739,7 @@ test('SessionStart advances the current lifecycle barrier before cleanup and the
 
 test('SessionStart projects activated metadata before one combined restart and update notice', () => {
   const home = makeTempDir('prism-session-version-home-');
-  const dataDir = makeTempDir('prism-session-version-data-');
+  const dataDir = makeDataDir(home);
   const projectDir = path.join(home, 'project');
   const settingsFile = path.join(projectDir, '.claude', 'settings.local.json');
   const apiKey = 'opaque session activation key';
@@ -787,7 +795,7 @@ test('SessionStart projects activated metadata before one combined restart and u
 
 test('SessionStart activates a new version without a restart notice when the helper is already registered', () => {
   const home = makeTempDir('prism-session-helper-home-');
-  const dataDir = makeTempDir('prism-session-helper-data-');
+  const dataDir = makeDataDir(home);
   const projectDir = path.join(home, 'project');
   const settingsFile = path.join(projectDir, '.claude', 'settings.local.json');
   const helperPath = path.join(dataDir, 'bin', 'prism-otel-headers-helper.js');
@@ -833,7 +841,7 @@ test('SessionStart activates a new version without a restart notice when the hel
 
 test('normal prompts bind the captured server id to an opaque frozen payload', () => {
   const home = makeTempDir('prism-normal-home-');
-  const dataDir = makeTempDir('prism-normal-data-');
+  const dataDir = makeDataDir(home);
   const gitRepo = makeGitRepoWithRemote();
   const transcript = path.join(home, 'transcript.jsonl');
   const marker = path.join(home, 'prompt.json');
@@ -948,7 +956,7 @@ function writePromptMarkerInterceptor(home) {
 
 test('a prompt whose escaped size exceeds MAX_PROMPT_BODY_BYTES is clamped at the byte limit, carrying truncation evidence for the full untruncated body', () => {
   const home = makeTempDir('prism-clamped-home-');
-  const dataDir = makeTempDir('prism-clamped-data-');
+  const dataDir = makeDataDir(home);
   const marker = path.join(home, 'prompt.json');
   const interceptor = writePromptMarkerInterceptor(home);
   // Multibyte filler: each character is 1 UTF-16 code unit but 3 UTF-8
@@ -997,7 +1005,7 @@ test('a prompt whose escaped size exceeds MAX_PROMPT_BODY_BYTES is clamped at th
 
 test('a prompt whose escaped size is within MAX_PROMPT_BODY_BYTES is sent unclamped with truncated=false', () => {
   const home = makeTempDir('prism-unclamped-home-');
-  const dataDir = makeTempDir('prism-unclamped-data-');
+  const dataDir = makeDataDir(home);
   const marker = path.join(home, 'prompt.json');
   const interceptor = writePromptMarkerInterceptor(home);
   const prompt = 'a short prompt well under the byte limit';
@@ -1033,7 +1041,7 @@ test('a prompt whose escaped size is within MAX_PROMPT_BODY_BYTES is sent unclam
 
 test('an oversized cwd is truncated to MAX_CWD_BYTES rather than left unbounded', () => {
   const home = makeTempDir('prism-cwd-cap-home-');
-  const dataDir = makeTempDir('prism-cwd-cap-data-');
+  const dataDir = makeDataDir(home);
   const marker = path.join(home, 'prompt.json');
   const interceptor = writePromptMarkerInterceptor(home);
   const MAX_CWD_BYTES = 8 * 1024;
@@ -1066,7 +1074,7 @@ test('an oversized cwd is truncated to MAX_CWD_BYTES rather than left unbounded'
 
 test('a prompt well under the byte limit that ends in a lone high surrogate is sent without the orphan unit', () => {
   const home = makeTempDir('prism-unclamped-surrogate-home-');
-  const dataDir = makeTempDir('prism-unclamped-surrogate-data-');
+  const dataDir = makeDataDir(home);
   const marker = path.join(home, 'prompt.json');
   const interceptor = writePromptMarkerInterceptor(home);
   // A lone high surrogate with no low surrogate following it — JSON.parse
@@ -1107,7 +1115,7 @@ test('a prompt well under the byte limit that ends in a lone high surrogate is s
 
 test('Stop clamps a response whose escaped size exceeds MAX_PROMPT_BODY_BYTES, carrying truncation evidence for the full untruncated body', () => {
   const home = makeTempDir('prism-response-clamped-home-');
-  const dataDir = makeTempDir('prism-response-clamped-data-');
+  const dataDir = makeDataDir(home);
   const promptMarker = path.join(home, 'prompt.json');
   const responseMarker = path.join(home, 'response.json');
   const transcript = path.join(home, 'transcript.jsonl');
@@ -1172,7 +1180,7 @@ test('Stop clamps a response whose escaped size exceeds MAX_PROMPT_BODY_BYTES, c
 
 test('a response well under the byte limit that ends in a lone high surrogate is sent without the orphan unit', () => {
   const home = makeTempDir('prism-response-unclamped-surrogate-home-');
-  const dataDir = makeTempDir('prism-response-unclamped-surrogate-data-');
+  const dataDir = makeDataDir(home);
   const promptMarker = path.join(home, 'prompt.json');
   const responseMarker = path.join(home, 'response.json');
   const transcript = path.join(home, 'transcript.jsonl');
@@ -1229,7 +1237,7 @@ test('a response well under the byte limit that ends in a lone high surrogate is
 
 test('Stop without an exact captured prompt is a zero-effect skip', () => {
   const home = makeTempDir('prism-stop-home-');
-  const dataDir = makeTempDir('prism-stop-data-');
+  const dataDir = makeDataDir(home);
   const result = spawnSync(process.execPath, [STOP_HANDLER], {
     cwd: ROOT,
     encoding: 'utf8',
@@ -1249,7 +1257,7 @@ test('Stop without an exact captured prompt is a zero-effect skip', () => {
 });
 test('control classification finishes stdin parsing before loading plugin modules', () => {
   const home = makeTempDir('prism-bootstrap-home-');
-  const dataDir = makeTempDir('prism-bootstrap-data-');
+  const dataDir = makeDataDir(home);
   const marker = path.join(home, 'early-module-load');
   const hook = path.join(home, 'require-order-hook.js');
   fs.writeFileSync(hook, [
@@ -1286,7 +1294,7 @@ test('control classification finishes stdin parsing before loading plugin module
 
 test('unexpected post-attach failures advance the same epoch to failed', () => {
   const home = makeTempDir('prism-post-attach-home-');
-  const dataDir = makeTempDir('prism-post-attach-data-');
+  const dataDir = makeDataDir(home);
   const hook = path.join(home, 'fail-env-load.js');
   fs.writeFileSync(hook, [
     "const Module = require('node:module');",
@@ -1336,7 +1344,7 @@ test('SessionStart advances lifecycle barriers with missing HOME and fallback pl
 });
 test('Submit drain aborts a trickling POST at its deadline', async () => {
   const home = makeTempDir('prism-submit-trickle-home-');
-  const dataDir = makeTempDir('prism-submit-trickle-data-');
+  const dataDir = makeDataDir(home);
   const server = await startTricklingServer();
   try {
     const startedAt = Date.now();
@@ -1366,7 +1374,7 @@ test('Submit drain aborts a trickling POST at its deadline', async () => {
 
 test('SessionStart drain aborts a trickling POST at its deadline', async () => {
   const home = makeTempDir('prism-session-start-trickle-home-');
-  const dataDir = makeTempDir('prism-session-start-trickle-data-');
+  const dataDir = makeDataDir(home);
   const apiKey = 'prism_session_start_trickle';
   const server = await startTricklingServer();
   writeRuntimeConfig(home, { apiKey, ingest_url: server.url });
@@ -1419,7 +1427,7 @@ test('SessionStart drain aborts a trickling POST at its deadline', async () => {
 });
 test('SessionStart replays a prior-session prompt and promotes its durable server id', () => {
   const home = makeTempDir('prism-session-replay-home-');
-  const dataDir = makeTempDir('prism-session-replay-data-');
+  const dataDir = makeDataDir(home);
   const priorSessionId = 'prior-session-replay';
   const hostPromptId = 'prior-host-prompt';
   const barrier = readSessionRecord(dataDir, () => session.advanceBarrier(priorSessionId, 'normal-pending'));
@@ -1467,7 +1475,7 @@ test('SessionStart replays a prior-session prompt and promotes its durable serve
 
 test('SessionStart replays a hostless legacy prompt, while Stop remains exact-ID only', () => {
   const home = makeTempDir('prism-session-legacy-replay-home-');
-  const dataDir = makeTempDir('prism-session-legacy-replay-data-');
+  const dataDir = makeDataDir(home);
   const sessionId = 'legacy-session-replay';
   writeRuntimeConfig(home, { apiKey: 'prism_legacy_replay', ingest_url: 'http://127.0.0.1:9' });
   const crashMarker = path.join(home, 'legacy-first-ack');
@@ -1508,7 +1516,7 @@ test('SessionStart replays a hostless legacy prompt, while Stop remains exact-ID
 });
 test('submit treats the nil-UUID dropped-prompt acknowledgment as terminal', () => {
   const home = makeTempDir('prism-submit-nil-id-home-');
-  const dataDir = makeTempDir('prism-submit-nil-id-data-');
+  const dataDir = makeDataDir(home);
   const hook = path.join(home, 'nil-id-interceptor.js');
   fs.writeFileSync(hook, [
     "const events = require('node:events');",
@@ -1540,7 +1548,7 @@ test('submit treats the nil-UUID dropped-prompt acknowledgment as terminal', () 
 });
 test('Stop replays an exactly-correlated submitting prompt before consuming its response', () => {
   const home = makeTempDir('prism-stop-recovery-home-');
-  const dataDir = makeTempDir('prism-stop-recovery-data-');
+  const dataDir = makeDataDir(home);
   const transcript = path.join(home, 'transcript.jsonl');
   const crashMarker = path.join(home, 'prompt-2xx');
   const sessionId = 'same-session-stop-recovery';
@@ -1619,7 +1627,7 @@ test('Stop replays an exactly-correlated submitting prompt before consuming its 
 });
 test('submit uses JSON system messages for missing configuration and suppresses them when disabled', () => {
   const home = makeTempDir('prism-submit-config-home-');
-  const dataDir = makeTempDir('prism-submit-config-data-');
+  const dataDir = makeDataDir(home);
   const input = { session_id: 'missing-config', prompt: 'normal prompt' };
 
   const shown = spawnSync(process.execPath, [SUBMIT_HANDLER], {
@@ -1675,7 +1683,7 @@ test('submit uses JSON system messages for missing configuration and suppresses 
 
 test('first normal prompt after plugin reload recommends restart when it registers the helper', () => {
   const home = makeTempDir('prism-submit-version-home-');
-  const dataDir = makeTempDir('prism-submit-version-data-');
+  const dataDir = makeDataDir(home);
   const projectDir = path.join(home, 'project');
   const settingsFile = path.join(projectDir, '.claude', 'settings.local.json');
   const apiKey = 'opaque submit activation key';
@@ -1730,6 +1738,12 @@ test('first normal prompt after plugin reload recommends restart when it registe
   assert.equal(projected.unrelated, 'preserve');
   assert.equal(fs.statSync(projected.otelHeadersHelper).mode & 0o777, 0o700);
   assert.equal(fs.readFileSync(path.join(dataDir, 'last-version.txt'), 'utf8'), currentVersion);
+  // Activation records the current config root once ~/.prism exists.
+  const inventoryFile = path.join(home, '.prism', 'installs.json');
+  const inventory = JSON.parse(fs.readFileSync(inventoryFile, 'utf8'));
+  assert.deepEqual(Object.keys(inventory.roots), [fs.realpathSync(path.join(home, '.claude'))]);
+  assert.equal(fs.statSync(inventoryFile).mode & 0o777, 0o600);
+  const inventoryBytes = fs.readFileSync(inventoryFile, 'utf8');
 
   const second = spawnSync(process.execPath, [SUBMIT_HANDLER], {
     cwd: ROOT,
@@ -1744,11 +1758,66 @@ test('first normal prompt after plugin reload recommends restart when it registe
   });
   assert.equal(second.status, 0, second.stderr);
   assert.equal(assertJsonOrEmpty(second.stdout), null);
+  // The second prompt is inside the 24-hour window, so nothing is rewritten.
+  assert.equal(fs.readFileSync(inventoryFile, 'utf8'), inventoryBytes);
+});
+
+test('a prompt under a mismatched install context reports the activation failure and writes nothing', () => {
+  const home = makeTempDir('prism-submit-mismatch-home-');
+  // The data directory is not where Claude Code would put this plugin's data.
+  const dataDir = makeTempDir('prism-submit-mismatch-data-');
+  const projectDir = path.join(home, 'project');
+  const settingsFile = path.join(projectDir, '.claude', 'settings.local.json');
+  const staleSettings = {
+    unrelated: 'preserve',
+    env: { OTEL_EXPORTER_OTLP_HEADERS: 'x-api-key=old,x-prism-plugin-version=0.0.1' },
+  };
+  fs.mkdirSync(projectDir);
+  seedInstalledPlugin(home, projectDir);
+  writeJsonFile(settingsFile, staleSettings);
+  fs.writeFileSync(path.join(dataDir, 'last-version.txt'), '0.0.1');
+  fs.mkdirSync(path.join(home, '.prism'), { recursive: true });
+  const currentVersion = require('../lib/plugin-update').readCurrentPluginVersion({
+    pluginRoot: ROOT,
+  });
+  const env = runtimeEnv(home, dataDir, {
+    apiKey: 'opaque mismatch key',
+    ingest_url: 'http://127.0.0.1:9',
+    show_realtime_summary: false,
+  }, {
+    CLAUDE_PLUGIN_ROOT: ROOT,
+    CLAUDE_PROJECT_DIR: projectDir,
+    NODE_OPTIONS: `--require=${writeSuccessfulIngestInterceptor(home)}`,
+  });
+
+  const result = spawnSync(process.execPath, [SUBMIT_HANDLER], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    input: JSON.stringify({
+      session_id: 'submit-mismatch',
+      prompt_id: 'submit-mismatch-prompt',
+      prompt: 'prompt under a mismatched context',
+      cwd: projectDir,
+    }),
+    env,
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  // The failure shows on the first run, even though no previous version was recorded.
+  assert.deepEqual(assertJsonOrEmpty(result.stdout), {
+    systemMessage:
+      `Prism v${currentVersion} is active, but its telemetry metadata could not be prepared. `
+      + 'Run `/prism:doctor`, then restart Claude Code.',
+  });
+  assert.deepEqual(JSON.parse(fs.readFileSync(settingsFile, 'utf8')), staleSettings);
+  assert.equal(fs.readFileSync(path.join(dataDir, 'last-version.txt'), 'utf8'), '0.0.1');
+  assert.equal(fs.existsSync(path.join(dataDir, 'bin')), false);
+  assert.equal(fs.existsSync(path.join(home, '.prism', 'installs.json')), false);
 });
 
 test('first Prism control after plugin reload recommends restart without posting the control', () => {
   const home = makeTempDir('prism-submit-control-version-home-');
-  const dataDir = makeTempDir('prism-submit-control-version-data-');
+  const dataDir = makeDataDir(home);
   const projectDir = path.join(home, 'project');
   const settingsFile = path.join(projectDir, '.claude', 'settings.local.json');
   const postMarker = path.join(home, 'posts');
@@ -1809,7 +1878,7 @@ test('first Prism control after plugin reload recommends restart without posting
 
 test('submit emits no display output on a captured turn and retains capture', () => {
   const home = makeTempDir('prism-submit-nooutput-home-');
-  const dataDir = makeTempDir('prism-submit-nooutput-data-');
+  const dataDir = makeDataDir(home);
   const sessionId = 'submit-no-output';
   const result = spawnSync(process.execPath, [SUBMIT_HANDLER], {
     cwd: ROOT,
@@ -1831,7 +1900,7 @@ test('submit emits no display output on a captured turn and retains capture', ()
 
 test('real-host fixture completes submit-to-stop correlation without leaking prompt content', () => {
   const home = makeTempDir('prism-host-lifecycle-home-');
-  const dataDir = makeTempDir('prism-host-lifecycle-data-');
+  const dataDir = makeDataDir(home);
   const transcript = path.join(home, 'transcript.jsonl');
   const fixture = structuredClone(PREFLIGHT_FIXTURE);
   const sentinelPrompt = `${fixture.userPromptSubmit.prompt} ${SENTINEL}`;
@@ -1951,7 +2020,7 @@ function runEvidenceProbeTurn({
 
 test('git_evidence_after_response_v1: an open capability gate and an unwritable evidence spool never affect prompt/response capture', () => {
   const home = makeTempDir('prism-evidence-after-response-home-');
-  const dataDir = makeTempDir('prism-evidence-after-response-data-');
+  const dataDir = makeDataDir(home);
   const repo = makeGitRepoWithRemote();
 
   const apiKey = 'prism_evidence_after_response';

@@ -49,6 +49,17 @@ function configFile() {
   return path.join(homeDir, '.prism', 'config.json');
 }
 
+function dataDir(root = path.join(homeDir, '.claude')) {
+  return path.join(root, 'plugins', 'data', 'prism-inline');
+}
+
+// The repository checkout is an inline plugin root, so its data directory is the
+// one Claude Code would give it under the default config root.
+function loadApplySetup() {
+  const { applySetup } = require('../lib/setup');
+  return (options) => applySetup({ dataDir: dataDir(), ...options });
+}
+
 function installAt(scope) {
   const entry = { scope, installPath: ROOT };
   if (scope !== 'user') entry.projectPath = projectDir;
@@ -94,7 +105,7 @@ test('setup persists remote config and writes only the detected install scope', 
   let fetchedKey;
   let notifiedKey;
   const captured = captureOutput();
-  const { applySetup } = require('../lib/setup');
+  const applySetup = loadApplySetup();
   const exitCode = await applySetup({
     apiKey: API_KEY,
     projectDir,
@@ -157,7 +168,7 @@ test('setup binds scope detection to the plugin root executing setup', async () 
     },
   });
   const captured = captureOutput();
-  const { applySetup } = require('../lib/setup');
+  const applySetup = loadApplySetup();
 
   assert.equal(await applySetup({
     apiKey: API_KEY,
@@ -186,7 +197,7 @@ test('backend authentication rejection leaves config and settings unchanged', as
   const settingsBefore = { env: { UNRELATED: 'preserve' } };
   writeJson(configFile(), configBefore);
   writeJson(settingsFile, settingsBefore);
-  const { applySetup } = require('../lib/setup');
+  const applySetup = loadApplySetup();
 
   for (const status of [401, 403]) {
     const captured = captureOutput();
@@ -208,7 +219,7 @@ test('setup reports notification failure without turning local success into fail
   let generated = 0;
   const notifiedSetupRunIds = [];
   const captured = captureOutput();
-  const { applySetup } = require('../lib/setup');
+  const applySetup = loadApplySetup();
 
   assert.equal(await applySetup({
     apiKey: API_KEY,
@@ -245,7 +256,7 @@ test('setup creates one run id per successful invocation and does not persist or
   let generated = 0;
   const notifications = [];
   const captured = captureOutput();
-  const { applySetup } = require('../lib/setup');
+  const applySetup = loadApplySetup();
   const options = {
     apiKey: API_KEY,
     projectDir,
@@ -280,10 +291,11 @@ test('setup creates one run id per successful invocation and does not persist or
   }
 });
 
-test('successful remote config remains saved when OTEL projection cannot run', async () => {
-  writeJson(configFile(), { marker: 'preserve' });
+test('setup is refused before the config file changes when the install scope is unknown', async () => {
+  const before = { marker: 'preserve' };
+  writeJson(configFile(), before);
   const captured = captureOutput();
-  const { applySetup } = require('../lib/setup');
+  const applySetup = loadApplySetup();
 
   assert.equal(await applySetup({
     apiKey: API_KEY,
@@ -296,19 +308,10 @@ test('successful remote config remains saved when OTEL projection cannot run', a
     notifyDashboardFn: async () => ({ ok: true, httpStatus: 200, error: null }),
   }), 1);
 
-  const persisted = readJson(configFile());
-  assert.deepEqual({ ...persisted, binding: undefined }, {
-    marker: 'preserve',
-    apiKey: API_KEY,
-    ingest_url: 'https://remote-ingest.example',
-    binding: undefined,
-  });
-  assert.equal(
-    persisted.binding.digest,
-    bindingDigest(API_KEY, 'https://remote-ingest.example'),
-  );
+  assert.deepEqual(readJson(configFile()), before);
   assert.equal(captured.errors.length, 1);
-  assert.match(captured.errors[0], /OTEL projection failed: unknown install scope/);
+  assert.match(captured.errors[0], /setup refused; no Prism config was written/);
+  assert.match(captured.errors[0], /unknown install scope/);
 });
 
 test('unavailable remote config leaves existing authority untouched', async () => {
@@ -316,7 +319,7 @@ test('unavailable remote config leaves existing authority untouched', async () =
   const before = { apiKey: 'existing-key', ingest_url: 'https://existing.example' };
   writeJson(configFile(), before);
   const captured = captureOutput();
-  const { applySetup } = require('../lib/setup');
+  const applySetup = loadApplySetup();
 
   assert.equal(await applySetup({
     apiKey: API_KEY,
@@ -334,16 +337,16 @@ test('unavailable remote config leaves existing authority untouched', async () =
 
 test('setup fails visibly when the active version marker cannot be published', async () => {
   installAt('user');
-  const dataDir = path.join(homeDir, 'plugin-data');
+  const pluginData = dataDir();
   const captured = captureOutput();
-  const { applySetup } = require('../lib/setup');
+  const applySetup = loadApplySetup();
   let generated = 0;
   let notified = false;
 
   assert.equal(await applySetup({
     apiKey: API_KEY,
     projectDir,
-    dataDir,
+    dataDir: pluginData,
     output: captured.output,
     fetchConfigFn: async () => ({
       status: 'server',
@@ -367,6 +370,162 @@ test('setup fails visibly when the active version marker cannot be published', a
   const userSettings = readJson(path.join(homeDir, '.claude', 'settings.json'));
   assert.equal(
     userSettings.otelHeadersHelper,
-    path.join(dataDir, 'bin', 'prism-otel-headers-helper.js'),
+    path.join(pluginData, 'bin', 'prism-otel-headers-helper.js'),
   );
+});
+
+function withEnv(values, fn) {
+  const saved = {};
+  for (const key of Object.keys(values)) saved[key] = process.env[key];
+  Object.assign(process.env, values);
+  const restore = () => {
+    for (const key of Object.keys(values)) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+  };
+  let result;
+  try {
+    result = fn();
+  } catch (error) {
+    restore();
+    throw error;
+  }
+  return Promise.resolve(result).finally(restore);
+}
+
+const serverConfig = () => ({
+  fetchConfigFn: async () => ({
+    status: 'server',
+    config: { ingest_url: 'https://remote-ingest.example' },
+  }),
+  notifyDashboardFn: async () => ({ ok: true, httpStatus: 200, error: null }),
+});
+
+test('setup under CLAUDE_CONFIG_DIR projects to that config dir and records the install', async () => {
+  const cfg = path.join(homeDir, 'elsewhere', 'cfg');
+  writeJson(path.join(cfg, 'plugins', 'installed_plugins.json'), {
+    plugins: { 'prism@optra-prism': [{ scope: 'user', installPath: ROOT }] },
+  });
+  // ~/.prism exists from an earlier setup, which is when registration may write.
+  writeJson(configFile(), { marker: 'preserve' });
+  const absent = path.join(homeDir, 'deleted-cfg');
+  writeJson(path.join(homeDir, '.prism', 'installs.json'), {
+    version: 1,
+    overflow: false,
+    roots: {
+      [absent]: { firstSeen: '2026-01-01T00:00:00.000Z', lastSeen: '2026-01-01T00:00:00.000Z' },
+    },
+  });
+  const captured = captureOutput();
+  const applySetup = loadApplySetup();
+
+  const exitCode = await withEnv({ CLAUDE_CONFIG_DIR: cfg }, () => applySetup({
+    apiKey: API_KEY,
+    projectDir,
+    dataDir: dataDir(cfg),
+    output: captured.output,
+    hostVersion: '2.1.281',
+    ...serverConfig(),
+  }));
+
+  assert.equal(exitCode, 0, captured.errors.join('\n'));
+  assert.match(captured.logs.join('\n'), /Scope: user/);
+  assert.match(captured.logs.join('\n'), new RegExp(`Settings file: ${cfg}/settings\\.json`));
+  const settings = readJson(path.join(cfg, 'settings.json'));
+  assert.equal(settings.env.OTEL_LOGS_EXPORTER, 'otlp');
+  assert.equal(settings.otelHeadersHelper, path.join(dataDir(cfg), 'bin', 'prism-otel-headers-helper.js'));
+  assert.equal(fs.existsSync(path.join(homeDir, '.claude')), false);
+  assert.equal(fs.readFileSync(path.join(dataDir(cfg), 'last-version.txt'), 'utf8').trim().length > 0, true);
+
+  // The current root is recorded (canonical form) and the absent root pruned.
+  const inventory = readJson(path.join(homeDir, '.prism', 'installs.json'));
+  assert.deepEqual(Object.keys(inventory.roots), [fs.realpathSync(cfg)]);
+  assert.equal(
+    fs.readFileSync(path.join(homeDir, '.prism', 'prism-off.settings.json'), 'utf8').includes('"enabledPlugins"'),
+    true,
+  );
+});
+
+test('a context mismatch is refused before ~/.prism/config.json is written', async () => {
+  const cfg = path.join(homeDir, 'cfg');
+  writeJson(path.join(cfg, 'plugins', 'installed_plugins.json'), {
+    plugins: { 'prism@optra-prism': [{ scope: 'user', installPath: ROOT }] },
+  });
+  const applySetup = loadApplySetup();
+
+  // The data directory belongs to the default root while the command runs under cfg.
+  let captured = captureOutput();
+  let exitCode = await withEnv({ CLAUDE_CONFIG_DIR: cfg }, () => applySetup({
+    apiKey: API_KEY, projectDir, dataDir: dataDir(), output: captured.output, ...serverConfig(),
+  }));
+  assert.equal(exitCode, 1);
+  assert.match(captured.errors[0], /setup refused; no Prism config was written/);
+  assert.match(captured.errors[0], /does not match the inline plugin root/);
+  assert.equal(fs.existsSync(path.join(homeDir, '.prism')), false);
+
+  // CLAUDE_CONFIG_DIR is not visible but the data directory belongs to cfg.
+  captured = captureOutput();
+  exitCode = await applySetup({
+    apiKey: API_KEY, projectDir, dataDir: dataDir(cfg), output: captured.output, ...serverConfig(),
+  });
+  assert.equal(exitCode, 1);
+  assert.match(captured.errors[0], /CLAUDE_CONFIG_DIR is not visible to this command/);
+  assert.equal(fs.existsSync(path.join(homeDir, '.prism')), false);
+  assert.equal(fs.existsSync(path.join(cfg, 'settings.json')), false);
+});
+
+test('setup refuses without a plugin data directory or while CLAUDE_CODE_PLUGIN_CACHE_DIR is set', async () => {
+  installAt('user');
+  const { applySetup } = require('../lib/setup');
+
+  let captured = captureOutput();
+  assert.equal(await applySetup({
+    apiKey: API_KEY, projectDir, output: captured.output, ...serverConfig(),
+  }), 1);
+  assert.match(captured.errors[0], /plugin data directory \(CLAUDE_PLUGIN_DATA\) is not available/);
+
+  captured = captureOutput();
+  assert.equal(await withEnv({ CLAUDE_CODE_PLUGIN_CACHE_DIR: path.join(homeDir, 'cache') }, () => applySetup({
+    apiKey: API_KEY, projectDir, dataDir: dataDir(), output: captured.output, ...serverConfig(),
+  })), 1);
+  assert.match(captured.errors[0], /CLAUDE_CODE_PLUGIN_CACHE_DIR is set/);
+  assert.equal(fs.existsSync(path.join(homeDir, '.prism')), false);
+});
+
+test('setup accepts a local-path marketplace root with prism-optra-prism data', async () => {
+  installAt('user');
+  const applySetup = loadApplySetup();
+  const captured = captureOutput();
+
+  const exitCode = await applySetup({
+    apiKey: API_KEY,
+    projectDir,
+    dataDir: path.join(homeDir, '.claude', 'plugins', 'data', 'prism-optra-prism'),
+    output: captured.output,
+    ...serverConfig(),
+  });
+
+  assert.equal(exitCode, 0, captured.errors.join('\n'));
+});
+
+test('setup creates ~/.prism, records the current root, and never creates ~/.claude under CLAUDE_CONFIG_DIR', async () => {
+  const cfg = path.join(homeDir, 'cfg');
+  writeJson(path.join(cfg, 'plugins', 'installed_plugins.json'), {
+    plugins: { 'prism@optra-prism': [{ scope: 'user', installPath: ROOT }] },
+  });
+  const applySetup = loadApplySetup();
+  const captured = captureOutput();
+
+  const exitCode = await withEnv({ CLAUDE_CONFIG_DIR: cfg }, () => applySetup({
+    apiKey: API_KEY, projectDir, dataDir: dataDir(cfg), output: captured.output, ...serverConfig(),
+  }));
+
+  // Setup created ~/.prism itself, so registration is allowed to write.
+  assert.equal(exitCode, 0, captured.errors.join('\n'));
+  assert.deepEqual(
+    Object.keys(readJson(path.join(homeDir, '.prism', 'installs.json')).roots),
+    [fs.realpathSync(cfg)],
+  );
+  assert.equal(fs.existsSync(path.join(homeDir, '.claude')), false);
 });

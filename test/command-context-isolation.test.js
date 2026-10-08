@@ -39,10 +39,10 @@ const READ_COMMAND_INVOCATIONS = Object.freeze({
 const MUTATION_COMMANDS = ['config', 'setup', 'uninstall'];
 const MUTATION_ENTRYPOINT_PERMISSIONS = Object.freeze({
   config: [
-    'Bash(node "${CLAUDE_PLUGIN_ROOT}/lib/config-command.js" show --project-dir "${CLAUDE_PROJECT_DIR}")',
-    'Bash(node "${CLAUDE_PLUGIN_ROOT}/lib/config-command.js" help --project-dir "${CLAUDE_PROJECT_DIR}")',
-    'Bash(node "${CLAUDE_PLUGIN_ROOT}/lib/config-command.js" set * --project-dir "${CLAUDE_PROJECT_DIR}")',
-    'Bash(node "${CLAUDE_PLUGIN_ROOT}/lib/config-command.js" unset * --project-dir "${CLAUDE_PROJECT_DIR}")',
+    'Bash(node "${CLAUDE_PLUGIN_ROOT}/lib/config-command.js" show --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}")',
+    'Bash(node "${CLAUDE_PLUGIN_ROOT}/lib/config-command.js" help --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}")',
+    'Bash(node "${CLAUDE_PLUGIN_ROOT}/lib/config-command.js" set * --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}")',
+    'Bash(node "${CLAUDE_PLUGIN_ROOT}/lib/config-command.js" unset * --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}")',
   ],
   setup: [
     'Bash(node "${CLAUDE_PLUGIN_ROOT}/lib/setup.js" apply * --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}")',

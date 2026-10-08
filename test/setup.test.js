@@ -67,6 +67,8 @@ afterEach(() => {
 
 test('setup CLI requires one positional opaque KEY and auto-detects scope', async () => {
   const opaqueKey = 'key with spaces and no prefix';
+  // The checkout is an inline plugin root, so its data dir follows the config root.
+  const pluginDataDir = path.join(homeDir, '.claude', 'plugins', 'data', 'prism-inline');
   writeJson(path.join(homeDir, '.claude', 'plugins', 'installed_plugins.json'), {
     plugins: {
       'prism@optra-prism': [{
@@ -99,7 +101,7 @@ test('setup CLI requires one positional opaque KEY and auto-detects scope', asyn
     '--project-dir',
     projectDir,
     '--data-dir',
-    path.join(homeDir, 'plugin-data'),
+    pluginDataDir,
   ], captured.output), 0);
   assert.equal(fetchedKey, opaqueKey);
   assert.equal(notifiedKey, opaqueKey);
@@ -108,10 +110,10 @@ test('setup CLI requires one positional opaque KEY and auto-detects scope', asyn
   const localSettings = path.join(projectDir, '.claude', 'settings.local.json');
   assert.equal(
     readJson(localSettings).otelHeadersHelper,
-    path.join(homeDir, 'plugin-data', 'bin', 'prism-otel-headers-helper.js'),
+    path.join(pluginDataDir, 'bin', 'prism-otel-headers-helper.js'),
   );
   assert.equal(
-    fs.readFileSync(path.join(homeDir, 'plugin-data', 'last-version.txt'), 'utf8'),
+    fs.readFileSync(path.join(pluginDataDir, 'last-version.txt'), 'utf8'),
     require('../lib/plugin-update').readCurrentPluginVersion(),
   );
 });
@@ -267,4 +269,76 @@ test('shell marketplace reinstall preserves durable plugin data when install and
   assert.deepEqual(readJson(installedPlugins).plugins, {
     'other@example': [{ scope: 'user' }],
   });
+});
+
+function runInstaller(env, args = []) {
+  const binDir = path.join(homeDir, 'bin');
+  fs.mkdirSync(binDir, { recursive: true });
+  const claude = path.join(binDir, 'claude');
+  fs.writeFileSync(claude, [
+    '#!/bin/sh',
+    'if [ "$1" = "plugin" ] && [ "$2" = "install" ]; then',
+    '  exit 1',
+    'fi',
+    'exit 0',
+    '',
+  ].join('\n'));
+  fs.chmodSync(claude, 0o755);
+  return spawnSync('bash', [path.join(__dirname, '..', 'install.sh'), ...args], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      HOME: homeDir,
+      PATH: `${binDir}:${process.env.PATH}`,
+      ...env,
+    },
+  });
+}
+
+test('shell installer works under CLAUDE_CONFIG_DIR and leaves the default root untouched', () => {
+  const cfg = path.join(homeDir, 'elsewhere', 'cfg', '..', 'cfg');
+  const cacheDir = path.join(cfg, 'plugins', 'cache', 'optra-prism');
+  const installedPlugins = path.join(cfg, 'plugins', 'installed_plugins.json');
+  const defaultCache = path.join(homeDir, '.claude', 'plugins', 'cache', 'optra-prism');
+  fs.mkdirSync(path.join(cacheDir, 'prism', '0.7.0'), { recursive: true });
+  fs.mkdirSync(path.join(defaultCache, 'prism', '0.7.0'), { recursive: true });
+  writeJson(installedPlugins, {
+    plugins: {
+      'prism@optra-prism': [{ scope: 'user', installPath: path.join(cacheDir, 'prism', '0.7.0') }],
+      'other@example': [{ scope: 'user' }],
+    },
+  });
+
+  const result = runInstaller({ CLAUDE_CONFIG_DIR: cfg });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(fs.existsSync(cacheDir), false);
+  assert.deepEqual(readJson(installedPlugins).plugins, { 'other@example': [{ scope: 'user' }] });
+  assert.equal(fs.existsSync(path.join(defaultCache, 'prism', '0.7.0')), true);
+});
+
+test('shell installer treats an empty CLAUDE_CONFIG_DIR as unset', () => {
+  const defaultCache = path.join(homeDir, '.claude', 'plugins', 'cache', 'optra-prism');
+  fs.mkdirSync(path.join(defaultCache, 'prism', '0.7.0'), { recursive: true });
+
+  const result = runInstaller({ CLAUDE_CONFIG_DIR: '' });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(fs.existsSync(defaultCache), false);
+});
+
+test('shell installer refuses unusable config directories before changing anything', () => {
+  const defaultCache = path.join(homeDir, '.claude', 'plugins', 'cache', 'optra-prism');
+  fs.mkdirSync(path.join(defaultCache, 'prism', '0.7.0'), { recursive: true });
+
+  for (const [env, message] of [
+    [{ CLAUDE_CONFIG_DIR: '~/cfg' }, /"?'~' is not expanded|not expanded/],
+    [{ CLAUDE_CONFIG_DIR: 'relative/cfg' }, /must be an absolute path/],
+    [{ CLAUDE_CODE_PLUGIN_CACHE_DIR: path.join(homeDir, 'cache') }, /CLAUDE_CODE_PLUGIN_CACHE_DIR is set/],
+  ]) {
+    const result = runInstaller(env);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, message);
+    assert.equal(fs.existsSync(path.join(defaultCache, 'prism', '0.7.0')), true);
+  }
 });

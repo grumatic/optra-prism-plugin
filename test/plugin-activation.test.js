@@ -6,6 +6,7 @@ const { test } = require('node:test');
 const {
   activatePluginVersion,
   activationFailureNotice,
+  checkActivationContext,
   activatedNotice,
   collectPluginNotices,
   sessionActivationNotice,
@@ -14,8 +15,11 @@ const {
 } = require('../lib/plugin-activation');
 
 function activationFixture(overrides = {}) {
-  const calls = { sync: [], writes: [] };
+  const calls = { sync: [], writes: [], registered: [] };
   const options = {
+    // The install-context check and the inventory have their own tests below.
+    checkContextFn: () => ({ ok: true, configRoot: '/config/root' }),
+    registerInstallFn: (context) => calls.registered.push(context.configRoot),
     pluginRoot: '/plugin/root',
     dataDir: '/plugin/data',
     projectDir: '/project',
@@ -32,6 +36,20 @@ function activationFixture(overrides = {}) {
     ...overrides,
   };
   return { calls, options };
+}
+
+function withEnv(values, fn) {
+  const saved = {};
+  for (const key of Object.keys(values)) saved[key] = process.env[key];
+  Object.assign(process.env, values);
+  try {
+    return fn();
+  } finally {
+    for (const key of Object.keys(values)) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+  }
 }
 
 test('projects metadata before advancing the active version and recommending restart', () => {
@@ -310,4 +328,70 @@ test('SessionStart suppresses a repeated activation failure within the same sess
 
   assert.deepEqual((await collectPluginNotices(options)).notices, [activationFailureNotice('1.2.3')]);
   assert.deepEqual((await collectPluginNotices(options)).notices, []);
+});
+
+test('a context mismatch skips every write and reports the failure on the first run', () => {
+  const fixture = activationFixture({
+    readActiveVersionFn: () => null,
+    checkContextFn: () => ({ ok: false, reason: 'CLAUDE_PLUGIN_DATA does not match' }),
+  });
+  const result = activatePluginVersion(fixture.options);
+
+  assert.equal(result.contextMismatch, true);
+  assert.equal(result.metadataSynced, false);
+  assert.equal(result.markerWritten, false);
+  assert.equal(result.notice, activationFailureNotice('1.2.3'));
+  assert.equal(result.noticeKind, 'activation-failure');
+  assert.deepEqual(fixture.calls.sync, []);
+  assert.deepEqual(fixture.calls.writes, []);
+  assert.deepEqual(fixture.calls.registered, []);
+});
+
+test('a matching context registers the current config root before syncing metadata', () => {
+  const fixture = activationFixture();
+  const result = activatePluginVersion(fixture.options);
+
+  assert.equal(result.metadataSynced, true);
+  assert.deepEqual(fixture.calls.registered, ['/config/root']);
+});
+
+test('a failing registration never blocks activation', () => {
+  const fixture = activationFixture({
+    registerInstallFn: () => { throw new Error('inventory unavailable'); },
+  });
+  const result = activatePluginVersion(fixture.options);
+
+  assert.equal(result.metadataSynced, true);
+  assert.equal(result.markerWritten, true);
+});
+
+test('the real context check follows CLAUDE_CONFIG_DIR and rejects a missing data dir', () => {
+  const path = require('node:path');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-activation-context-'));
+  try {
+    const cfg = path.join(root, 'cfg');
+    const pluginRoot = path.join(cfg, 'plugins', 'cache', 'optra-prism', 'prism', '1.2.3');
+    const dataDir = path.join(cfg, 'plugins', 'data', 'prism-optra-prism');
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.mkdirSync(dataDir, { recursive: true });
+
+    withEnv({ CLAUDE_CONFIG_DIR: cfg }, () => {
+      assert.deepEqual(checkActivationContext({ pluginRoot, dataDir }), {
+        ok: true,
+        configRoot: cfg,
+      });
+      const missing = checkActivationContext({ pluginRoot, dataDir: undefined });
+      assert.equal(missing.ok, false);
+      assert.match(missing.reason, /plugin data directory/);
+    });
+    withEnv({ CLAUDE_CONFIG_DIR: path.join(root, 'other') }, () => {
+      const mismatch = checkActivationContext({ pluginRoot, dataDir });
+      assert.equal(mismatch.ok, false);
+      assert.match(mismatch.reason, /inside the plugin cache|does not match/);
+    });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

@@ -16,6 +16,8 @@ pinClaudeHostVersion(LEGACY_HOST_VERSION);
 
 const MODULE_PATHS = ['../lib/config-command', '../lib/config', '../lib/settings'];
 const API_KEY = 'secret opaque key';
+// The repository checkout acts as an inline plugin root outside the plugin cache.
+const PLUGIN_ROOT = path.resolve(__dirname, '..');
 
 let homeDir;
 let projectDir;
@@ -51,8 +53,25 @@ function captureOutput() {
   };
 }
 
+function dataDir(root = path.join(homeDir, '.claude')) {
+  return path.join(root, 'plugins', 'data', 'prism-inline');
+}
+
+// Mutating commands now need the plugin data directory (commands/config.md
+// passes it); add the one that matches the default config root.
+function loadMain() {
+  const { main } = require('../lib/config-command');
+  return (argv, output, options) => {
+    const mutating = argv[0] === 'set' || argv[0] === 'unset';
+    const args = mutating && !argv.includes('--data-dir')
+      ? [...argv, '--data-dir', dataDir()]
+      : argv;
+    return main(args, output, { pluginRoot: PLUGIN_ROOT, ...options });
+  };
+}
+
 function installAt(scope) {
-  const entry = { scope };
+  const entry = { scope, installPath: PLUGIN_ROOT };
   if (scope !== 'user') entry.projectPath = projectDir;
   writeJson(path.join(homeDir, '.claude', 'plugins', 'installed_plugins.json'), {
     plugins: { 'prism@optra-prism': [entry] },
@@ -84,7 +103,7 @@ test('show emits only the two user-editable keys and never apiKey', () => {
     internalField: 'hidden',
   });
   const captured = captureOutput();
-  const { main } = require('../lib/config-command');
+  const main = loadMain();
 
   assert.equal(main(['show'], captured.output), 0);
   assert.match(captured.logs[0], /show_realtime_summary\n  Current: true/);
@@ -97,7 +116,7 @@ test('show emits only the two user-editable keys and never apiKey', () => {
 
 test('show renders a missing ingest_url explicitly', () => {
   const captured = captureOutput();
-  const { main } = require('../lib/config-command');
+  const main = loadMain();
 
   assert.equal(main(['show'], captured.output), 0);
   assert.match(captured.logs[0], /show_realtime_summary\n  Current: false/);
@@ -107,7 +126,7 @@ test('show renders a missing ingest_url explicitly', () => {
 
 test('set and unset persist the boolean value while preserving unrelated config', () => {
   writeJson(configFile(), { apiKey: API_KEY, custom: 'preserve' });
-  const { main } = require('../lib/config-command');
+  const main = loadMain();
 
   let captured = captureOutput();
   assert.equal(main(['set', 'show_realtime_summary', 'true'], captured.output), 0);
@@ -123,7 +142,7 @@ test('set and unset persist the boolean value while preserving unrelated config'
 
 test('help describes every field, accepted value, and apply behavior', () => {
   const captured = captureOutput();
-  const { main } = require('../lib/config-command');
+  const main = loadMain();
 
   assert.equal(main(['help'], captured.output), 0);
   assert.match(captured.logs[0], /show_realtime_summary/);
@@ -138,7 +157,7 @@ test('help describes every field, accepted value, and apply behavior', () => {
 test('rejects apiKey, unsupported keys, and invalid values without mutation', () => {
   const before = { apiKey: API_KEY, marker: 'preserve' };
   writeJson(configFile(), before);
-  const { main } = require('../lib/config-command');
+  const main = loadMain();
 
   for (const argv of [
     ['set', 'apiKey', 'replacement'],
@@ -162,7 +181,7 @@ test('rejects apiKey, unsupported keys, and invalid values without mutation', ()
 });
 
 test('ingest_url accepts HTTPS and loopback HTTP without rewriting the value', () => {
-  const { main } = require('../lib/config-command');
+  const main = loadMain();
 
   for (const value of [
     'http://127.0.0.1:9005/path/',
@@ -177,7 +196,7 @@ test('ingest_url accepts HTTPS and loopback HTTP without rewriting the value', (
 test('ingest_url can bootstrap config before an API key or install scope exists', () => {
   writeJson(configFile(), { marker: 'preserve' });
   const captured = captureOutput();
-  const { main } = require('../lib/config-command');
+  const main = loadMain();
 
   assert.equal(main([
     'set',
@@ -198,7 +217,7 @@ test('ingest_url syncs the detected target and requires restart when effective',
   writeJson(configFile(), { apiKey: API_KEY });
   installAt('local');
   const captured = captureOutput();
-  const { main } = require('../lib/config-command');
+  const main = loadMain();
 
   assert.equal(main([
     'set',
@@ -229,7 +248,7 @@ test('unsetting ingest_url removes only installed-scope OTEL settings', () => {
     },
   });
   const captured = captureOutput();
-  const { main } = require('../lib/config-command');
+  const main = loadMain();
 
   assert.equal(main([
     'unset', 'ingest_url', '--project-dir', projectDir,
@@ -250,7 +269,7 @@ test('unsetting ingest_url reports OTEL values owned by another settings layer',
   const localFile = path.join(projectDir, '.claude', 'settings.local.json');
   writeJson(localFile, { env: { OTEL_LOGS_EXPORTER: 'local-override' } });
   const captured = captureOutput();
-  const { main } = require('../lib/config-command');
+  const main = loadMain();
 
   assert.equal(main([
     'unset', 'ingest_url', '--project-dir', projectDir,
@@ -261,17 +280,18 @@ test('unsetting ingest_url reports OTEL values owned by another settings layer',
   assert.match(captured.errors[0], /effective OTEL values remain in another settings layer/);
 });
 
-test('ingest_url remains persisted when scope or effective projection fails', () => {
+test('ingest_url is refused without a scope and remains persisted when the effective projection fails', () => {
   writeJson(configFile(), { apiKey: API_KEY });
   let captured = captureOutput();
-  const { main } = require('../lib/config-command');
+  const main = loadMain();
 
   assert.equal(main([
-    'set', 'ingest_url', 'https://saved-without-scope.example',
+    'set', 'ingest_url', 'https://refused-without-scope.example',
     '--project-dir', projectDir,
   ], captured.output), 1);
-  assert.equal(readJson(configFile()).ingest_url, 'https://saved-without-scope.example');
-  assert.match(captured.errors[0], /Config saved.*install scope is unknown/);
+  // The scope is resolved before the first write, so nothing was saved.
+  assert.equal(Object.hasOwn(readJson(configFile()), 'ingest_url'), false);
+  assert.match(captured.errors[0], /not changed.*install scope is unknown/);
 
   installAt('project');
   writeJson(path.join(projectDir, '.claude', 'settings.local.json'), {
@@ -297,13 +317,133 @@ test('settings read errors are reported instead of becoming an unknown scope', (
   fs.mkdirSync(path.dirname(installed), { recursive: true });
   fs.writeFileSync(installed, '{invalid json');
   const captured = captureOutput();
-  const { main } = require('../lib/config-command');
+  const main = loadMain();
 
   assert.equal(main([
     'set', 'ingest_url', 'https://saved-before-read-error.example',
     '--project-dir', projectDir,
   ], captured.output), 1);
-  assert.equal(readJson(configFile()).ingest_url, 'https://saved-before-read-error.example');
+  assert.equal(Object.hasOwn(readJson(configFile()), 'ingest_url'), false);
   assert.match(captured.errors[0], /Unable to read JSON.*installed_plugins\.json/);
   assert.doesNotMatch(captured.errors[0], /install scope is unknown/);
+});
+
+function withEnv(values, fn) {
+  const saved = {};
+  for (const key of Object.keys(values)) saved[key] = process.env[key];
+  Object.assign(process.env, values);
+  try {
+    return fn();
+  } finally {
+    for (const key of Object.keys(values)) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+  }
+}
+
+test('ingest_url under CLAUDE_CONFIG_DIR projects to the settings file in that directory', () => {
+  const cfg = path.join(homeDir, 'elsewhere', 'cfg');
+  writeJson(configFile(), { apiKey: API_KEY });
+  writeJson(path.join(cfg, 'plugins', 'installed_plugins.json'), {
+    plugins: { 'prism@optra-prism': [{ scope: 'user', installPath: PLUGIN_ROOT }] },
+  });
+  const captured = captureOutput();
+  const main = loadMain();
+
+  const status = withEnv({ CLAUDE_CONFIG_DIR: cfg }, () => main([
+    'set', 'ingest_url', 'https://cfg-ingest.example/base/',
+    '--project-dir', projectDir,
+    '--data-dir', dataDir(cfg),
+  ], captured.output));
+
+  assert.equal(status, 0, captured.errors.join('\n'));
+  const userSettings = readJson(path.join(cfg, 'settings.json'));
+  assert.equal(userSettings.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT,
+    'https://cfg-ingest.example/base/v1/logs');
+  assert.equal(fs.existsSync(path.join(homeDir, '.claude', 'settings.json')), false);
+  assert.match(captured.logs.join('\n'), /user install scope/);
+});
+
+test('a context mismatch is refused before the config file changes', () => {
+  const cfg = path.join(homeDir, 'cfg');
+  const before = { apiKey: API_KEY, marker: 'preserve' };
+  writeJson(configFile(), before);
+  const main = loadMain();
+
+  // The data directory belongs to the default root, but the command runs under cfg.
+  let captured = captureOutput();
+  let status = withEnv({ CLAUDE_CONFIG_DIR: cfg }, () => main([
+    'set', 'show_realtime_summary', 'true', '--data-dir', dataDir(),
+  ], captured.output));
+  assert.equal(status, 1);
+  assert.match(captured.errors[0], /CLAUDE_PLUGIN_DATA does not match the inline plugin root/);
+  assert.deepEqual(readJson(configFile()), before);
+
+  // The reverse: CLAUDE_CONFIG_DIR is not visible, but the data directory sits in cfg.
+  captured = captureOutput();
+  status = main([
+    'set', 'show_realtime_summary', 'true', '--data-dir', dataDir(cfg),
+  ], captured.output);
+  assert.equal(status, 1);
+  assert.match(captured.errors[0], /CLAUDE_CONFIG_DIR is not visible to this command/);
+  assert.match(captured.errors[0], /CLAUDE_CODE_SUBPROCESS_ENV_SCRUB/);
+  assert.deepEqual(readJson(configFile()), before);
+});
+
+test('set and unset refuse without a plugin data directory, show and help do not need one', () => {
+  const before = { apiKey: API_KEY };
+  writeJson(configFile(), before);
+  const { main } = require('../lib/config-command');
+  const options = { pluginRoot: PLUGIN_ROOT };
+
+  for (const argv of [['set', 'show_realtime_summary', 'true'], ['unset', 'show_realtime_summary']]) {
+    const captured = captureOutput();
+    assert.equal(main(argv, captured.output, options), 1, argv.join(' '));
+    assert.match(captured.errors[0], /plugin data directory \(CLAUDE_PLUGIN_DATA\) is not available/);
+    assert.deepEqual(readJson(configFile()), before);
+  }
+  for (const action of ['show', 'help']) {
+    const captured = captureOutput();
+    assert.equal(main([action], captured.output, options), 0, action);
+  }
+});
+
+test('config refuses while CLAUDE_CODE_PLUGIN_CACHE_DIR or an invalid CLAUDE_CONFIG_DIR is set', () => {
+  const before = { apiKey: API_KEY };
+  writeJson(configFile(), before);
+  const main = loadMain();
+
+  let captured = captureOutput();
+  let status = withEnv({ CLAUDE_CODE_PLUGIN_CACHE_DIR: path.join(homeDir, 'cache') }, () => main([
+    'set', 'show_realtime_summary', 'true',
+  ], captured.output));
+  assert.equal(status, 1);
+  assert.match(captured.errors[0], /CLAUDE_CODE_PLUGIN_CACHE_DIR is set/);
+
+  captured = captureOutput();
+  status = withEnv({ CLAUDE_CONFIG_DIR: '~/cfg' }, () => main([
+    'set', 'show_realtime_summary', 'true',
+  ], captured.output));
+  assert.equal(status, 1);
+  assert.match(captured.errors[0], /"~" is not expanded/);
+  assert.deepEqual(readJson(configFile()), before);
+});
+
+test('options are accepted in either order and rejected anywhere else', () => {
+  writeJson(configFile(), { apiKey: API_KEY });
+  const { main } = require('../lib/config-command');
+  const options = { pluginRoot: PLUGIN_ROOT };
+
+  let captured = captureOutput();
+  assert.equal(main([
+    'set', 'show_realtime_summary', 'true',
+    '--data-dir', dataDir(), '--project-dir', projectDir,
+  ], captured.output, options), 0, captured.errors.join('\n'));
+
+  captured = captureOutput();
+  assert.equal(main([
+    'set', '--data-dir', dataDir(), 'show_realtime_summary', 'true',
+  ], captured.output, options), 2);
+  assert.match(captured.errors[0], /--data-dir must be a final option/);
 });

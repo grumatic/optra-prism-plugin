@@ -74,7 +74,8 @@ function serverConfig() {
 beforeEach(() => {
   homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-telemetry-scope-'));
   projectDir = path.join(homeDir, 'project');
-  dataDir = path.join(homeDir, 'plugin-data');
+  // An inline plugin root (the checkout) uses the prism-inline data directory.
+  dataDir = path.join(homeDir, '.claude', 'plugins', 'data', 'prism-inline');
   fs.mkdirSync(projectDir);
   originalHome = process.env.HOME;
   process.env.HOME = homeDir;
@@ -224,7 +225,7 @@ test('version activation withholds local metadata and writes the user opt-out fi
   assert.equal(withheld.changed, true);
   assert.equal(fs.existsSync(localFile()), true);
   assert.deepEqual(readJson(localFile()), {});
-  assert.equal(fs.existsSync(settings.optOutSettingsPath(dataDir)), false);
+  assert.equal(fs.existsSync(settings.optOutSettingsPath()), false);
 
   installAt('user');
   const projected = settings.syncPluginVersionMetadata({
@@ -235,21 +236,21 @@ test('version activation withholds local metadata and writes the user opt-out fi
   });
   assert.equal(projected.ok, true);
   assert.equal(projected.telemetryWithheld, false);
-  const optOutFile = settings.optOutSettingsPath(dataDir);
+  const optOutFile = settings.optOutSettingsPath();
+  assert.equal(optOutFile, path.join(homeDir, '.prism', 'prism-off.settings.json'));
   assert.equal(projected.optOutSettingsFile, optOutFile);
   assert.deepEqual(readJson(optOutFile), settings.buildOptOutSettings());
   assert.equal(fs.statSync(optOutFile).mode & 0o777, 0o600);
   assert.deepEqual(readJson(optOutFile).enabledPlugins, { 'prism@optra-prism': false });
-  assert.equal(settings.writeOptOutSettings(dataDir).changed, false);
+  assert.equal(settings.writeOptOutSettings().changed, false);
 });
 
 test('the opt-out file refuses a symlinked target', () => {
   const settings = require('../lib/settings');
-  fs.mkdirSync(dataDir, { recursive: true });
   const outside = path.join(homeDir, 'outside.json');
   fs.writeFileSync(outside, '{}\n');
-  fs.symlinkSync(outside, settings.optOutSettingsPath(dataDir));
-  assert.throws(() => settings.writeOptOutSettings(dataDir), /not a symlink/);
+  fs.symlinkSync(outside, settings.optOutSettingsPath());
+  assert.throws(() => settings.writeOptOutSettings(), /not a symlink/);
   assert.equal(fs.readFileSync(outside, 'utf8'), '{}\n');
 });
 
@@ -294,7 +295,7 @@ test('setup at user scope writes the opt-out file and prints how to use it', asy
   });
 
   assert.equal(exitCode, 0, captured.errors.join('\n'));
-  const optOutFile = path.join(dataDir, 'prism-off.settings.json');
+  const optOutFile = path.join(homeDir, '.prism', 'prism-off.settings.json');
   const log = captured.logs.join('\n');
   assert.match(log, /Restart Claude Code to activate telemetry\./);
   assert.ok(log.includes(`To run a session without Prism: claude --settings ${optOutFile}`));
@@ -337,6 +338,8 @@ test('a withheld activation never asks for a restart for telemetry metadata', ()
     readCurrentVersionFn: () => '1.2.4',
     readActiveVersionFn: () => '1.2.3',
     writeActiveVersionFn: () => true,
+    checkContextFn: () => ({ ok: true }),
+    registerInstallFn: () => {},
     syncMetadataFn: () => ({ ok: true, changed: true, telemetryWithheld: true, scope: 'local', hostVersion: null }),
   });
   assert.equal(activation.versionChanged, true);
@@ -429,4 +432,52 @@ test('status reports the session switch and the opt-out file for a user install'
   });
   assert.match(output, /\*\*Session telemetry:\*\* off in this session\. Restart Claude Code to activate telemetry\./);
   assert.match(output, /\*\*Run without Prism:\*\* `claude --settings \/data\/prism-off\.settings\.json`/);
+});
+
+test('the opt-out file is shared by every config root and refuses a symlinked ~/.prism', () => {
+  const settings = require('../lib/settings');
+  const cfg = path.join(homeDir, 'cfg');
+  const previous = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = cfg;
+  try {
+    assert.equal(settings.optOutSettingsPath(), path.join(homeDir, '.prism', 'prism-off.settings.json'));
+    assert.equal(settings.writeOptOutSettings().changed, true);
+  } finally {
+    if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = previous;
+  }
+  assert.equal(fs.existsSync(path.join(cfg, 'plugins')), false);
+
+  const target = path.join(homeDir, 'real-prism');
+  fs.renameSync(path.join(homeDir, '.prism'), target);
+  fs.symlinkSync(target, path.join(homeDir, '.prism'));
+  assert.throws(() => settings.writeOptOutSettings(), /non-symlink directory/);
+});
+
+test('status shows the shared opt-out file only for a user-scope install', async () => {
+  const settings = require('../lib/settings');
+  settings.writeOptOutSettings();
+  const optOutFile = settings.optOutSettingsPath();
+  const status = require('../lib/status');
+  const captured = [];
+  const originalWrite = process.stdout.write.bind(process.stdout);
+
+  async function runStatus() {
+    captured.length = 0;
+    process.stdout.write = (chunk) => { captured.push(String(chunk)); return true; };
+    const previous = process.env.CLAUDE_PLUGIN_DATA;
+    try {
+      assert.equal(await status.main(['--project-dir', projectDir, '--data-dir', dataDir]), 0);
+    } finally {
+      process.stdout.write = originalWrite;
+      if (previous === undefined) delete process.env.CLAUDE_PLUGIN_DATA;
+    }
+    return captured.join('');
+  }
+
+  installAt('user');
+  assert.ok((await runStatus()).includes(`claude --settings ${optOutFile}`));
+
+  installAt('local');
+  assert.equal((await runStatus()).includes('claude --settings'), false);
 });
