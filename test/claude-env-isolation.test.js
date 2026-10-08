@@ -12,9 +12,11 @@ const { ISOLATED_VARIABLES } = require('./helpers/isolate-claude-env');
 const TEST_DIR = __dirname;
 // Suites that spawn plugin scripts or run install/uninstall code in-process.
 const GUARDED_SUITES = [
+  'hooks-output.test.js',
   'plugin-activation.test.js',
   'settings.test.js',
   'setup-apply.test.js',
+  'setup.test.js',
   'status.test.js',
   'uninstall-command.test.js',
 ];

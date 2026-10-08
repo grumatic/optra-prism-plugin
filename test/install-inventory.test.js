@@ -263,6 +263,54 @@ test('pruning removes only the requested roots and nothing inside them', () => {
   assert.equal(fs.existsSync(inventoryPath(home)), false);
 });
 
+test('pruning re-verifies each root under the lock and keeps one that is no longer absent', () => {
+  prismDir();
+  const stale = configRoot('stale');
+  const gone = configRoot('gone');
+  registerRoot({ configRoot: stale, homeDir: home, now: NOW });
+  registerRoot({ configRoot: gone, homeDir: home, now: NOW });
+  // Both verified as absent earlier; `stale` gained a Prism install since.
+  assert.equal(verifyRoot(stale).state, 'absent');
+  installPrism(stale);
+
+  const removal = removeRoots({ rootsToRemove: [stale, gone], homeDir: home });
+
+  assert.equal(removal.ok, true);
+  assert.deepEqual(removal.removed, [gone]);
+  assert.deepEqual(Object.keys(readInventoryFile().roots), [stale]);
+
+  // An unverifiable root is never pruned either.
+  fs.writeFileSync(path.join(stale, 'plugins', 'installed_plugins.json'), '{nope');
+  assert.deepEqual(removeRoots({ rootsToRemove: [stale], homeDir: home }), { ok: true, removed: [] });
+  assert.deepEqual(Object.keys(readInventoryFile().roots), [stale]);
+});
+
+test('every successful write leaves installs.json at 0600', () => {
+  prismDir();
+  const first = configRoot('first');
+  const second = configRoot('second');
+  registerRoot({ configRoot: first, homeDir: home, now: NOW });
+  const file = inventoryPath(home);
+
+  fs.chmodSync(file, 0o644);
+  assert.equal(registerRoot({ configRoot: second, homeDir: home, now: NOW }).registered, true);
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+
+  fs.chmodSync(file, 0o666);
+  assert.equal(removeRoots({ rootsToRemove: [second], homeDir: home }).ok, true);
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  assert.deepEqual(Object.keys(readInventoryFile().roots), [first]);
+
+  // A symlinked inventory is still never rewritten or chmod-ed through.
+  const target = path.join(sandbox, 'target.json');
+  fs.writeFileSync(target, JSON.stringify({ version: 1, overflow: false, roots: {} }), { mode: 0o644 });
+  fs.rmSync(file);
+  fs.symlinkSync(target, file);
+  assert.equal(registerRoot({ configRoot: second, homeDir: home, now: NOW }).registered, false);
+  assert.equal(fs.statSync(target).mode & 0o777, 0o644);
+  assert.equal(fs.lstatSync(file).isSymbolicLink(), true);
+});
+
 test('concurrent registration from several processes loses no registered root', async () => {
   prismDir();
   const names = Array.from({ length: 8 }, (_, index) => `proc-root-${index}`);
