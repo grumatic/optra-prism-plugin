@@ -85,13 +85,13 @@ Prompt and hook capture continue.
 To collect telemetry, uninstall the project or local install, install Prism at user scope, and run `/prism:setup KEY` again.
 
 A user-scope install collects telemetry in every project.
-To run one session without Prism, pass the settings file that setup writes to the plugin data directory:
+To run one session without Prism, pass the settings file that setup writes to `~/.prism`; its path is the same for every Claude config directory:
 
 ```bash
-claude --settings ~/.claude/plugins/data/prism-optra-prism/prism-off.settings.json
+claude --settings ~/.prism/prism-off.settings.json
 ```
 
-That file disables the plugin and turns OTEL export off for that session only; `/prism:status` shows its exact path.
+That file disables the plugin and turns OTEL export off for that session only; `/prism:status` shows its exact path for a user-scope install. It is removed together with `~/.prism` and stays when uninstall preserves `~/.prism`. A copy that an earlier version wrote to the plugin data directory is left in place and keeps working until that config directory is uninstalled.
 
 Setup also installs a self-contained OTEL headers helper under the plugin data
 directory and records its absolute path in the same settings scope. The static
