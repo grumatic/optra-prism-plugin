@@ -75,7 +75,7 @@ without enqueueing a prompt.
 - project: `<project>/.claude/settings.json`
 - local: `<project>/.claude/settings.local.json`
 
-Claude Code also moves its `plugins/` tree under `CLAUDE_CONFIG_DIR`; Prism follows it. `CLAUDE_CODE_PLUGIN_CACHE_DIR` is not supported; the installer refuses it. `~/.prism` stays under your home directory and is shared by every config directory.
+Claude Code also moves its `plugins/` tree under `CLAUDE_CONFIG_DIR`; Prism follows it. `CLAUDE_CODE_PLUGIN_CACHE_DIR` is not supported: the installer, setup, config, and uninstall refuse while it is set, and `/prism:status` and `/prism:doctor` report it. Setup, config, uninstall, and activation also refuse when the plugin root or plugin data directory does not match the config directory Claude Code installed the plugin under; `/prism:status` and `/prism:doctor` show the config directory and that check. `~/.prism` stays under your home directory and is shared by every config directory.
 
 Settings are read in user → project → local order, with later values taking precedence. Setup writes only the installed scope and does not move or delete values from another settings layer.
 
