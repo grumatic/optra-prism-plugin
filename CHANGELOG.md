@@ -5,6 +5,23 @@ All notable changes to the Prism plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.3] - 2026-10-08
+
+### Added
+- Prism now follows `CLAUDE_CONFIG_DIR`. User settings, the installed-plugin registry, the plugin cache and the plugin data directory are resolved under that directory when it is set, and under `~/.claude` otherwise. `install.sh` uses the same rule. A relative, `~`-prefixed or otherwise invalid value is refused instead of silently falling back to `~/.claude`.
+- `/prism:setup`, `/prism:config`, `/prism:uninstall` and session activation check that the running plugin and its data directory belong to the current config directory before writing anything. On a mismatch they refuse with both paths; activation skips its writes and shows the failure notice, including on the first run.
+- `/prism:status` shows the config directory, where it came from, and the result of that check. `/prism:doctor` adds an Install Context check. Both list the other config directories where Prism was seen and whether Prism is still installed there.
+- `~/.prism/installs.json` records the config directories where Prism has run (paths and timestamps only, mode 0600).
+
+### Changed
+- The shared `~/.prism` directory (API key, config, binding) is removed on uninstall only when no other config directory still has Prism installed, or cannot be checked. The default `~/.claude` is always checked. When `~/.prism` is kept, the preview and the result name the directories that kept it.
+- `prism-off.settings.json` is now written to `~/.prism`, so `claude --settings ~/.prism/prism-off.settings.json` works for every config directory. A file written to the plugin data directory by an earlier version stays usable until that installation is uninstalled.
+- `/prism:setup` checks the install scope before saving `~/.prism/config.json`, so a scope failure no longer leaves the config half-applied. `/prism:config set ingest_url` and `unset ingest_url` follow the same order.
+- `CLAUDE_CODE_PLUGIN_CACHE_DIR` is not supported. Setup, config, uninstall and `install.sh` refuse while it is set, and status and doctor report it.
+
+### Fixed
+- With `CLAUDE_CONFIG_DIR` set, `/prism:setup` no longer fails with "unknown install scope", and `/prism:uninstall` no longer misclassifies a marketplace install as inline or rejects a config directory outside the home directory.
+
 ## [0.9.2] - 2026-09-28
 
 ### Changed
