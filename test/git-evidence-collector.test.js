@@ -1,5 +1,7 @@
 'use strict';
 
+require('./helpers/isolate-claude-env');
+
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');

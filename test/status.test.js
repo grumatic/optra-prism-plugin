@@ -1,3 +1,5 @@
+require('./helpers/isolate-claude-env');
+
 const test = require('node:test');
 const { LEGACY_HOST_VERSION, pinClaudeHostVersion } = require('./helpers/claude-host');
 

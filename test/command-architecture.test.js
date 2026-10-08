@@ -2,6 +2,8 @@
 // deterministic CLI entrypoint. Scripts compute AND render; the model only
 // displays output verbatim. Prose renderers must not grow back.
 
+require('./helpers/isolate-claude-env');
+
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');

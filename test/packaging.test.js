@@ -7,6 +7,8 @@
 // CLAUDE.md) are excluded from main, so a runtime require() into them would
 // crash a marketplace install even though develop-branch tests stay green.
 
+require('./helpers/isolate-claude-env');
+
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
