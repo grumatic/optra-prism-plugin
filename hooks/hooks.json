@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/session-start.sh"
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/session-start.sh\""
           }
         ]
       }
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/submit-handler.js"
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/submit-handler.js\""
           }
         ]
       }
@@ -28,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/git-context-handler.js"
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/git-context-handler.js\""
           }
         ]
       }
@@ -39,7 +39,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/compact-handler.js"
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/compact-handler.js\""
           }
         ]
       }
@@ -50,7 +50,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/send-message-evidence-handler.js"
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/send-message-evidence-handler.js\""
           }
         ]
       }
@@ -61,7 +61,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/stop-handler.js"
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/stop-handler.js\""
           }
         ]
       }
@@ -72,7 +72,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/session-end-handler.js"
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/session-end-handler.js\""
           }
         ]
       }
