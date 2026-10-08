@@ -10,7 +10,6 @@ set -euo pipefail
 
 MARKETPLACE_REPO="grumatic/optra-prism-plugin"
 INSTALL_DIR="${HOME}/.prism/claude-code-plugin"
-PRISM_PLUGIN_DATA_DIR="${HOME}/.claude/plugins/data/prism-inline"
 MIN_NODE_VERSION=18
 
 API_KEY="${1:-}"
@@ -33,15 +32,38 @@ check_node() {
   info "Node.js v$(node -v | tr -d 'v') detected"
 }
 
+# Claude Code keeps its settings and plugins tree under CLAUDE_CONFIG_DIR when
+# it is set (unset or empty means ~/.claude). A relative value, including a
+# leading "~", is rejected instead of guessed at; the plugin does not support
+# CLAUDE_CODE_PLUGIN_CACHE_DIR, which relocates the plugins tree separately.
+resolve_claude_config_dir() {
+  if [ -n "${CLAUDE_CODE_PLUGIN_CACHE_DIR:-}" ]; then
+    error "CLAUDE_CODE_PLUGIN_CACHE_DIR is set; relocating the plugins tree separately from CLAUDE_CONFIG_DIR is not supported. Unset it and retry."
+  fi
+  local value="${CLAUDE_CONFIG_DIR:-}"
+  if [ -z "$value" ]; then
+    CLAUDE_CONFIG_ROOT="${HOME}/.claude"
+    return
+  fi
+  case "$value" in
+    "~"*) error "CLAUDE_CONFIG_DIR must be an absolute path: '~' is not expanded; use an absolute path." ;;
+    /*) ;;
+    *) error "CLAUDE_CONFIG_DIR must be an absolute path." ;;
+  esac
+  CLAUDE_CONFIG_ROOT=$(node -e 'process.stdout.write(require("path").resolve(process.argv[1]))' "$value")
+}
+
 # ─── Main ───
 
 info "Installing Prism plugin..."
 
 check_node
+resolve_claude_config_dir
+PRISM_PLUGIN_DATA_DIR="${CLAUDE_CONFIG_ROOT}/plugins/data/prism-inline"
 
 # Prefer marketplace install if Claude Code CLI is available
 if command -v claude &>/dev/null; then
-  PRISM_PLUGIN_DATA_DIR="${HOME}/.claude/plugins/data/prism-optra-prism"
+  PRISM_PLUGIN_DATA_DIR="${CLAUDE_CONFIG_ROOT}/plugins/data/prism-optra-prism"
   info "Installing via Claude Code marketplace..."
 
   # Force a clean source reinstall: wipe ALL cached plugin source (every
@@ -49,8 +71,8 @@ if command -v claude &>/dev/null; then
   # short-circuit on a stale "already installed" marker. Keep the durable
   # plugin data directory: update state and the OTEL headers helper must remain
   # valid when installation or configuration is deferred.
-  rm -rf "${HOME}/.claude/plugins/cache/optra-prism" 2>/dev/null || true
-  INSTALLED_JSON="${HOME}/.claude/plugins/installed_plugins.json"
+  rm -rf "${CLAUDE_CONFIG_ROOT}/plugins/cache/optra-prism" 2>/dev/null || true
+  INSTALLED_JSON="${CLAUDE_CONFIG_ROOT}/plugins/installed_plugins.json"
   if [ -f "$INSTALLED_JSON" ] && command -v node &>/dev/null; then
     node - "$INSTALLED_JSON" <<'NODE' 2>/dev/null || true
 const fs = require('fs');
@@ -110,7 +132,7 @@ if [ -n "$API_KEY" ]; then
   PLUGIN_ROOT="${INSTALL_DIR}"
   # Marketplace installs live in the Claude Code plugin cache.
   if [ ! -f "$PLUGIN_ROOT/lib/setup.js" ]; then
-    for p in "${HOME}/.claude/plugins/cache/optra-prism/prism"/*/; do
+    for p in "${CLAUDE_CONFIG_ROOT}/plugins/cache/optra-prism/prism"/*/; do
       if [ -f "$p/lib/setup.js" ]; then PLUGIN_ROOT="${p%/}"; break; fi
     done
   fi

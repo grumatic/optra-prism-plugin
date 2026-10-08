@@ -71,9 +71,11 @@ without enqueueing a prompt.
 
 `/prism:setup KEY` sends the non-empty key to the config endpoint, stores the key and resolved service URLs in that file, and projects OTEL values to the settings file for the installed plugin scope:
 
-- user: `~/.claude/settings.json`
+- user: `~/.claude/settings.json`, or `$CLAUDE_CONFIG_DIR/settings.json` when `CLAUDE_CONFIG_DIR` is set to an absolute path (`~` is not expanded)
 - project: `<project>/.claude/settings.json`
 - local: `<project>/.claude/settings.local.json`
+
+Claude Code also moves its `plugins/` tree under `CLAUDE_CONFIG_DIR`; Prism follows it. `CLAUDE_CODE_PLUGIN_CACHE_DIR` is not supported; the installer refuses it. `~/.prism` stays under your home directory and is shared by every config directory.
 
 Settings are read in user → project → local order, with later values taking precedence. Setup writes only the installed scope and does not move or delete values from another settings layer.
 
