@@ -111,6 +111,19 @@ Use `/prism:config set <field> <value>` to update a field, `/prism:config unset 
 
 After updating from v0.6.1 or earlier, run `/prism:setup KEY` once when `/prism:status` shows the API key or `ingest_url` as missing. This includes installations whose service URLs existed only in the legacy config cache, environment variables, or plugin Configure options.
 
+## Uninstall
+
+`/prism:uninstall` previews, then removes, the Prism install for the current Claude config directory only: its registry entry, settings, plugin data, and plugin cache. It never writes to or deletes anything inside another config directory.
+
+`~/.prism` (API key, config, binding) is shared by every config directory. Prism records each config directory where it has been seen in `~/.prism/installs.json`, which holds paths and timestamps only and keeps at most 32 directories. Uninstall reads the registry of every recorded directory, and of `~/.claude`, and keeps `~/.prism` when:
+
+- another directory still has a Prism install, or its registry cannot be verified;
+- the inventory is corrupt, or is full and some directories were not recorded.
+
+The preview and the result name the directories or the inventory condition that kept it, and apply checks again immediately before removing `~/.prism`. `/prism:status` and `/prism:doctor` list the other directories and their state.
+
+A session started with `--plugin-dir` is not recorded in `installed_plugins.json`. A config directory used only that way is recorded, then verifies as absent, so it does not protect `~/.prism`.
+
 ## How It Works
 
 ```
