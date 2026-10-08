@@ -86,7 +86,7 @@ test('hooks.json registers the SessionEnd handler', () => {
   const hooks = JSON.parse(fs.readFileSync(path.join(ROOT, 'hooks', 'hooks.json'), 'utf8'));
   assert.ok(Array.isArray(hooks.hooks.SessionEnd));
   const command = hooks.hooks.SessionEnd[0].hooks[0].command;
-  assert.match(command, /session-end-handler\.js$/);
+  assert.match(command, /session-end-handler\.js"$/);
 });
 
 test('SessionEnd enqueues session_end and any pending observation without any network call', () => {
