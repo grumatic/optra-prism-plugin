@@ -321,3 +321,122 @@ test('markCapabilityWithdrawn/AuthError/ProtocolError publish delivery-driven tr
     await server.close();
   }
 });
+
+// ─── git-evidence/v2 negotiation ───
+
+function configBodyWithVersions(versions) {
+  return JSON.stringify({ contracts: { git_evidence: { endpoint: '/v1/git-evidence', versions } } });
+}
+
+async function refreshAgainst(body, prefix, action) {
+  const home = tempDir(`prism-cap-home-${prefix}-`);
+  const dataDir = tempDir(`prism-cap-data-${prefix}-`);
+  const server = await startServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(body);
+  });
+  writeConfig(home, `prism_capability_${prefix}`, server.url);
+  try {
+    return await withEnv(home, dataDir, async () => {
+      const capability = require('../lib/git-evidence-capability');
+      const snapshot = await capability.refreshCapability({ force: true });
+      return action(capability, snapshot);
+    });
+  } finally {
+    await server.close();
+  }
+}
+
+test('git_evidence_v2: a v1-only advertisement caches and negotiates exactly what v1 always did', () => refreshAgainst(
+  supportedConfigBody(),
+  'v1-only',
+  (capability, snapshot) => {
+    assert.equal(snapshot.state, 'supported');
+    assert.deepEqual(snapshot.versions, ['git-evidence/v1']);
+    assert.equal(capability.negotiatedEvidenceVersion(snapshot), 'git-evidence/v1');
+    assert.equal(capability.capabilityDiagnostics().version, 'git-evidence/v1');
+  },
+));
+
+test('git_evidence_v2: an advertisement listing v2 negotiates v2 and keeps the gate unchanged', () => refreshAgainst(
+  configBodyWithVersions(['git-evidence/v1', 'git-evidence/v2']),
+  'v2',
+  (capability, snapshot) => {
+    assert.deepEqual(snapshot.versions, ['git-evidence/v1', 'git-evidence/v2']);
+    assert.deepEqual(capability.readCapabilityCache().versions, ['git-evidence/v1', 'git-evidence/v2']);
+    assert.equal(capability.capabilityAllowsEvidence(snapshot), true);
+    assert.equal(capability.negotiatedEvidenceVersion(snapshot), 'git-evidence/v2');
+    assert.equal(capability.capabilityDiagnostics().version, 'git-evidence/v2');
+  },
+));
+
+test('git_evidence_v2: unknown advertised versions are dropped, and v2 without v1 is still unsupported', async () => {
+  await refreshAgainst(
+    configBodyWithVersions(['git-evidence/v3', 'git-evidence/v2', 'git-evidence/v1', 'x'.repeat(4096)]),
+    'unknown',
+    (capability, snapshot) => {
+      assert.deepEqual(snapshot.versions, ['git-evidence/v1', 'git-evidence/v2']);
+    },
+  );
+  await refreshAgainst(
+    configBodyWithVersions(['git-evidence/v2']),
+    'v2-only',
+    (capability, snapshot) => {
+      assert.equal(snapshot.state, 'unsupported');
+      assert.equal(capability.capabilityAllowsEvidence(snapshot), false);
+    },
+  );
+});
+
+test('git_evidence_v2: a cache written before v2 existed, or none at all, negotiates v1', async () => {
+  const { negotiatedEvidenceVersion } = require('../lib/git-evidence-capability');
+  assert.equal(negotiatedEvidenceVersion({ versions: ['git-evidence/v1'] }), 'git-evidence/v1');
+  assert.equal(negotiatedEvidenceVersion({ state: 'protocol_error' }), 'git-evidence/v1');
+  assert.equal(negotiatedEvidenceVersion(null), 'git-evidence/v1');
+});
+
+test('git_evidence_v2: a rejected v2 is withdrawn locally, keeping the gate state and last_success_at', () => refreshAgainst(
+  configBodyWithVersions(['git-evidence/v1', 'git-evidence/v2']),
+  'reject-v2',
+  (capability, supported) => {
+    assert.equal(capability.markCapabilityVersionRejected('git-evidence/v2'), true);
+    const snapshot = capability.readCapabilityCache();
+    assert.equal(snapshot.state, 'supported');
+    assert.equal(snapshot.last_success_at, supported.last_success_at);
+    // No check ran, so a due refresh is not postponed.
+    assert.equal(snapshot.checked_at, supported.checked_at);
+    assert.deepEqual(snapshot.versions, ['git-evidence/v1']);
+    assert.equal(capability.capabilityAllowsEvidence(snapshot), true);
+    assert.equal(capability.negotiatedEvidenceVersion(snapshot), 'git-evidence/v1');
+  },
+));
+
+test('git_evidence_v2: withdrawing a version already absent, or with no cache, writes nothing', async () => {
+  await refreshAgainst(
+    supportedConfigBody(),
+    'reject-absent',
+    (capability) => {
+      const before = capability.readCapabilityCache();
+      assert.equal(capability.markCapabilityVersionRejected('git-evidence/v2'), false);
+      assert.deepEqual(capability.readCapabilityCache(), before);
+    },
+  );
+
+  const home = tempDir('prism-cap-home-reject-none-');
+  const dataDir = tempDir('prism-cap-data-reject-none-');
+  writeConfig(home, 'prism_capability_reject_none', 'https://ingest.example.test');
+  await withEnv(home, dataDir, () => {
+    const capability = require('../lib/git-evidence-capability');
+    assert.equal(capability.markCapabilityVersionRejected('git-evidence/v2'), false);
+    assert.equal(capability.readCapabilityCache(), null, 'no cache, so no protocol_error snapshot is invented');
+  });
+});
+
+test('git_evidence_v2: delivery pauses still keep the cached version list', () => refreshAgainst(
+  configBodyWithVersions(['git-evidence/v1', 'git-evidence/v2']),
+  'pause-keeps-versions',
+  (capability) => {
+    assert.equal(capability.markCapabilityProtocolError(), true);
+    assert.deepEqual(capability.readCapabilityCache().versions, ['git-evidence/v1', 'git-evidence/v2']);
+  },
+));

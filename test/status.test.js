@@ -375,3 +375,34 @@ test('malformed config is reported by status without a raw module-load stack', (
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
+
+test('git evidence status names the body version only once it is past v1', () => {
+  const config = { apiKey: 'opaque-config-key', ingest_url: 'https://ingest.example.test' };
+  const gitEvidenceLines = (capability, queue = {
+    pending: 0, terminal: 0, terminalReasons: {},
+  }) => renderStatus({
+    config,
+    rawConfig: config,
+    installScope: 'user',
+    effectiveSettings: { env: {}, sources: {}, files: {} },
+    expectedOtel: { otelEnv: {} },
+    otelStatus: { ok: true, mismatches: [] },
+    health: { ok: true, reachable: true, httpStatus: 200, error: null },
+    gitEvidence: { capability, queue },
+  }).split('\n').filter((line) => line.startsWith('**Git evidence'));
+  const supported = { state: 'supported', stale: false };
+
+  // v1, and a diagnostics object from before the version existed, read as before.
+  assert.deepEqual(gitEvidenceLines({ ...supported, version: 'git-evidence/v1' }), ['**Git evidence:** ready']);
+  assert.deepEqual(gitEvidenceLines(supported), ['**Git evidence:** ready']);
+
+  assert.deepEqual(gitEvidenceLines({ ...supported, version: 'git-evidence/v2' }), ['**Git evidence:** ready (git-evidence/v2)']);
+  assert.deepEqual(
+    gitEvidenceLines({ ...supported, version: 'git-evidence/v2' }, { pending: 2, terminal: 0, terminalReasons: {} }),
+    ['**Git evidence:** active (git-evidence/v2)', '**Git evidence queue:** 2 pending, 0 settled'],
+  );
+  assert.deepEqual(
+    gitEvidenceLines({ state: 'withdrawn', stale: false, version: 'git-evidence/v2' }),
+    ['**Git evidence:** dormant (capability: withdrawn)', '**Git evidence queue:** 0 pending, 0 settled'],
+  );
+});

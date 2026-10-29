@@ -165,6 +165,44 @@ test('publish-and-consume keeps an existing immutable publication when the compa
   assert.equal(session.publishAndConsumeActive(sessionId, expected, () => ({ success: true })).state, 'already_consumed');
 });
 
+test('git-capture markers: a v1 marker keeps the v1 keys, a v2 pin is stored, and any other pin is refused', () => {
+  makeDataDir();
+  const serverPromptId = '66666666-6666-4666-8666-666666666666';
+  const publishMarker = (sessionId, pin) => {
+    const barrier = session.advanceBarrier(sessionId, 'normal-pending');
+    assert.ok(session.attachActive(sessionId, { ...active(barrier.epoch, 'marker-client'), submitPromptId: 'marker-host' }));
+    assert.ok(session.promoteActive(sessionId, 'marker-client', 'marker-host', serverPromptId));
+    const marker = {
+      eventId: '00000000-0000-4000-8000-0000000000a1',
+      epoch: barrier.epoch,
+      clientEventId: 'marker-client',
+      submitPromptId: 'marker-host',
+      serverPromptId,
+      responseOperationId: 'marker-operation',
+      canonicalCwd: '/repo',
+      baselineHead: 'a'.repeat(40),
+      baselineReason: null,
+      createdAt: new Date().toISOString(),
+      ...(pin === undefined ? {} : { evidenceSchemaVersion: pin }),
+    };
+    const expected = {
+      epoch: barrier.epoch, clientEventId: 'marker-client', submitPromptId: 'marker-host', serverPromptId,
+    };
+    assert.equal(session.publishAndConsumeActive(sessionId, expected, () => ({ success: true, gitCapture: marker })).state, 'published');
+    return session.readGitCapture(sessionId);
+  };
+
+  const v1 = publishMarker('marker-v1');
+  assert.ok(v1);
+  assert.equal(Object.hasOwn(v1, 'evidenceSchemaVersion'), false);
+
+  assert.equal(publishMarker('marker-v2', 'git-evidence/v2').evidenceSchemaVersion, 'git-evidence/v2');
+
+  for (const pin of ['git-evidence/v1', 'git-evidence/v3', null]) {
+    assert.equal(publishMarker(`marker-${String(pin)}`, pin), null, String(pin));
+  }
+});
+
 test('epochs advance monotonically and compact generations are serialized', () => {
   makeDataDir();
   const sessionId = 'monotonic-session';

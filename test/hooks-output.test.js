@@ -1960,8 +1960,10 @@ test('real-host fixture completes submit-to-stop correlation without leaking pro
   assert.equal(readAllFiles(dataDir).includes(SENTINEL), false);
 });
 
+// `duringTurn`, when given, runs between UserPromptSubmit and Stop — where
+// the commits a turn reports are made.
 function runEvidenceProbeTurn({
-  home, dataDir, repo, env, sessionId, promptId,
+  home, dataDir, repo, env, sessionId, promptId, duringTurn,
 }) {
   const transcript = path.join(home, `transcript-${sessionId}.jsonl`);
   fs.writeFileSync(transcript, '');
@@ -1987,6 +1989,7 @@ function runEvidenceProbeTurn({
   assert.equal(submit.status, 0, submit.stderr);
   assert.equal(submit.stderr, '');
   assert.equal(assertJsonOrEmpty(submit.stdout), null);
+  if (duringTurn) duringTurn();
 
   fs.writeFileSync(transcript, [
     JSON.stringify({ type: 'user', prompt_id: promptId, message: { role: 'user', content: 'request' } }),
@@ -2018,6 +2021,29 @@ function runEvidenceProbeTurn({
   assert.equal(readAllFiles(dataDir).includes(SENTINEL), false);
 }
 
+// A real `supported` capability snapshot for this exact binding, written
+// directly (no live config fetch involved), listing `versions`.
+function seedSupportedCapability(dataDir, apiKey, ingestUrl, versions = ['git-evidence/v1']) {
+  const digest = bindingDigest(apiKey, ingestUrl);
+  const runtimeDir = path.join(dataDir, 'runtime');
+  fs.mkdirSync(runtimeDir, { recursive: true, mode: 0o700 });
+  const nowIso = new Date().toISOString();
+  fs.writeFileSync(
+    path.join(runtimeDir, `git-evidence-capability-${digest}.json`),
+    JSON.stringify({
+      schema_version: 'git-evidence-capability-cache/v1',
+      binding_digest: digest,
+      checked_at: nowIso,
+      last_success_at: nowIso,
+      state: 'supported',
+      endpoint: '/v1/git-evidence',
+      versions,
+    }),
+    { mode: 0o600 },
+  );
+  return runtimeDir;
+}
+
 test('git_evidence_after_response_v1: an open capability gate and an unwritable evidence spool never affect prompt/response capture', () => {
   const home = makeTempDir('prism-evidence-after-response-home-');
   const dataDir = makeDataDir(home);
@@ -2034,27 +2060,10 @@ test('git_evidence_after_response_v1: an open capability gate and an unwritable 
     NODE_OPTIONS: `--require=${interceptor}`,
   });
 
-  // A real `supported` capability snapshot for this exact binding, written
-  // directly (no live config fetch involved) so neither turn below can be
+  // A real `supported` capability snapshot, so neither turn below can be
   // short-circuited at the capability gate — each must actually reach git
   // resolution and attempt the spool write.
-  const digest = bindingDigest(apiKey, ingestUrl);
-  const runtimeDir = path.join(dataDir, 'runtime');
-  fs.mkdirSync(runtimeDir, { recursive: true, mode: 0o700 });
-  const nowIso = new Date().toISOString();
-  fs.writeFileSync(
-    path.join(runtimeDir, `git-evidence-capability-${digest}.json`),
-    JSON.stringify({
-      schema_version: 'git-evidence-capability-cache/v1',
-      binding_digest: digest,
-      checked_at: nowIso,
-      last_success_at: nowIso,
-      state: 'supported',
-      endpoint: '/v1/git-evidence',
-      versions: ['git-evidence/v1'],
-    }),
-    { mode: 0o600 },
-  );
+  const runtimeDir = seedSupportedCapability(dataDir, apiKey, ingestUrl);
 
   const evidenceOutboxDir = path.join(runtimeDir, 'git-evidence-outbox');
   const readEvidenceCounts = () => readSessionRecord(dataDir, () => require('../lib/git-evidence-outbox').evidenceCounts());
@@ -2085,5 +2094,153 @@ test('git_evidence_after_response_v1: an open capability gate and an unwritable 
     assert.equal(readSessionRecord(dataDir, () => session.readGitCapture('00000000-0000-4000-8000-0000000000b3')), null);
   } finally {
     fs.chmodSync(evidenceOutboxDir, 0o700);
+  }
+});
+
+// Git config the test controls entirely: an empty global file, no system
+// file, and no author-email environment, so a developer's own identity
+// cannot decide a verdict.
+function isolatedGitEnv(home, base = process.env) {
+  const globalConfig = path.join(home, 'isolated.gitconfig');
+  fs.writeFileSync(globalConfig, '');
+  const env = { ...base, GIT_CONFIG_GLOBAL: globalConfig, GIT_CONFIG_NOSYSTEM: '1' };
+  delete env.GIT_AUTHOR_EMAIL;
+  delete env.EMAIL;
+  return env;
+}
+
+function commitInRepo(repo, gitEnv, file, email) {
+  fs.appendFileSync(path.join(repo, file), `${email}\n`);
+  execFileSync('git', ['add', file], { cwd: repo, env: gitEnv });
+  execFileSync('git', ['-c', `user.email=${email}`, 'commit', '-q', '-m', `by ${email}`], { cwd: repo, env: gitEnv });
+}
+
+function pendingEvidenceFor(dataDir, sessionId) {
+  return readSessionRecord(dataDir, () => require('../lib/git-evidence-outbox').listPendingEvidence())
+    .filter((entry) => entry.correlation.sessionId === sessionId);
+}
+
+test('git_evidence_v2_negotiation: a v1-only capability keeps the v1 body; a v2 capability judges each commit', () => {
+  const home = makeTempDir('prism-evidence-v2-home-');
+  const dataDir = makeDataDir(home);
+  const repo = makeGitRepoWithRemote();
+  const apiKey = 'prism_evidence_v2_negotiation';
+  const ingestUrl = 'http://127.0.0.1:9';
+  const interceptor = writeSuccessfulIngestInterceptor(home);
+  const env = isolatedGitEnv(home, runtimeEnv(home, dataDir, {
+    apiKey,
+    ingest_url: ingestUrl,
+    show_realtime_summary: true,
+  }, {
+    NODE_OPTIONS: `--require=${interceptor}`,
+  }));
+  const ownAndTeammate = () => {
+    commitInRepo(repo, env, 'tracked.txt', 'test@example.test');
+    commitInRepo(repo, env, 'tracked.txt', 'teammate@example.test');
+  };
+
+  // v1 advertised (the server today, or v2 deployed with the advertisement off).
+  seedSupportedCapability(dataDir, apiKey, ingestUrl, ['git-evidence/v1']);
+  const v1Session = '00000000-0000-4000-8000-0000000000d1';
+  runEvidenceProbeTurn({
+    home, dataDir, repo, env, sessionId: v1Session, promptId: '00000000-0000-4000-8000-0000000000d2', duringTurn: ownAndTeammate,
+  });
+  const [v1Entry] = pendingEvidenceFor(dataDir, v1Session);
+  assert.ok(v1Entry, 'a v1 capture must enqueue');
+  assert.equal(v1Entry.schemaVersion, 'git-evidence/v1');
+  assert.equal(v1Entry.payload.schema_version, 'git-evidence/v1');
+  assert.equal(Object.hasOwn(v1Entry.payload.diff, 'foreign_commit_filter'), false);
+  assert.equal(v1Entry.payload.diff.commits.length, 2);
+  for (const commit of v1Entry.payload.diff.commits) {
+    assert.deepEqual(Object.keys(commit), ['commit_sha', 'parent_sha', 'fingerprint', 'added_lines', 'deleted_lines', 'merge_policy']);
+  }
+
+  // v2 advertised. Re-seeded: the interceptor's bodiless evidence answer
+  // paused the gate after the first turn.
+  seedSupportedCapability(dataDir, apiKey, ingestUrl, ['git-evidence/v1', 'git-evidence/v2']);
+  const v2Session = '00000000-0000-4000-8000-0000000000d3';
+  runEvidenceProbeTurn({
+    home, dataDir, repo, env, sessionId: v2Session, promptId: '00000000-0000-4000-8000-0000000000d4', duringTurn: ownAndTeammate,
+  });
+  const [v2Entry] = pendingEvidenceFor(dataDir, v2Session);
+  assert.ok(v2Entry, 'a v2 capture must enqueue');
+  assert.equal(v2Entry.schemaVersion, 'git-evidence/v2');
+  assert.equal(v2Entry.payload.diff.foreign_commit_filter, 'applied');
+  assert.deepEqual(v2Entry.payload.diff.commits.map((commit) => commit.author_filter), ['own', 'foreign']);
+  assert.deepEqual(v2Entry.payload.diff.commits.map((commit) => commit.parent_count), [1, 1]);
+
+  // Neither address leaves the comparison: not in a payload, not anywhere
+  // the plugin wrote.
+  for (const email of ['test@example.test', 'teammate@example.test']) {
+    assert.equal(readAllFiles(dataDir).includes(email), false, email);
+    assert.equal(readAllFiles(path.join(home, '.prism')).includes(email), false, email);
+  }
+});
+
+test('git_evidence_v2_negotiation: the marker pins the version, and a resumed capture builds with the pinned one', async () => {
+  const home = makeTempDir('prism-evidence-v2-pin-home-');
+  const dataDir = makeDataDir(home);
+  const repo = makeGitRepoWithRemote();
+  const apiKey = 'prism_evidence_v2_pin';
+  const ingestUrl = 'https://ingest.example.test';
+  writeRuntimeConfig(home, { apiKey, ingest_url: ingestUrl });
+  const gitEnv = isolatedGitEnv(home);
+  const baselineHead = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, env: gitEnv, encoding: 'utf8' }).trim();
+  commitInRepo(repo, gitEnv, 'tracked.txt', 'test@example.test');
+
+  const previous = {
+    HOME: process.env.HOME,
+    CLAUDE_PLUGIN_DATA: process.env.CLAUDE_PLUGIN_DATA,
+    GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,
+    GIT_CONFIG_NOSYSTEM: process.env.GIT_CONFIG_NOSYSTEM,
+    GIT_AUTHOR_EMAIL: process.env.GIT_AUTHOR_EMAIL,
+    EMAIL: process.env.EMAIL,
+  };
+  delete process.env.GIT_AUTHOR_EMAIL;
+  delete process.env.EMAIL;
+  const modules = ['../lib/env', '../lib/config', '../lib/git-evidence-capability', '../hooks/scripts/stop-handler'];
+  const resetModules = () => {
+    for (const name of modules) delete require.cache[require.resolve(name)];
+  };
+  Object.assign(process.env, {
+    HOME: home, CLAUDE_PLUGIN_DATA: dataDir, GIT_CONFIG_GLOBAL: gitEnv.GIT_CONFIG_GLOBAL, GIT_CONFIG_NOSYSTEM: '1',
+  });
+  resetModules();
+  try {
+    const { gitCaptureMarker, captureAndEnqueueEvidence } = require('../hooks/scripts/stop-handler');
+    const { listPendingEvidence } = require('../lib/git-evidence-outbox');
+    const active = {
+      clientEventId: 'client-event', submitPromptId: 'host-prompt', serverPromptId: '00000000-0000-4000-8000-0000000000f1',
+    };
+    const baseline = { cwd: fs.realpathSync(repo), baselineHead, baselineReason: null };
+    const capture = async (sessionId, marker) => {
+      await captureAndEnqueueEvidence(sessionId, marker);
+      return listPendingEvidence().find((entry) => entry.correlation.sessionId === sessionId);
+    };
+
+    // A v1 marker has exactly the keys an older plugin version accepts.
+    seedSupportedCapability(dataDir, apiKey, ingestUrl, ['git-evidence/v1']);
+    const v1Marker = gitCaptureMarker(0, active, 'operation-v1', baseline);
+    assert.equal(Object.hasOwn(v1Marker, 'evidenceSchemaVersion'), false);
+
+    seedSupportedCapability(dataDir, apiKey, ingestUrl, ['git-evidence/v1', 'git-evidence/v2']);
+    const v2Marker = gitCaptureMarker(0, active, 'operation-v2', baseline);
+    assert.equal(v2Marker.evidenceSchemaVersion, 'git-evidence/v2');
+
+    // Resumed after the capability moved on: each builds with its own pin.
+    const fromV1Marker = await capture('00000000-0000-4000-8000-0000000000f2', v1Marker);
+    assert.equal(fromV1Marker.payload.schema_version, 'git-evidence/v1');
+    assert.equal(fromV1Marker.payload.diff.commits.length, 1);
+
+    seedSupportedCapability(dataDir, apiKey, ingestUrl, ['git-evidence/v1']);
+    const fromV2Marker = await capture('00000000-0000-4000-8000-0000000000f3', v2Marker);
+    assert.equal(fromV2Marker.payload.schema_version, 'git-evidence/v2');
+    assert.deepEqual(fromV2Marker.payload.diff.commits.map((commit) => commit.author_filter), ['own']);
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    resetModules();
   }
 });

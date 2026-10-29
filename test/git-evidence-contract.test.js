@@ -15,8 +15,14 @@ const {
   commitFingerprint,
   buildGitEvidenceEvent,
   buildUnavailableGitEvidenceEvent,
+  downgradeGitEvidenceEvent,
   validateGitEvidenceEvent,
   GIT_EVIDENCE_SCHEMA_VERSION,
+  GIT_EVIDENCE_SCHEMA_VERSION_V2,
+  GIT_EVIDENCE_SCHEMA_VERSIONS,
+  GIT_EVIDENCE_FOREIGN_COMMIT_FILTERS,
+  GIT_EVIDENCE_AUTHOR_FILTERS,
+  MAX_GIT_EVIDENCE_PARENT_COUNT,
   GIT_EVIDENCE_DIFF_POLICY_VERSION,
   GIT_EVIDENCE_MERGE_POLICY,
   GIT_EVIDENCE_EVENT_TYPES,
@@ -251,7 +257,7 @@ test('validateGitEvidenceEvent rejects each rule in the table', () => {
     return event;
   };
 
-  assert.notEqual(validateGitEvidenceEvent({ ...base(), schema_version: 'git-evidence/v2' }), null);
+  assert.equal(validateGitEvidenceEvent({ ...base(), schema_version: 'git-evidence/v3' }), 'unknown_schema_version');
   assert.notEqual(validateGitEvidenceEvent({ ...base(), event_id: '00000000-0000-0000-0000-000000000000' }), null);
   assert.notEqual(validateGitEvidenceEvent({ ...base(), session_id: '' }), null);
   assert.notEqual(validateGitEvidenceEvent({ ...base(), client_event_id: '' }), null);
@@ -315,4 +321,241 @@ test('validateGitEvidenceEvent rejects each rule in the table', () => {
 
   assert.ok(GIT_EVIDENCE_DIFF_REASONS.length > 0);
   assert.ok(GIT_EVIDENCE_ERROR_CODES.length > 0);
+});
+
+// ─── git-evidence/v2 ───
+
+function builderInput(overrides = {}) {
+  return {
+    eventId: deriveEvidenceEventId('response-op-1'),
+    observedAt: '2026-07-29T05:06:07.123Z',
+    sessionId: 'session-1',
+    clientEventId: 'client-event-1',
+    hostPromptId: 'host-prompt-1',
+    repository: {
+      host: 'github.com',
+      ownerPath: 'example-org/example-group',
+      name: 'example-repo',
+      rootFingerprint: '1'.repeat(64),
+      branch: 'main',
+      head: '3'.repeat(40),
+      dirty: false,
+      phase: 'stop',
+    },
+    diff: {
+      baseHead: '2'.repeat(40),
+      head: '3'.repeat(40),
+      ancestry: 'linear',
+      coverage: 'ready',
+      excludedBinaryCount: 0,
+      excludedSubmoduleCount: 0,
+      foreignCommitFilter: 'applied',
+      commits: [
+        {
+          commitSha: '4'.repeat(40), parentSha: '2'.repeat(40), parentCount: 1, authorFilter: 'own', fingerprint: '5'.repeat(64), addedLines: 42, deletedLines: 7,
+        },
+        {
+          commitSha: '3'.repeat(40), parentSha: '4'.repeat(40), parentCount: 2, authorFilter: 'foreign', fingerprint: '6'.repeat(64), addedLines: 3, deletedLines: 0,
+        },
+      ],
+    },
+    ...overrides,
+  };
+}
+
+function withoutV2Inputs(input) {
+  return {
+    ...input,
+    diff: {
+      ...input.diff,
+      foreignCommitFilter: undefined,
+      commits: input.diff.commits.map(({ parentCount: _parentCount, authorFilter: _authorFilter, ...commit }) => commit),
+    },
+  };
+}
+
+function sampleV2Event() {
+  const event = sampleGitEvidenceEvent();
+  delete event.verification;
+  event.schema_version = GIT_EVIDENCE_SCHEMA_VERSION_V2;
+  event.diff.foreign_commit_filter = 'applied';
+  event.diff.commits = event.diff.commits.map((commit, index) => ({
+    ...commit, author_filter: index === 0 ? 'own' : 'foreign', parent_count: 1,
+  }));
+  return event;
+}
+
+test('git_evidence_v2: the version list mirrors the server, oldest first', () => {
+  assert.deepEqual(GIT_EVIDENCE_SCHEMA_VERSIONS, ['git-evidence/v1', 'git-evidence/v2']);
+  assert.equal(GIT_EVIDENCE_SCHEMA_VERSION_V2, 'git-evidence/v2');
+});
+
+test('git_evidence_v2: a v1 build ignores every v2 input and is byte-identical to a build without them', () => {
+  const input = builderInput();
+  const withV2Inputs = buildGitEvidenceEvent(input);
+  const plain = buildGitEvidenceEvent(withoutV2Inputs(input));
+  const explicitV1 = buildGitEvidenceEvent({ ...input, schemaVersion: GIT_EVIDENCE_SCHEMA_VERSION });
+  assert.ok(plain);
+  assert.equal(JSON.stringify(withV2Inputs), JSON.stringify(plain));
+  assert.equal(JSON.stringify(explicitV1), JSON.stringify(plain));
+  assert.equal(plain.schema_version, GIT_EVIDENCE_SCHEMA_VERSION);
+  assert.equal(Object.hasOwn(plain.diff, 'foreign_commit_filter'), false);
+  for (const commit of plain.diff.commits) {
+    assert.equal(Object.hasOwn(commit, 'author_filter'), false);
+    assert.equal(Object.hasOwn(commit, 'parent_count'), false);
+  }
+});
+
+test('git_evidence_v2: an applied build carries the filter, every verdict, and every parent count', () => {
+  const event = buildGitEvidenceEvent({ ...builderInput(), schemaVersion: GIT_EVIDENCE_SCHEMA_VERSION_V2 });
+  assert.ok(event);
+  assert.equal(event.schema_version, GIT_EVIDENCE_SCHEMA_VERSION_V2);
+  assert.equal(event.diff.foreign_commit_filter, 'applied');
+  assert.deepEqual(event.diff.commits.map((commit) => commit.author_filter), ['own', 'foreign']);
+  assert.deepEqual(event.diff.commits.map((commit) => commit.parent_count), [1, 2]);
+  assert.equal(validateGitEvidenceEvent(event), null);
+});
+
+test('git_evidence_v2: an unavailable build keeps parent counts and carries no verdict', () => {
+  const input = builderInput();
+  input.diff.foreignCommitFilter = 'unavailable';
+  const event = buildGitEvidenceEvent({ ...input, schemaVersion: GIT_EVIDENCE_SCHEMA_VERSION_V2 });
+  assert.ok(event);
+  assert.equal(event.diff.foreign_commit_filter, 'unavailable');
+  for (const commit of event.diff.commits) assert.equal(Object.hasOwn(commit, 'author_filter'), false);
+  assert.deepEqual(event.diff.commits.map((commit) => commit.parent_count), [1, 2]);
+  assert.equal(validateGitEvidenceEvent(event), null);
+});
+
+test('git_evidence_v2: a diff with no filter input reports unavailable (no verdict was made)', () => {
+  const event = buildGitEvidenceEvent({
+    ...builderInput(),
+    schemaVersion: GIT_EVIDENCE_SCHEMA_VERSION_V2,
+    diff: {
+      ancestry: 'unknown', coverage: 'unavailable', reason: 'baseline_missing', excludedBinaryCount: 0, excludedSubmoduleCount: 0, commits: [],
+    },
+  });
+  assert.ok(event);
+  assert.equal(event.diff.foreign_commit_filter, 'unavailable');
+});
+
+test('git_evidence_v2: a root commit (no parent) carries no parent_count', () => {
+  const input = builderInput();
+  input.diff.commits = [{
+    commitSha: '4'.repeat(40), authorFilter: 'own', fingerprint: '5'.repeat(64), addedLines: 1, deletedLines: 0,
+  }];
+  const event = buildGitEvidenceEvent({ ...input, schemaVersion: GIT_EVIDENCE_SCHEMA_VERSION_V2 });
+  assert.ok(event);
+  assert.equal(Object.hasOwn(event.diff.commits[0], 'parent_sha'), false);
+  assert.equal(Object.hasOwn(event.diff.commits[0], 'parent_count'), false);
+});
+
+test('git_evidence_v2: a commit with a parent but no parent count, or an applied commit with no verdict, builds nothing', () => {
+  const missingCount = builderInput();
+  delete missingCount.diff.commits[0].parentCount;
+  assert.equal(buildGitEvidenceEvent({ ...missingCount, schemaVersion: GIT_EVIDENCE_SCHEMA_VERSION_V2 }), null);
+
+  const missingVerdict = builderInput();
+  delete missingVerdict.diff.commits[1].authorFilter;
+  assert.equal(buildGitEvidenceEvent({ ...missingVerdict, schemaVersion: GIT_EVIDENCE_SCHEMA_VERSION_V2 }), null);
+});
+
+test('git_evidence_v2: the budget replacement keeps the filter a v2 diff requires', () => {
+  const event = buildGitEvidenceEvent({ ...builderInput(), schemaVersion: GIT_EVIDENCE_SCHEMA_VERSION_V2 });
+  const replacement = buildUnavailableGitEvidenceEvent(event, 'payload_budget_exceeded');
+  assert.equal(replacement.diff.foreign_commit_filter, 'applied');
+  assert.deepEqual(replacement.diff.commits, []);
+  assert.equal(validateGitEvidenceEvent(replacement), null);
+
+  const v1 = buildUnavailableGitEvidenceEvent(buildGitEvidenceEvent(builderInput()), 'payload_budget_exceeded');
+  assert.equal(Object.hasOwn(v1.diff, 'foreign_commit_filter'), false);
+  assert.equal(validateGitEvidenceEvent(v1), null);
+});
+
+test('git_evidence_v2: the validator applies the server v2 rules', () => {
+  assert.equal(validateGitEvidenceEvent(sampleV2Event()), null);
+
+  const missingFilter = sampleV2Event();
+  delete missingFilter.diff.foreign_commit_filter;
+  assert.equal(validateGitEvidenceEvent(missingFilter), 'missing_foreign_commit_filter');
+
+  const badFilter = sampleV2Event();
+  badFilter.diff.foreign_commit_filter = 'partial';
+  assert.equal(validateGitEvidenceEvent(badFilter), 'invalid_foreign_commit_filter');
+
+  const v1WithFilter = sampleGitEvidenceEvent();
+  delete v1WithFilter.verification;
+  v1WithFilter.diff.foreign_commit_filter = 'applied';
+  assert.equal(validateGitEvidenceEvent(v1WithFilter), 'unexpected_v2_field');
+
+  for (const field of [{ author_filter: 'own' }, { parent_count: 1 }]) {
+    const v1WithCommitField = sampleGitEvidenceEvent();
+    delete v1WithCommitField.verification;
+    Object.assign(v1WithCommitField.diff.commits[1], field);
+    assert.equal(validateGitEvidenceEvent(v1WithCommitField), 'unexpected_v2_field');
+  }
+
+  const missingVerdict = sampleV2Event();
+  delete missingVerdict.diff.commits[1].author_filter;
+  assert.equal(validateGitEvidenceEvent(missingVerdict), 'author_filter_mismatch');
+
+  const unexpectedVerdict = sampleV2Event();
+  unexpectedVerdict.diff.foreign_commit_filter = 'unavailable';
+  assert.equal(validateGitEvidenceEvent(unexpectedVerdict), 'author_filter_mismatch');
+
+  const badVerdict = sampleV2Event();
+  badVerdict.diff.commits[0].author_filter = 'mine';
+  assert.equal(validateGitEvidenceEvent(badVerdict), 'invalid_author_filter');
+
+  const missingCount = sampleV2Event();
+  delete missingCount.diff.commits[0].parent_count;
+  assert.equal(validateGitEvidenceEvent(missingCount), 'missing_parent_count');
+
+  for (const count of [0, MAX_GIT_EVIDENCE_PARENT_COUNT + 1, 1.5, '1']) {
+    const badCount = sampleV2Event();
+    badCount.diff.commits[0].parent_count = count;
+    assert.equal(validateGitEvidenceEvent(badCount), 'invalid_parent_count', String(count));
+  }
+  const maxCount = sampleV2Event();
+  maxCount.diff.commits[0].parent_count = MAX_GIT_EVIDENCE_PARENT_COUNT;
+  assert.equal(validateGitEvidenceEvent(maxCount), null);
+
+  const countWithoutParent = sampleV2Event();
+  delete countWithoutParent.diff.commits[0].parent_sha;
+  assert.equal(validateGitEvidenceEvent(countWithoutParent), 'invalid_parent_count');
+});
+
+test('git_evidence_v2: v2 rules run before the submodule, commit-count, and coverage checks, as on the server', () => {
+  const diffRule = sampleV2Event();
+  delete diffRule.diff.foreign_commit_filter;
+  diffRule.diff.excluded_submodule_count = -1;
+  diffRule.diff.coverage = 'unavailable';
+  assert.equal(validateGitEvidenceEvent(diffRule), 'missing_foreign_commit_filter');
+
+  const commitRule = sampleV2Event();
+  delete commitRule.diff.commits[0].parent_count;
+  commitRule.diff.reason = 'baseline_missing';
+  assert.equal(validateGitEvidenceEvent(commitRule), 'missing_parent_count');
+});
+
+test('git_evidence_v2: v2 field names and values pass the disallowed-field scan', () => {
+  for (const name of ['foreign_commit_filter', 'author_filter', 'parent_count']) {
+    assert.equal(GIT_EVIDENCE_DISALLOWED_FIELD_NAMES.includes(name), false);
+  }
+  assert.deepEqual(GIT_EVIDENCE_FOREIGN_COMMIT_FILTERS, ['applied', 'unavailable']);
+  assert.deepEqual(GIT_EVIDENCE_AUTHOR_FILTERS, ['own', 'foreign']);
+});
+
+test('git_evidence_v2: downgrading strips exactly the v2 fields and yields the v1 build of the same observation', () => {
+  const input = builderInput();
+  const v2 = buildGitEvidenceEvent({ ...input, schemaVersion: GIT_EVIDENCE_SCHEMA_VERSION_V2 });
+  const downgraded = downgradeGitEvidenceEvent(v2);
+  assert.ok(downgraded);
+  assert.equal(validateGitEvidenceEvent(downgraded), null);
+  assert.equal(canonicalJson(downgraded), canonicalJson(buildGitEvidenceEvent(withoutV2Inputs(input))));
+  assert.equal(v2.schema_version, GIT_EVIDENCE_SCHEMA_VERSION_V2, 'the input event is not mutated');
+  assert.equal(v2.diff.foreign_commit_filter, 'applied');
+
+  assert.equal(downgradeGitEvidenceEvent(buildGitEvidenceEvent(input)), null, 'a v1 event is not downgraded');
+  assert.equal(downgradeGitEvidenceEvent(null), null);
 });

@@ -304,6 +304,259 @@ test('plugin_server_skew_v1: an unsupported-schema pause survives, and a later c
   }
 });
 
+// ─── git-evidence/v2 ───
+
+const V2_ENTRY = { eventId: ENTRY.eventId, schemaVersion: 'git-evidence/v2' };
+
+function unsupportedSchemaResult() {
+  return jsonResult(400, { error: { code: 'git_evidence_unsupported_schema' } });
+}
+
+function v2Entry(id) {
+  const now = new Date().toISOString();
+  return {
+    eventId: id,
+    schemaVersion: 'git-evidence/v2',
+    observedAt: now,
+    createdAt: now,
+    correlation: { sessionId: 's', clientEventId: 'c' },
+    payload: {
+      schema_version: 'git-evidence/v2', event_id: id, event_type: 'committed_change_observation', observed_at: now, session_id: 's', client_event_id: 'c',
+      repository: {
+        host: 'github.com', owner_path: 'a/b', name: 'r', root_fingerprint: '1'.repeat(64), phase: 'stop',
+      },
+      diff: {
+        diff_policy_version: 'git_text_numstat_first_parent_v1',
+        ancestry: 'linear',
+        coverage: 'ready',
+        excluded_binary_count: 0,
+        excluded_submodule_count: 0,
+        foreign_commit_filter: 'applied',
+        commits: [{
+          commit_sha: '4'.repeat(40),
+          parent_sha: '2'.repeat(40),
+          fingerprint: '5'.repeat(64),
+          added_lines: 1,
+          deleted_lines: 0,
+          merge_policy: 'first_parent_v1',
+          author_filter: 'foreign',
+          parent_count: 2,
+        }],
+      },
+    },
+  };
+}
+
+async function withEvidenceDataDir(prefix, action) {
+  const dataDir = tempDir(prefix);
+  const previous = process.env.CLAUDE_PLUGIN_DATA;
+  process.env.CLAUDE_PLUGIN_DATA = dataDir;
+  try {
+    return await action();
+  } finally {
+    if (previous === undefined) delete process.env.CLAUDE_PLUGIN_DATA;
+    else process.env.CLAUDE_PLUGIN_DATA = previous;
+  }
+}
+
+test('git_evidence_v2: the server ACK names v1 for a v2 body, and that is an ack', () => {
+  assert.equal(
+    classifyEvidenceResponse(jsonResult(202, { event_id: V2_ENTRY.eventId, schema_version: 'git-evidence/v1', status: 'accepted' }), V2_ENTRY),
+    'ack',
+  );
+  assert.equal(
+    classifyEvidenceResponse(jsonResult(200, { event_id: V2_ENTRY.eventId, schema_version: 'git-evidence/v1', status: 'duplicate' }), V2_ENTRY),
+    'ack',
+  );
+});
+
+test('git_evidence_v2: an ACK echoing the entry version is also an ack, but a v1 entry still takes only v1', () => {
+  assert.equal(
+    classifyEvidenceResponse(jsonResult(202, { event_id: V2_ENTRY.eventId, schema_version: 'git-evidence/v2', status: 'accepted' }), V2_ENTRY),
+    'ack',
+  );
+  assert.equal(
+    classifyEvidenceResponse(jsonResult(202, { event_id: ENTRY.eventId, schema_version: 'git-evidence/v2', status: 'accepted' }), { ...ENTRY, schemaVersion: 'git-evidence/v1' }),
+    'pause_protocol',
+  );
+});
+
+test('git_evidence_v2: a downgrade whose entry was already settled elsewhere backs off instead of pausing delivery', () => withEvidenceDataDir('prism-git-evidence-v2-settled-', async () => {
+  const outbox = require('../lib/git-evidence-outbox');
+  const entry = v2Entry('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+  assert.equal(outbox.enqueueEvidence(entry).outcome, 'created');
+  const [pending] = outbox.listPendingEvidence();
+  // A concurrent drain delivered and removed it.
+  assert.equal(outbox.markEvidenceDelivered(pending.eventId), true);
+
+  const ingest = require('../lib/ingest');
+  const originalSend = ingest.sendGitEvidence;
+  let sends = 0;
+  ingest.sendGitEvidence = async () => {
+    sends += 1;
+    return unsupportedSchemaResult();
+  };
+  try {
+    const { deliverEvidenceEntry } = require('../lib/git-evidence-delivery');
+    const outcome = await deliverEvidenceEntry(pending, {});
+    assert.equal(outcome.disposition, 'retry');
+    assert.equal(outcome.paused, false);
+  } finally {
+    ingest.sendGitEvidence = originalSend;
+  }
+  assert.equal(sends, 1);
+  assert.deepEqual(outbox.listPendingEvidence(), []);
+}));
+
+test('git_evidence_v2: a refused v2 entry with no valid v1 body is settled as a permanent rejection', () => withEvidenceDataDir('prism-git-evidence-v2-no-v1-', async () => {
+  const outbox = require('../lib/git-evidence-outbox');
+  const entry = v2Entry('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb');
+  entry.payload.diff.commits[0].added_lines = -1;
+  assert.equal(outbox.enqueueEvidence(entry).outcome, 'created');
+  const [pending] = outbox.listPendingEvidence();
+
+  const ingest = require('../lib/ingest');
+  const originalSend = ingest.sendGitEvidence;
+  ingest.sendGitEvidence = async () => unsupportedSchemaResult();
+  try {
+    const { deliverEvidenceEntry } = require('../lib/git-evidence-delivery');
+    const outcome = await deliverEvidenceEntry(pending, {});
+    assert.equal(outcome.disposition, 'terminal_permanent');
+    assert.equal(outcome.terminalReason, 'permanent_http_rejection');
+    assert.equal(outcome.paused, false);
+  } finally {
+    ingest.sendGitEvidence = originalSend;
+  }
+  assert.deepEqual(outbox.listPendingEvidence(), []);
+}));
+
+test('git_evidence_v2: an unsupported schema downgrades a v2 entry and still pauses a v1 entry', () => {
+  assert.equal(classifyEvidenceResponse(unsupportedSchemaResult(), V2_ENTRY), 'downgrade_schema');
+  assert.equal(classifyEvidenceResponse(unsupportedSchemaResult(), ENTRY), 'pause_protocol');
+  assert.equal(classifyEvidenceResponse(unsupportedSchemaResult(), { ...ENTRY, schemaVersion: 'git-evidence/v1' }), 'pause_protocol');
+  // Every other v2 response is classified exactly as a v1 one.
+  assert.equal(classifyEvidenceResponse(jsonResult(400, { error: { code: 'git_evidence_invalid_payload' } }), V2_ENTRY), 'terminal_permanent');
+});
+
+test('git_evidence_v2: the outbox spools, lists, and settles a v2 entry like a v1 one', () => withEvidenceDataDir('prism-git-evidence-v2-outbox-', () => {
+  const outbox = require('../lib/git-evidence-outbox');
+  const entry = v2Entry('77777777-7777-4777-8777-777777777777');
+  assert.equal(outbox.enqueueEvidence(entry).outcome, 'created');
+  assert.equal(outbox.enqueueEvidence(entry).outcome, 'existing');
+  const [pending] = outbox.listPendingEvidence();
+  assert.equal(pending.schemaVersion, 'git-evidence/v2');
+  assert.deepEqual(pending.payload, entry.payload);
+  assert.equal(outbox.settleEvidenceTerminal(pending, 'permanent_http_rejection').state, 'terminal');
+  assert.equal(outbox.evidenceCounts().terminalReasons.permanent_http_rejection, 1);
+}));
+
+test('git_evidence_v2: a v2 entry refused as unsupported is rewritten to v1 in place and resent once under the same event_id', () => withEvidenceDataDir('prism-git-evidence-v2-downgrade-', async () => {
+  const outbox = require('../lib/git-evidence-outbox');
+  const { downgradeGitEvidenceEvent } = require('../lib/git-evidence-contract');
+  const id = '88888888-8888-4888-8888-888888888888';
+  const entry = v2Entry(id);
+  assert.equal(outbox.enqueueEvidence(entry).outcome, 'created');
+  const [pending] = outbox.listPendingEvidence();
+
+  const ingest = require('../lib/ingest');
+  const originalSend = ingest.sendGitEvidence;
+  const sent = [];
+  ingest.sendGitEvidence = async (payload) => {
+    sent.push(payload);
+    if (payload.schema_version === 'git-evidence/v2') return unsupportedSchemaResult();
+    return jsonResult(202, { event_id: id, schema_version: 'git-evidence/v1', status: 'accepted' });
+  };
+  try {
+    const { deliverEvidenceEntry } = require('../lib/git-evidence-delivery');
+    const outcome = await deliverEvidenceEntry(pending, {});
+    assert.equal(outcome.acked, true);
+    assert.equal(outcome.paused, false);
+  } finally {
+    ingest.sendGitEvidence = originalSend;
+  }
+
+  assert.equal(sent.length, 2);
+  assert.equal(sent[0].schema_version, 'git-evidence/v2');
+  assert.deepEqual(sent[1], downgradeGitEvidenceEvent(entry.payload));
+  assert.equal(sent[1].event_id, id);
+  assert.deepEqual(outbox.listPendingEvidence(), []);
+}));
+
+test('git_evidence_v2: a downgraded resend answered 409 was already stored as v2, so it is delivered, not a conflict', () => withEvidenceDataDir('prism-git-evidence-v2-lost-ack-', async () => {
+  const outbox = require('../lib/git-evidence-outbox');
+  const id = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  assert.equal(outbox.enqueueEvidence(v2Entry(id)).outcome, 'created');
+  const [pending] = outbox.listPendingEvidence();
+
+  const ingest = require('../lib/ingest');
+  const originalSend = ingest.sendGitEvidence;
+  ingest.sendGitEvidence = async (payload) => (payload.schema_version === 'git-evidence/v2'
+    ? unsupportedSchemaResult()
+    : jsonResult(409, { error: { code: 'git_evidence_event_conflict' } }));
+  try {
+    const { deliverEvidenceEntry } = require('../lib/git-evidence-delivery');
+    const outcome = await deliverEvidenceEntry(pending, {});
+    assert.equal(outcome.disposition, 'ack');
+    assert.equal(outcome.acked, true);
+  } finally {
+    ingest.sendGitEvidence = originalSend;
+  }
+  assert.deepEqual(outbox.listPendingEvidence(), []);
+  assert.equal(outbox.evidenceCounts().terminal, 0, 'no conflict marker is recorded');
+}));
+
+test('git_evidence_v2: a 409 on a v1 entry that was never downgraded is still a conflict', () => withEvidenceDataDir('prism-git-evidence-v1-conflict-', async () => {
+  const outbox = require('../lib/git-evidence-outbox');
+  const id = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+  const entry = v2Entry(id);
+  const { downgradeGitEvidenceEvent } = require('../lib/git-evidence-contract');
+  const v1Entry = { ...entry, schemaVersion: 'git-evidence/v1', payload: downgradeGitEvidenceEvent(entry.payload) };
+  assert.equal(outbox.enqueueEvidence(v1Entry).outcome, 'created');
+  const [pending] = outbox.listPendingEvidence();
+
+  const ingest = require('../lib/ingest');
+  const originalSend = ingest.sendGitEvidence;
+  ingest.sendGitEvidence = async () => jsonResult(409, { error: { code: 'git_evidence_event_conflict' } });
+  try {
+    const { deliverEvidenceEntry } = require('../lib/git-evidence-delivery');
+    const outcome = await deliverEvidenceEntry(pending, {});
+    assert.equal(outcome.disposition, 'terminal_conflict');
+    assert.equal(outcome.terminalReason, 'event_conflict');
+  } finally {
+    ingest.sendGitEvidence = originalSend;
+  }
+}));
+
+test('git_evidence_v2: a downgraded entry that is refused again pauses with its v1 body kept, never looping', () => withEvidenceDataDir('prism-git-evidence-v2-refused-twice-', async () => {
+  const outbox = require('../lib/git-evidence-outbox');
+  const entry = v2Entry('99999999-9999-4999-8999-999999999999');
+  assert.equal(outbox.enqueueEvidence(entry).outcome, 'created');
+  const [pending] = outbox.listPendingEvidence();
+
+  const ingest = require('../lib/ingest');
+  const originalSend = ingest.sendGitEvidence;
+  let sends = 0;
+  ingest.sendGitEvidence = async () => {
+    sends += 1;
+    return unsupportedSchemaResult();
+  };
+  try {
+    const { deliverEvidenceEntry } = require('../lib/git-evidence-delivery');
+    const outcome = await deliverEvidenceEntry(pending, {});
+    assert.equal(outcome.disposition, 'pause_protocol');
+    assert.equal(outcome.paused, true);
+  } finally {
+    ingest.sendGitEvidence = originalSend;
+  }
+
+  assert.equal(sends, 2);
+  const [survivor] = outbox.listPendingEvidence();
+  assert.equal(survivor.schemaVersion, 'git-evidence/v1');
+  assert.equal(survivor.payload.schema_version, 'git-evidence/v1');
+  assert.equal(Object.hasOwn(survivor.payload.diff, 'foreign_commit_filter'), false);
+  assert.equal(survivor.deliveryAttempts, 0);
+}));
+
 // git_evidence_after_response_v1 (a real capability cache, a real repo, an
 // unwritable evidence spool, driven through the actual submit/stop hook
 // subprocesses so the capture attempt cannot be short-circuited at the
