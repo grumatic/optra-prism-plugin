@@ -5,6 +5,15 @@ All notable changes to the Prism plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.5] - 2026-10-29
+
+### Added
+- When the ingest service supports it, each reported commit is also marked as yours or someone else's (for example, a teammate's commit brought in by `git pull`), and merge commits are identified by their parent count. Whether a commit is yours is decided on your machine by comparing its author email with the author email Git would record for your own commits (`GIT_AUTHOR_EMAIL`, `author.email`, `user.email`, or `EMAIL`); neither address is sent. When Git cannot determine your author email, no commit is marked.
+
+### Changed
+- Against an ingest service that does not support this, commit reports are sent exactly as before. If a service stops accepting the newer report format, pending reports are resent in the earlier format instead of pausing delivery.
+- `/prism:status` names the commit report format once the newer one is in use.
+
 ## [0.9.4] - 2026-10-08
 
 ### Fixed
