@@ -175,8 +175,14 @@ function resolveBaseline(data, active) {
   return { baselineHead: value.head, baselineReason: null, cwd };
 }
 
+// The body version is negotiated here, once, and pinned in the marker: a
+// resumed capture must rebuild the same body under the same event_id even if
+// the capability changed in between, or the server answers 409 conflict.
+// Only v2 is written; a v1 marker keeps the shape older plugin versions read.
 function gitCaptureMarker(epoch, active, responseOperationIdValue, baseline) {
-  const { deriveEvidenceEventId } = require('../../lib/git-evidence-contract');
+  const { deriveEvidenceEventId, GIT_EVIDENCE_SCHEMA_VERSION_V2 } = require('../../lib/git-evidence-contract');
+  const { readCapabilityCache, negotiatedEvidenceVersion } = require('../../lib/git-evidence-capability');
+  const schemaVersion = negotiatedEvidenceVersion(readCapabilityCache());
   return {
     eventId: deriveEvidenceEventId(responseOperationIdValue),
     epoch,
@@ -188,6 +194,7 @@ function gitCaptureMarker(epoch, active, responseOperationIdValue, baseline) {
     baselineHead: baseline.baselineHead,
     baselineReason: baseline.baselineReason,
     createdAt: new Date().toISOString(),
+    ...(schemaVersion === GIT_EVIDENCE_SCHEMA_VERSION_V2 ? { evidenceSchemaVersion: schemaVersion } : {}),
   };
 }
 
@@ -245,6 +252,8 @@ async function captureAndEnqueueEvidence(sessionId, marker, { skipCollection = f
     buildUnavailableGitEvidenceEvent,
     validateGitEvidenceEvent,
     canonicalJson,
+    GIT_EVIDENCE_SCHEMA_VERSION,
+    GIT_EVIDENCE_SCHEMA_VERSION_V2,
     MAX_GIT_EVIDENCE_COMMITS,
     MAX_GIT_EVIDENCE_REQUEST_BYTES,
   } = require('../../lib/git-evidence-contract');
@@ -254,6 +263,9 @@ async function captureAndEnqueueEvidence(sessionId, marker, { skipCollection = f
     clearGitCapture(sessionId);
     return;
   }
+
+  // A marker without a pinned version predates v2 negotiation, or was v1.
+  const schemaVersion = marker.evidenceSchemaVersion || GIT_EVIDENCE_SCHEMA_VERSION;
 
   // One absolute deadline shared by both collectors, so a Stop capture is
   // bounded by EVIDENCE_COLLECT_DEADLINE_MS total rather than up to double
@@ -284,7 +296,11 @@ async function captureAndEnqueueEvidence(sessionId, marker, { skipCollection = f
     let range;
     try {
       range = await collectCommittedRange({
-        cwd: marker.canonicalCwd, baselineHead: marker.baselineHead, finalHead: finalState.head, deadlineAt,
+        cwd: marker.canonicalCwd,
+        baselineHead: marker.baselineHead,
+        finalHead: finalState.head,
+        deadlineAt,
+        judgeAuthors: schemaVersion === GIT_EVIDENCE_SCHEMA_VERSION_V2,
       });
     } catch {
       range = null;
@@ -297,6 +313,7 @@ async function captureAndEnqueueEvidence(sessionId, marker, { skipCollection = f
       reason: range.reason || undefined,
       excludedBinaryCount: range.excludedBinaryCount,
       excludedSubmoduleCount: range.excludedSubmoduleCount,
+      foreignCommitFilter: range.foreignCommitFilter,
       commits: range.commits,
     } : unavailableDiff('final_snapshot_failed', { baseHead: marker.baselineHead, head: finalState.head });
   }
@@ -311,6 +328,7 @@ async function captureAndEnqueueEvidence(sessionId, marker, { skipCollection = f
   }
 
   let event = buildGitEvidenceEvent({
+    schemaVersion,
     eventId: marker.eventId,
     // The marker's own createdAt, not the moment this function happens to
     // run: a crash-then-resume of the same marker must reproduce byte-
@@ -630,4 +648,5 @@ module.exports = {
   resumeEvidenceCapture,
   captureAndEnqueueEvidence,
   resolveBaseline,
+  gitCaptureMarker,
 };

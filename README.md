@@ -54,6 +54,18 @@ Prompt capture uses a legacy correlation fallback only when an older host omits
 `prompt_id`. A host that explicitly supplies an invalid `prompt_id` is rejected
 without enqueueing a prompt.
 
+After a response is recorded, Stop also reports the commits made during that
+turn when the ingest service accepts commit evidence: for each commit, its
+identity, its parent and parent count, and the number of added and deleted
+lines. When the service supports it, each commit is also marked as yours or
+someone else's (for example, a teammate's commit brought in by `git pull`).
+That is decided on your machine by comparing the commit's author email with
+the author email Git itself would record for your own new commits (from
+`GIT_AUTHOR_EMAIL`, `author.email`, `user.email`, or `EMAIL`, in Git's order);
+neither address is sent. When Git cannot determine your author email, no
+commit is marked. File paths, diff text, commit messages, and author names are
+never collected.
+
 ## Commands
 
 | Command | Description |
