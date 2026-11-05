@@ -35,7 +35,7 @@ function shellWords(command, env = {}) {
 
 test('every hook command quotes the plugin root placeholder', () => {
   const commands = hookCommands();
-  assert.equal(commands.length, 7);
+  assert.equal(commands.length, 8);
   for (const { event, command } of commands) {
     assert.match(command, /^(?:bash|node) "\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\/scripts\/[^"\s]+"$/, event);
   }

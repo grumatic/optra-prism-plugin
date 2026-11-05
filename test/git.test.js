@@ -111,6 +111,25 @@ test('collects nearest repositories, dirty state, and linked worktrees', () => w
   assert.equal(worktreeContext.value.worktree, true);
 }));
 
+test('a subdirectory of the main checkout yields the same repository identity as its root', () => withDataDir(tempDir('prism-git-data-'), async () => {
+  const { collectFinalGitState } = require('../lib/git');
+  const repo = makeRepo();
+  const subdirectory = path.join(repo, 'src', 'deep');
+  fs.mkdirSync(subdirectory, { recursive: true });
+
+  const atRoot = await collectGitContext(repo, 2_000);
+  const below = await collectGitContext(subdirectory, 2_000);
+  assert.equal(below.status, 'ok');
+  assert.equal(below.value.worktree, false);
+  assert.equal(below.value.coverage, 'ready');
+  assert.equal(below.value.root_fingerprint, atRoot.value.root_fingerprint);
+
+  const finalAtRoot = await collectFinalGitState(repo);
+  const finalBelow = await collectFinalGitState(subdirectory);
+  assert.equal(finalBelow.status, 'ok');
+  assert.equal(finalBelow.rootFingerprint, finalAtRoot.rootFingerprint);
+}));
+
 test('reports non-repositories and missing or timed-out git as fail-open states', () => withDataDir(tempDir('prism-git-data-'), async () => {
   const plain = tempDir('prism-not-repo-');
   assert.equal((await collectGitContext(plain)).status, 'not_repo');
@@ -166,9 +185,9 @@ test('enforces a shared output budget across git commands', () => withDataDir(te
     assert.equal(context.status, 'transient_error');
     assert.deepEqual(fs.readFileSync(callLog, 'utf8').trim().split('\n'), [
       'rev-parse --is-inside-work-tree',
-      'rev-parse --show-toplevel',
       'rev-parse --git-dir',
       'rev-parse --git-common-dir',
+      'rev-parse HEAD',
     ]);
   } finally {
     process.env.PATH = originalPath;

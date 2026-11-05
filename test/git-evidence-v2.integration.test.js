@@ -34,6 +34,7 @@ const { after, before, test } = require('node:test');
 const ROOT = path.resolve(__dirname, '..');
 const SUBMIT_HANDLER = path.join(ROOT, 'hooks', 'scripts', 'submit-handler.js');
 const STOP_HANDLER = path.join(ROOT, 'hooks', 'scripts', 'stop-handler.js');
+const GIT_CONTEXT_HANDLER = path.join(ROOT, 'hooks', 'scripts', 'git-context-handler.js');
 const INGEST_URL = process.env.PRISM_IT_INGEST_URL;
 const API_KEY = process.env.PRISM_IT_API_KEY;
 const DATABASE_URL = process.env.PRISM_IT_DATABASE_URL;
@@ -135,6 +136,8 @@ function runHook(script, input) {
 }
 
 // One real turn: UserPromptSubmit, the commits made during the turn, Stop.
+// `duringTurn` receives the turn's ids, and Stop runs in the `stopCwd` its
+// result names, or in `repo`.
 function runTurn(repo, duringTurn) {
   const sessionId = crypto.randomUUID();
   const promptId = crypto.randomUUID();
@@ -143,7 +146,8 @@ function runTurn(repo, duringTurn) {
   runHook(SUBMIT_HANDLER, {
     cwd: repo, hook_event_name: 'UserPromptSubmit', permission_mode: 'default', prompt: 'git evidence v2 integration', prompt_id: promptId, session_id: sessionId, transcript_path: transcript,
   });
-  const commits = duringTurn();
+  const commits = duringTurn({ sessionId, promptId, transcript });
+  const stopCwd = (commits && commits.stopCwd) || repo;
   const reply = 'git evidence v2 integration reply';
   fs.writeFileSync(transcript, [
     JSON.stringify({ type: 'user', prompt_id: promptId, message: { role: 'user', content: 'request' } }),
@@ -158,7 +162,7 @@ function runTurn(repo, duringTurn) {
     '',
   ].join('\n'));
   runHook(STOP_HANDLER, {
-    cwd: repo, hook_event_name: 'Stop', last_assistant_message: reply, permission_mode: 'default', prompt_id: promptId, session_id: sessionId, stop_hook_active: false, transcript_path: transcript,
+    cwd: stopCwd, hook_event_name: 'Stop', last_assistant_message: reply, permission_mode: 'default', prompt_id: promptId, session_id: sessionId, stop_hook_active: false, transcript_path: transcript,
   });
   return { sessionId, commits };
 }
@@ -349,4 +353,91 @@ test('a v1 turn (an older plugin, or v2 not yet advertised) is still stored as b
   assert.equal(stored.schemaVersion, 'git-evidence/v1');
   assert.equal(stored.foreignCommitFilter, 'NULL');
   assert.deepEqual(stored.commits, [{ commitSha: commits.own, authorFilter: 'NULL', parentCount: 'NULL' }]);
+});
+
+// Turns that move during the turn: the worker stores the commits made after
+// the move, with the baseline and branch of the directory the turn ended in.
+function storedBaseline(sessionId) {
+  const [row] = select(`
+    SELECT evidence_coverage, coalesce(evidence_reason, ''), coalesce(baseline_head, ''), coalesce(repository_branch, '')
+      FROM prism.git_evidence_observations WHERE session_id = '${sessionId}'`);
+  return { coverage: row[0], reason: row[1], baselineHead: row[2], branch: row[3] };
+}
+
+function commitIn(cwd, file, line) {
+  const git = (args) => execFileSync('git', args, { cwd, env: hookEnv, encoding: 'utf8' }).trim();
+  fs.appendFileSync(path.join(cwd, file), `${line}\n`);
+  git(['add', file]);
+  git(['-c', `user.email=${ME}`, 'commit', '-q', '-m', line]);
+  return git(['rev-parse', 'HEAD']);
+}
+
+test('a turn that enters a worktree and ends there stores the worktree commits on its branch', { skip: SKIP }, async () => {
+  const { repo, git } = makeRepo();
+  const base = git(['rev-parse', 'HEAD']);
+  // Clear of the submit's second, so the base commit is unambiguously older.
+  await sleep(2000);
+  const { sessionId, commits } = runTurn(repo, ({ sessionId: id, promptId, transcript }) => {
+    const worktree = path.join(repo, '.claude', 'worktrees', 'it-feature');
+    git(['worktree', 'add', '-q', '-b', 'worktree-it-feature', worktree]);
+    const real = fs.realpathSync.native(worktree);
+    runHook(GIT_CONTEXT_HANDLER, {
+      hook_event_name: 'PostToolUse', session_id: id, prompt_id: promptId, cwd: real, transcript_path: transcript,
+      tool_name: 'EnterWorktree', tool_input: { name: 'it-feature' }, tool_response: { worktreePath: real, worktreeBranch: 'worktree-it-feature' },
+    });
+    return { own: commitIn(real, 'tracked.txt', 'in the worktree'), stopCwd: real };
+  });
+
+  await deliver(sessionId);
+  const stored = await storedObservation(sessionId);
+  assert.deepEqual(stored.commits.map((commit) => commit.commitSha), [commits.own]);
+  assert.deepEqual(storedBaseline(sessionId), {
+    coverage: 'ready', reason: '', baselineHead: base, branch: 'worktree-it-feature',
+  });
+});
+
+test('a worktree created in the turn from a commit made in it stores only the worktree commits', { skip: SKIP }, async () => {
+  const { repo, git } = makeRepo();
+  // No pause after the repository's last commit: the worktree's base is a
+  // commit newer than the turn's start, as after merging a pull request.
+  const { sessionId, commits } = runTurn(repo, ({ sessionId: id, promptId, transcript }) => {
+    const merged = commitIn(repo, 'tracked.txt', 'merged in the turn');
+    const worktree = path.join(repo, '.claude', 'worktrees', 'it-fresh');
+    git(['worktree', 'add', '-q', '-b', 'worktree-it-fresh', worktree]);
+    const real = fs.realpathSync.native(worktree);
+    runHook(GIT_CONTEXT_HANDLER, {
+      hook_event_name: 'PostToolUse', session_id: id, prompt_id: promptId, cwd: real, transcript_path: transcript,
+      tool_name: 'EnterWorktree', tool_input: { name: 'it-fresh' }, tool_response: { worktreePath: real, worktreeBranch: 'worktree-it-fresh' },
+    });
+    return { merged, own: commitIn(real, 'tracked.txt', 'in the fresh worktree'), stopCwd: real };
+  });
+
+  await deliver(sessionId);
+  const stored = await storedObservation(sessionId);
+  assert.deepEqual(stored.commits.map((commit) => commit.commitSha), [commits.own]);
+  assert.deepEqual(storedBaseline(sessionId), {
+    coverage: 'ready', reason: '', baselineHead: commits.merged, branch: 'worktree-it-fresh',
+  });
+});
+
+test('a turn that ends in a subdirectory stores its commits', { skip: SKIP }, async () => {
+  const { repo, git, commitAs } = makeRepo();
+  const base = git(['rev-parse', 'HEAD']);
+  fs.mkdirSync(path.join(repo, 'sub'));
+  const subdirectory = fs.realpathSync.native(path.join(repo, 'sub'));
+  const { sessionId, commits } = runTurn(repo, ({ sessionId: id, promptId, transcript }) => {
+    const own = commitAs(ME, 'tracked.txt', 'at the root');
+    runHook(GIT_CONTEXT_HANDLER, {
+      hook_event_name: 'CwdChanged', session_id: id, prompt_id: promptId, cwd: subdirectory,
+      old_cwd: fs.realpathSync.native(repo), new_cwd: subdirectory, transcript_path: transcript,
+    });
+    return { own, stopCwd: subdirectory };
+  });
+
+  await deliver(sessionId);
+  const stored = await storedObservation(sessionId);
+  assert.deepEqual(stored.commits.map((commit) => commit.commitSha), [commits.own]);
+  assert.deepEqual(storedBaseline(sessionId), {
+    coverage: 'ready', reason: '', baselineHead: base, branch: 'main',
+  });
 });
