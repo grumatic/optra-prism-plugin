@@ -53,6 +53,15 @@
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/send-message-evidence-handler.js\""
           }
         ]
+      },
+      {
+        "matcher": "EnterWorktree",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/git-context-handler.js\""
+          }
+        ]
       }
     ],
     "Stop": [

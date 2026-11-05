@@ -135,6 +135,45 @@ async function gitMetadataForPrompt(data) {
   return null;
 }
 
+// Opens this turn's per-root baselines with the prompt-time head of the
+// worktree root the prompt was submitted from. Best-effort: without it,
+// Stop falls back to the session Git record and then to the reflog. No Git
+// runs for it when the service takes no commit evidence, or when the
+// directory was just seen not to be a repository.
+async function startTurnBaselinesForPrompt(data, activeRecord) {
+  try {
+    const { readCapabilityCache, capabilityAllowsEvidence } = require('../../lib/git-evidence-capability');
+    if (!capabilityAllowsEvidence(readCapabilityCache())) return;
+    const { startTurnBaselines } = require('../../lib/session');
+    const { resolveWorktreeRoot, DEADLINE_MS } = require('../../lib/git');
+    const { HEAD_PATTERN } = require('../../lib/git-evidence-contract');
+    let canonicalCwd = null;
+    try { canonicalCwd = fs.realpathSync.native(data.cwd); } catch {}
+    const envelope = readGit(data.session_id);
+    const notRepository = Boolean(envelope && envelope.status === 'not_repo' && envelope.canonicalCwd === canonicalCwd);
+    const root = canonicalCwd && !notRepository ? await resolveWorktreeRoot(canonicalCwd, DEADLINE_MS) : null;
+    // A value the record would reject drops only the prompt baseline, never
+    // the record that later entries are written to.
+    const promptBaseline = root
+      && envelope
+      && envelope.status === 'ok'
+      && envelope.canonicalCwd === canonicalCwd
+      && envelope.value
+      && typeof envelope.value.head === 'string'
+      && HEAD_PATTERN.test(envelope.value.head)
+      && Number.isFinite(Date.parse(envelope.value.observed_at))
+      ? { root, head: envelope.value.head, observedAt: envelope.value.observed_at }
+      : null;
+    startTurnBaselines(data.session_id, {
+      epoch: activeRecord.epoch,
+      clientEventId: activeRecord.clientEventId,
+      submittedAt: activeRecord.submittedAt,
+      currentRoot: root,
+      promptBaseline,
+    });
+  } catch {}
+}
+
 function payloadHash(payload) {
   return crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex');
 }
@@ -347,6 +386,11 @@ async function main() {
     maxElapsedMs: 2000,
     prioritizeIds: [outboxId],
   });
+
+  // After the prompt itself is enqueued and drained, so the extra Git call
+  // never delays it; nothing in this turn can change directory before the
+  // submit hook returns.
+  await startTurnBaselinesForPrompt(data, activeRecord);
 
   // Only now — after this submission's own prompt is durably enqueued and
   // drained — read whatever the host recorded past the previous active
