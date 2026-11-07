@@ -16,6 +16,9 @@ const {
   readGit,
   readGitCapture,
   clearGitCapture,
+  readTurnBaselines,
+  turnBaselinesMatch,
+  clearTurnBaselines,
 } = require('../../lib/session');
 const {
   MAX_ENTRY_BYTES,
@@ -145,11 +148,48 @@ function minimalResponseEntry(data, turn) {
   };
 }
 
-// Baseline is the prompt-phase head for this turn. A mid-turn CwdChanged
-// refresh of the session Git record must never silently substitute a later
-// head as the baseline, so a record observed after submittedAt is rejected
-// rather than trusted — this fails closed to `baseline_missing`.
-function resolveBaseline(data, active) {
+// A `.git` entry between the directory and that root marks a nested worktree,
+// repository or submodule that was never recorded (an EnterWorktree worktree
+// lives under its main checkout), so the root does not stand in for it.
+function enclosingRecordedRoot(record, realCwd) {
+  if (!record) return null;
+  const path = require('path');
+  const containing = record.roots
+    .map((entry) => entry.root)
+    .filter((root) => realCwd === root || realCwd.startsWith(root.endsWith(path.sep) ? root : `${root}${path.sep}`));
+  const root = containing.sort((left, right) => right.length - left.length)[0];
+  if (!root) return null;
+  for (let dir = realCwd; dir !== root; dir = path.dirname(dir)) {
+    if (path.dirname(dir) === dir || fs.existsSync(path.join(dir, '.git'))) return null;
+  }
+  return root;
+}
+
+function headObservedBySubmit(head, observedAt, active) {
+  const { HEAD_PATTERN } = require('../../lib/git-evidence-contract');
+  return typeof head === 'string'
+    && HEAD_PATTERN.test(head)
+    && Number.isFinite(Date.parse(observedAt))
+    && Date.parse(observedAt) <= Date.parse(active.submittedAt);
+}
+
+// Baseline is the head the Stop directory's worktree root had when this turn
+// began. No later head is substituted for it while that head can still be
+// read — a record observed after submittedAt is rejected rather than
+// trusted — so each step below either yields it or falls through, and the
+// last one fails closed to `baseline_missing`:
+//   1. The session Git record, when it still holds the prompt-time snapshot
+//      of this exact directory (the common case: no move during the turn).
+//   2. This turn's prompt baseline, when the Stop directory is in the
+//      worktree root the prompt was submitted from (a subdirectory `cd`).
+//   3. That root's reflog at submittedAt (or at its last emitted leave), for
+//      any other root, whether or not a hook recorded one.
+//   4. The head a hook stored on entering that root, which is the reflog
+//      value when the hook could read it, and otherwise the head at entry;
+//      only a root whose reflog is unreadable gets here.
+// Git runs here before the response is published, so all of it shares one
+// short prompt-path deadline.
+async function resolveBaseline(data, active, epoch) {
   const envelope = readGit(data.session_id);
   const hasCwd = typeof data.cwd === 'string' && data.cwd.length > 0;
   let realCwd = null;
@@ -160,19 +200,39 @@ function resolveBaseline(data, active) {
   const cwdMatches = hasCwd
     ? (realCwd !== null && envelope && envelope.canonicalCwd === realCwd)
     : Boolean(envelope && envelope.canonicalCwd);
-  const accepted = Boolean(
-    envelope
-    && envelope.status === 'ok'
-    && value
-    && typeof value.head === 'string'
-    && /^[a-f0-9]{40,64}$/.test(value.head)
-    && Number.isFinite(Date.parse(value.observed_at))
-    && Date.parse(value.observed_at) <= Date.parse(active.submittedAt)
-    && cwdMatches,
-  );
   const cwd = hasCwd ? realCwd : (envelope ? envelope.canonicalCwd : null);
-  if (!accepted) return { baselineHead: null, baselineReason: 'baseline_missing', cwd };
-  return { baselineHead: value.head, baselineReason: null, cwd };
+  if (value && cwdMatches && headObservedBySubmit(value.head, value.observed_at, active)) {
+    return { baselineHead: value.head, baselineReason: null, cwd };
+  }
+
+  const missing = { baselineHead: null, baselineReason: 'baseline_missing', cwd };
+  if (!realCwd) return missing;
+  // No Git before publication when its answer cannot matter: a directory
+  // already known not to be a repository, or a service that takes no
+  // evidence (the capture step drops the marker then anyway).
+  if (envelope && envelope.status === 'not_repo' && envelope.canonicalCwd === realCwd) return missing;
+  const { readCapabilityCache, capabilityAllowsEvidence } = require('../../lib/git-evidence-capability');
+  if (!capabilityAllowsEvidence(readCapabilityCache())) return missing;
+
+  const { resolveWorktreeRoot, resolveHeadAt, DEADLINE_MS } = require('../../lib/git');
+  const candidate = readTurnBaselines(data.session_id);
+  const record = turnBaselinesMatch(candidate, { epoch, clientEventId: active.clientEventId }) ? candidate : null;
+  // When Git cannot name the root in time, the deepest recorded root that
+  // contains the Stop directory stands in for it.
+  const deadlineAt = Date.now() + DEADLINE_MS;
+  const root = await resolveWorktreeRoot(realCwd, DEADLINE_MS, { deadlineAt }) || enclosingRecordedRoot(record, realCwd);
+  if (!root) return missing;
+
+  const entry = record ? record.roots.find((item) => item.root === root) : null;
+  const found = (head) => ({ baselineHead: head, baselineReason: null, cwd });
+  if (entry && entry.source === 'prompt' && headObservedBySubmit(entry.head, entry.observedAt, active)) {
+    return found(entry.head);
+  }
+
+  const at = entry && entry.emittedAt !== undefined ? entry.emittedAt : active.submittedAt;
+  const reflog = await resolveHeadAt(root, at, { fallbackToCurrent: false, deadlineAt });
+  if (reflog) return found(reflog.head);
+  return entry && entry.source !== 'prompt' ? found(entry.head) : missing;
 }
 
 // The body version is negotiated here, once, and pinned in the marker: a
@@ -585,7 +645,7 @@ async function main() {
   // this turn's git-capture step (below) has nothing to work with.
   let marker = null;
   try {
-    const baseline = resolveBaseline(data, active);
+    const baseline = await resolveBaseline(data, active, turn.epoch);
     marker = gitCaptureMarker(turn.epoch, active, entry.id, baseline);
   } catch {
     marker = null;
@@ -613,6 +673,11 @@ async function main() {
       : 'io_error';
     reportLocalGap(outcome, serializedBytes, entry.id);
     return;
+  }
+  // The marker now carries this turn's baseline; the per-root record never
+  // outlives its turn.
+  if (publication.state === 'published') {
+    try { clearTurnBaselines(data.session_id); } catch {}
   }
   const summary = publication.state === 'published' ? recordCompletedTurn(data.session_id) : null;
   const { deliverOutboxEntry } = require('../../lib/outbox-delivery');

@@ -40,13 +40,14 @@ Claude Code 2.1.161+ is required for core telemetry and Score v3 support. Claude
 
 ## What It Does
 
-Five hooks run automatically:
+Six hooks run automatically:
 
 | Hook | Purpose |
 |------|---------|
 | **SessionStart** | Activates version metadata, checks for a newer stable release, and loads Prism runtime configuration |
 | **UserPromptSubmit** | Detects a reloaded plugin version, then reviews and captures prompts for scoring |
-| **CwdChanged** | Refreshes sanitized Git repository metadata when the runtime supplies a valid working-directory change |
+| **CwdChanged** | Refreshes sanitized Git repository metadata when the runtime supplies a valid working-directory change, and notes the starting commit of a worktree a turn moves into |
+| **PostToolUse (EnterWorktree)** | Refreshes sanitized Git repository metadata for the entered worktree and notes its starting commit, so its commits are reported at Stop |
 | **PostToolUse (SendMessage)** | Captures successful agent-to-agent send evidence without storing the message body |
 | **Stop** | Captures prompt/response pairs for analytics, tracks turns, and relays the server-side PRISM realtime score |
 
@@ -57,7 +58,10 @@ without enqueueing a prompt.
 After a response is recorded, Stop also reports the commits made during that
 turn when the ingest service accepts commit evidence: for each commit, its
 identity, its parent and parent count, and the number of added and deleted
-lines. When the service supports it, each commit is also marked as yours or
+lines. This includes commits made in a worktree the turn entered (with
+`EnterWorktree` or `cd`) when the turn also ends there; the range starts at the
+commit that worktree was on when the turn began, read from its reflog. When the
+service supports it, each commit is also marked as yours or
 someone else's (for example, a teammate's commit brought in by `git pull`).
 That is decided on your machine by comparing the commit's author email with
 the author email Git itself would record for your own new commits (from
