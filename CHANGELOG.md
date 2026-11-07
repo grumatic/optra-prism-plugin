@@ -5,6 +5,19 @@ All notable changes to the Prism plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.6] - 2026-11-07
+
+### Added
+- Commits made in a worktree that a turn moved into, with `EnterWorktree` or with `cd` in Bash, are now reported when the turn ends there. The range starts at the commit that worktree was on when the turn began, read from its reflog, so a commit made by the same command that entered the worktree is included, and a worktree created during the turn starts from the commit it was created on. When that commit cannot be determined safely, the turn reports no commits rather than a range that could leave out its own.
+- A `PostToolUse` hook on `EnterWorktree` notes the entered worktree's starting commit and refreshes its Git metadata, since `EnterWorktree` does not trigger `CwdChanged`.
+
+### Changed
+- When Git could not be read when the prompt was submitted, the turn's starting commit is now recovered from the reflog at Stop instead of being reported as missing.
+- None of this additional Git work runs when the ingest service does not accept commit reports or the prompt directory is not a repository.
+
+### Fixed
+- A turn that starts or ends in a subdirectory of a repository now reports its commits. Previously the repository could not be identified from a subdirectory, so those commits were not reported and the prompt's Git metadata marked the main checkout as a linked worktree.
+
 ## [0.9.5] - 2026-10-29
 
 ### Added
