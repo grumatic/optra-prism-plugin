@@ -170,6 +170,10 @@ async function startTurnBaselinesForPrompt(data, activeRecord) {
       && Number.isFinite(Date.parse(envelope.value.observed_at))
       ? { root, head: envelope.value.head, observedAt: envelope.value.observed_at }
       : null;
+    // Stop then reads this root's baseline from its reflog instead.
+    if (root && !promptBaseline) {
+      require('../../lib/git-evidence-skip-log').logEvidenceSkip(data.session_id, 'prompt_baseline_missing');
+    }
     startTurnBaselines(data.session_id, {
       epoch: activeRecord.epoch,
       clientEventId: activeRecord.clientEventId,

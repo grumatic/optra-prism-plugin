@@ -19,6 +19,11 @@ const {
   readTurnBaselines,
   turnBaselinesMatch,
   clearTurnBaselines,
+  readLeaveCaptures,
+  appendLeaveCapture,
+  settleLeaveCaptureRoots,
+  leaveCaptureKey,
+  MAX_LEAVE_CAPTURE_ATTEMPTS,
 } = require('../../lib/session');
 const {
   MAX_ENTRY_BYTES,
@@ -46,6 +51,14 @@ function logEvidenceSkip(sessionId, reason) {
 async function refreshCapabilityIfDue() {
   try { await require('../../lib/git-evidence-capability').refreshCapability(); } catch {}
 }
+
+// Worktrees a turn left are reported after its own Stop event, with a budget
+// of their own: a large Stop root can take the whole collection deadline.
+const LEAVE_COLLECT_DEADLINE_MS = 2000;
+const MAX_LEAVE_ROOTS_PER_TURN = 4;
+// Reading the heads of left roots no hook saw the turn leave, right after
+// the response is published and before it is sent.
+const LEAVE_RECORD_HEAD_DEADLINE_MS = 250;
 
 function sha256(value) {
   return typeof value === 'string' ? crypto.createHash('sha256').update(value).digest('hex') : null;
@@ -175,6 +188,92 @@ function enclosingRecordedRoot(record, realCwd) {
     if (path.dirname(dir) === dir || fs.existsSync(path.join(dir, '.git'))) return null;
   }
   return root;
+}
+
+/**
+ * The worktree roots this turn recorded a baseline for, other than the one
+ * Stop runs in: commits made there would otherwise go unreported. Reads the
+ * turn's own record only; no Git runs before the response is published. The
+ * Stop root is the deepest recorded root containing the Stop directory, so a
+ * subdirectory of the prompt root is not mistaken for a root the turn left.
+ *
+ * The prompt root is a candidate even when the submit-time Git read timed
+ * out and left it without a baseline: it then carries the submit time
+ * instead, and its baseline is read from its reflog once the response is
+ * published.
+ */
+function leftRootsAtStop(data, active, epoch) {
+  const { HEAD_PATTERN } = require('../../lib/git-evidence-contract');
+  const record = readTurnBaselines(data.session_id);
+  if (!turnBaselinesMatch(record, { epoch, clientEventId: active.clientEventId })) return [];
+  let stopDir = null;
+  if (typeof data.cwd === 'string' && data.cwd.length > 0) {
+    try { stopDir = fs.realpathSync.native(data.cwd); } catch { stopDir = null; }
+  } else {
+    const envelope = readGit(data.session_id);
+    stopDir = envelope ? envelope.canonicalCwd : null;
+  }
+  const promptRootUnrecorded = typeof record.promptRoot === 'string'
+    && !record.roots.some((entry) => entry.root === record.promptRoot);
+  const known = promptRootUnrecorded
+    ? { ...record, roots: [{ root: record.promptRoot }, ...record.roots] }
+    : record;
+  const stopRoot = stopDir ? enclosingRecordedRoot(known, stopDir) : null;
+  const left = record.roots
+    .filter((entry) => entry.root !== stopRoot && HEAD_PATTERN.test(entry.head))
+    .map((entry) => ({
+      root: entry.root,
+      baselineHead: entry.head,
+      ...(entry.leftHead ? { leftHead: entry.leftHead } : {}),
+    }));
+  if (promptRootUnrecorded && record.promptRoot !== stopRoot) {
+    left.unshift({ root: record.promptRoot, baselineAt: record.submittedAt });
+  }
+  return left;
+}
+
+/**
+ * Right after the response is published, before the turn's baselines are
+ * cleared: keeps the roots this turn left so their evidence can be collected
+ * after the turn's own, and resumed if this process ends first. Added next
+ * to any earlier turn still waiting. The capture gate is checked when the
+ * roots are collected, after this Stop's refresh, not here.
+ */
+async function recordLeaveCaptures(sessionId, epoch, active, responseOperationIdValue, leftRoots) {
+  if (leftRoots.length === 0) return false;
+  const { readCapabilityCache, negotiatedEvidenceVersion, currentBindingDigest } = require('../../lib/git-evidence-capability');
+  const { GIT_EVIDENCE_SCHEMA_VERSION_V2 } = require('../../lib/git-evidence-contract');
+  const { readHead } = require('../../lib/git');
+  const schemaVersion = negotiatedEvidenceVersion(readCapabilityCache());
+  const bindingDigest = currentBindingDigest();
+  // A root no hook saw the turn leave is bounded by its head now, at the end
+  // of this turn: a later hook that collects it must not take a commit the
+  // next turn made there. Only the roots that will be collected, within one
+  // short budget; a root left without one falls back to its head when
+  // collected.
+  const deadlineAt = Date.now() + LEAVE_RECORD_HEAD_DEADLINE_MS;
+  const roots = [];
+  for (const [index, root] of leftRoots.entries()) {
+    if (root.leftHead || index >= MAX_LEAVE_ROOTS_PER_TURN || Date.now() >= deadlineAt) {
+      roots.push(root);
+      continue;
+    }
+    const head = await readHead(root.root, { deadlineAt });
+    roots.push(head ? { ...root, leftHead: head } : root);
+  }
+  const { written, dropped } = appendLeaveCapture(sessionId, {
+    epoch,
+    clientEventId: active.clientEventId,
+    submitPromptId: active.submitPromptId,
+    serverPromptId: active.serverPromptId,
+    responseOperationId: responseOperationIdValue,
+    createdAt: new Date().toISOString(),
+    ...(schemaVersion === GIT_EVIDENCE_SCHEMA_VERSION_V2 ? { evidenceSchemaVersion: schemaVersion } : {}),
+    ...(bindingDigest ? { bindingDigest } : {}),
+    roots,
+  });
+  if (dropped > 0) logEvidenceSkip(sessionId, 'leave_overflow');
+  return written;
 }
 
 function headObservedBySubmit(head, observedAt, active) {
@@ -393,17 +492,9 @@ async function captureAndEnqueueEvidence(sessionId, marker, { skipCollection = f
     } catch {
       range = null;
     }
-    diff = range ? {
-      baseHead: marker.baselineHead || undefined,
-      head: finalState.head,
-      ancestry: range.ancestry,
-      coverage: range.coverage,
-      reason: range.reason || undefined,
-      excludedBinaryCount: range.excludedBinaryCount,
-      excludedSubmoduleCount: range.excludedSubmoduleCount,
-      foreignCommitFilter: range.foreignCommitFilter,
-      commits: range.commits,
-    } : unavailableDiff('final_snapshot_failed', { baseHead: marker.baselineHead, head: finalState.head });
+    diff = range
+      ? diffFromRange(range, marker.baselineHead, finalState.head)
+      : unavailableDiff('final_snapshot_failed', { baseHead: marker.baselineHead, head: finalState.head });
   }
 
   // Belt: the collector already caps a range at MAX_GIT_EVIDENCE_COMMITS
@@ -472,16 +563,261 @@ async function captureAndEnqueueEvidence(sessionId, marker, { skipCollection = f
 async function resumeEvidenceCapture(sessionId) {
   const { EVIDENCE_RESUME_MAX_AGE_MS } = require('../../lib/git');
   const marker = readGitCapture(sessionId);
-  if (!marker) return;
-  const turn = readTurn(sessionId);
-  const resumable = Boolean(
-    turn
-    && ((turn.epoch === marker.epoch && turn.active && turn.active.status === 'consumed') || turn.epoch > marker.epoch),
-  );
-  if (!resumable) return;
+  if (marker) {
+    const turn = readTurn(sessionId);
+    const resumable = Boolean(
+      turn
+      && ((turn.epoch === marker.epoch && turn.active && turn.active.status === 'consumed') || turn.epoch > marker.epoch),
+    );
+    if (resumable) {
+      const stale = Date.now() - Date.parse(marker.createdAt) > EVIDENCE_RESUME_MAX_AGE_MS;
+      await captureAndEnqueueEvidence(sessionId, marker, { skipCollection: stale });
+    }
+  }
+  // Leave captures are written only once the response is published, so any
+  // left here belong to a finished turn.
+  await captureLeaveEvidence(sessionId);
+}
 
-  const stale = Date.now() - Date.parse(marker.createdAt) > EVIDENCE_RESUME_MAX_AGE_MS;
-  await captureAndEnqueueEvidence(sessionId, marker, { skipCollection: stale });
+function diffFromRange(range, baseHead, head) {
+  return {
+    baseHead: baseHead || undefined,
+    head,
+    ancestry: range.ancestry,
+    coverage: range.coverage,
+    reason: range.reason || undefined,
+    excludedBinaryCount: range.excludedBinaryCount,
+    excludedSubmoduleCount: range.excludedSubmoduleCount,
+    foreignCommitFilter: range.foreignCommitFilter,
+    commits: range.commits,
+  };
+}
+
+/**
+ * Reports the commits made in each worktree published turns left before
+ * their Stop, one event per worktree that has commits, under that turn's own
+ * correlation and a leave event id of its own. The range ends at the head the
+ * root had when the turn left it, or, when no hook saw the turn leave, at the
+ * head the Stop recorded for it. When that read failed, the head now stands
+ * in only in that same Stop (`recordedBy`, its response operation id); a
+ * later hook takes the head the root's reflog gives for the time the turn
+ * was recorded. A turn captured under another binding is
+ * settled unreported. It starts at the
+ * root's baseline, or, for a prompt root recorded with only the submit time,
+ * at the head its reflog gives for that time. `git status` is
+ * skipped and `dirty` omitted. A root is settled once its event is queued or
+ * it cannot be reported, with the reason logged; running out of time keeps
+ * it for a later hook. Settled roots are removed from the record as it is
+ * then, so a turn appended meanwhile is kept. Returns the event ids queued.
+ */
+async function captureLeaveEvidence(sessionId, { deadlineMs = LEAVE_COLLECT_DEADLINE_MS, recordedBy = null } = {}) {
+  const record = readLeaveCaptures(sessionId);
+  if (!record) return [];
+  const { readCapabilityCache, captureClosedReason, currentBindingDigest } = require('../../lib/git-evidence-capability');
+  const {
+    EVIDENCE_RESUME_MAX_AGE_MS, collectFinalGitState, collectCommittedRange, resolveHeadAt,
+  } = require('../../lib/git');
+  const {
+    buildGitEvidenceEvent,
+    validateGitEvidenceEvent,
+    canonicalJson,
+    deriveLeaveEvidenceEventId,
+    worktreeKey,
+    GIT_EVIDENCE_SCHEMA_VERSION,
+    GIT_EVIDENCE_SCHEMA_VERSION_V2,
+    MAX_GIT_EVIDENCE_REQUEST_BYTES,
+  } = require('../../lib/git-evidence-contract');
+  const { enqueueEvidence } = require('../../lib/git-evidence-outbox');
+
+  const settled = new Set();
+  const closed = captureClosedReason(readCapabilityCache());
+  if (closed) {
+    logEvidenceSkip(sessionId, `capability_${closed}`);
+    for (const turn of record.turns) for (const root of turn.roots) settled.add(leaveCaptureKey(turn, root));
+    settleLeaveCaptureRoots(sessionId, settled);
+    return [];
+  }
+
+  const deadlineAt = Date.now() + deadlineMs;
+  const outOfTime = () => Date.now() >= deadlineAt;
+  const bindingDigest = currentBindingDigest();
+  const queued = [];
+  const retried = new Set();
+
+  for (const turn of record.turns) {
+    const schemaVersion = turn.evidenceSchemaVersion || GIT_EVIDENCE_SCHEMA_VERSION;
+    const stale = Date.now() - Date.parse(turn.createdAt) > EVIDENCE_RESUME_MAX_AGE_MS;
+    // Captured under another API key or ingest: never sent to this one.
+    if (turn.bindingDigest && turn.bindingDigest !== bindingDigest) {
+      logEvidenceSkip(sessionId, 'binding_mismatch');
+      for (const root of turn.roots) settled.add(leaveCaptureKey(turn, root));
+      continue;
+    }
+    for (const [index, root] of turn.roots.entries()) {
+      const key = leaveCaptureKey(turn, root);
+      const settle = (reason) => {
+        if (reason) logEvidenceSkip(sessionId, reason);
+        settled.add(key);
+      };
+      // Kept for a later hook: logged, left in the record.
+      const keep = () => logEvidenceSkip(sessionId, 'leave_budget_exhausted');
+
+      if (index >= MAX_LEAVE_ROOTS_PER_TURN) { settle('leave_budget_exhausted'); continue; }
+      // Left at the head it started from: nothing to report, no Git needed.
+      if (root.leftHead && root.leftHead === root.baselineHead) { settle(null); continue; }
+      if (outOfTime()) { keep(); continue; }
+      if (!root.leftHead && stale) { settle('leave_stale'); continue; }
+
+      // Running out of time while collecting this root: kept for a later
+      // hook, unless it already had at least half the budget and so is
+      // likely too large to fit any hook's; such a root is given up on its
+      // last allowed try rather than held over, costing every hook, forever.
+      const fullTry = deadlineAt - Date.now() >= deadlineMs / 2;
+      const timedOut = () => {
+        if (!fullTry) { keep(); return; }
+        if ((root.attempts || 0) + 1 >= MAX_LEAVE_CAPTURE_ATTEMPTS) logEvidenceSkip(sessionId, 'leave_range_timeout');
+        else keep();
+        retried.add(key);
+      };
+
+      let state = null;
+      try {
+        state = await collectFinalGitState(root.root, deadlineMs, { deadlineAt, skipDirty: true });
+      } catch {
+        state = null;
+      }
+      if (!state || state.status !== 'ok' || !state.remote || !state.rootFingerprint) {
+        if (outOfTime()) timedOut(); else settle('leave_root_gone');
+        continue;
+      }
+      // Without a leftHead (the Stop's own read of it ran out of time), the
+      // head now is this turn's only in the Stop that recorded the turn;
+      // any later hook bounds the range at the head the root had when the
+      // turn was recorded, from its reflog, so a commit the next turn made
+      // there is not taken for this one's.
+      let finalHead = root.leftHead;
+      if (!finalHead && turn.responseOperationId === recordedBy) finalHead = state.head;
+      if (!finalHead) {
+        let bound = null;
+        try {
+          const at = new Date(Date.parse(turn.createdAt) + 1000).toISOString();
+          bound = await resolveHeadAt(root.root, at, { fallbackToCurrent: true, deadlineAt });
+        } catch {
+          bound = null;
+        }
+        if (!bound) {
+          if (outOfTime()) timedOut(); else settle('leave_final_head_missing');
+          continue;
+        }
+        finalHead = bound.head;
+      }
+
+      // A prompt root the submit-time read missed: its head at submit, from
+      // its own reflog. Never its current head, which may already hold the
+      // turn's commits. The same time gives the same answer on a later try.
+      let baselineHead = root.baselineHead;
+      if (!baselineHead) {
+        let resolved = null;
+        try {
+          resolved = await resolveHeadAt(root.root, root.baselineAt, { fallbackToCurrent: false, deadlineAt });
+        } catch {
+          resolved = null;
+        }
+        if (!resolved) {
+          if (outOfTime()) timedOut(); else settle('leave_baseline_missing');
+          continue;
+        }
+        baselineHead = resolved.head;
+      }
+
+      let range = null;
+      try {
+        range = await collectCommittedRange({
+          cwd: root.root,
+          baselineHead,
+          finalHead,
+          deadlineAt,
+          judgeAuthors: schemaVersion === GIT_EVIDENCE_SCHEMA_VERSION_V2,
+        });
+      } catch {
+        range = null;
+      }
+      if (!range) {
+        if (outOfTime()) timedOut(); else settle('leave_range_failed');
+        continue;
+      }
+      if (!Array.isArray(range.commits) || range.commits.length === 0) {
+        // A range the collector could not walk comes back empty too: out of
+        // time it is kept, otherwise (a rewritten history, more commits than
+        // one event holds) it is settled with its reason logged. A ready
+        // empty range is a worktree left without committing; the turn's own
+        // Stop event already carries its snapshot.
+        if (range.coverage === 'ready') settle(null);
+        else if (range.reason === 'final_snapshot_failed' && outOfTime()) timedOut();
+        else settle(`leave_${range.reason || 'unavailable'}`);
+        continue;
+      }
+
+      const event = buildGitEvidenceEvent({
+        schemaVersion,
+        eventId: deriveLeaveEvidenceEventId(turn.responseOperationId, worktreeKey(root.root)),
+        // Fixed at the moment the turn's leave captures were recorded, so a
+        // resumed collection rebuilds the same bytes under the same id.
+        observedAt: turn.createdAt,
+        sessionId,
+        clientEventId: turn.clientEventId,
+        hostPromptId: turn.submitPromptId,
+        serverPromptId: turn.serverPromptId,
+        responseOperationId: turn.responseOperationId,
+        repository: {
+          host: state.remote.host,
+          ownerPath: state.remote.ownerPath,
+          name: state.remote.repo,
+          rootFingerprint: state.rootFingerprint,
+          branch: state.branch,
+          head: finalHead,
+          phase: 'stop',
+        },
+        diff: diffFromRange(range, baselineHead, finalHead),
+      });
+      if (!event) { settle('event_build_failed'); continue; }
+      if (Buffer.byteLength(canonicalJson(event), 'utf8') > MAX_GIT_EVIDENCE_REQUEST_BYTES
+        || validateGitEvidenceEvent(event) !== null) {
+        settle('event_invalid');
+        continue;
+      }
+      const result = enqueueEvidence({
+        eventId: event.event_id,
+        schemaVersion: event.schema_version,
+        observedAt: event.observed_at,
+        createdAt: new Date().toISOString(),
+        ...((turn.bindingDigest || bindingDigest) ? { bindingDigest: turn.bindingDigest || bindingDigest } : {}),
+        correlation: {
+          sessionId,
+          clientEventId: turn.clientEventId,
+          hostPromptId: turn.submitPromptId,
+          serverPromptId: turn.serverPromptId,
+          responseOperationId: turn.responseOperationId,
+        },
+        payload: event,
+      });
+      if (result.outcome === 'created' || result.outcome === 'existing') {
+        queued.push(event.event_id);
+        settle(null);
+      } else if (result.outcome === 'io_error') {
+        // Kept: the next hook tries the same event again.
+      } else if (result.outcome === 'conflict') {
+        settle('leave_conflict');
+      } else {
+        // invalid, oversized and capacity_full: the outbox has already left
+        // a terminal marker for the last two.
+        settle(null);
+      }
+    }
+  }
+
+  settleLeaveCaptureRoots(sessionId, settled, retried);
+  return queued;
 }
 
 function recordCompletedTurn(sessionId) {
@@ -685,6 +1021,9 @@ async function main() {
   } catch {
     marker = null;
   }
+  // Read before publication: the turn's baselines are cleared right after.
+  let leftRoots = [];
+  try { leftRoots = leftRootsAtStop(data, active, turn.epoch); } catch { leftRoots = []; }
   const publication = publishAndConsumeActive(data.session_id, {
     epoch: turn.epoch,
     clientEventId: active.clientEventId,
@@ -712,6 +1051,7 @@ async function main() {
   // The marker now carries this turn's baseline; the per-root record never
   // outlives its turn.
   if (publication.state === 'published') {
+    try { await recordLeaveCaptures(data.session_id, turn.epoch, active, entry.id, leftRoots); } catch {}
     try { clearTurnBaselines(data.session_id); } catch {}
   }
   const summary = publication.state === 'published' ? recordCompletedTurn(data.session_id) : null;
@@ -731,12 +1071,17 @@ async function main() {
     await refreshCapabilityIfDue();
     if (marker) {
       try { await captureAndEnqueueEvidence(data.session_id, marker); } catch {}
+    }
+    // After the turn's own event, so that one is queued first.
+    let leaveIds = [];
+    try { leaveIds = await captureLeaveEvidence(data.session_id, { recordedBy: entry.id }); } catch { leaveIds = []; }
+    if (marker || leaveIds.length > 0) {
       try {
         const { drainEvidence } = require('../../lib/git-evidence-delivery');
         await drainEvidence({
           limit: STOP_EVIDENCE_DRAIN_LIMIT,
           maxElapsedMs: STOP_EVIDENCE_DRAIN_ELAPSED_MS,
-          prioritizeIds: [marker.eventId],
+          prioritizeIds: [...(marker ? [marker.eventId] : []), ...leaveIds],
         });
       } catch {}
     }
@@ -751,6 +1096,7 @@ module.exports = {
   main,
   resumeEvidenceCapture,
   captureAndEnqueueEvidence,
+  captureLeaveEvidence,
   resolveBaseline,
   gitCaptureMarker,
 };

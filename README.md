@@ -60,7 +60,12 @@ turn when the ingest service accepts commit evidence: for each commit, its
 identity, its parent and parent count, and the number of added and deleted
 lines. This includes commits made in a worktree the turn entered (with
 `EnterWorktree` or `cd`) when the turn also ends there; the range starts at the
-commit that worktree was on when the turn began, read from its reflog. When the
+commit that worktree was on when the turn began, read from its reflog. Commits
+made in a worktree the turn left before it ended are reported separately, up to
+the commit that worktree was on when the turn left it. When the service cannot
+be reached or its commit-evidence support has not been rechecked within the
+last hour, these reports wait on your machine (for up to 30 days) and are sent
+by a later Stop or session start. When the
 service supports it, each commit is also marked as yours or
 someone else's (for example, a teammate's commit brought in by `git pull`).
 That is decided on your machine by comparing the commit's author email with
