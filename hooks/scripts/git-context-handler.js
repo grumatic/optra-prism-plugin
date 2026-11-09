@@ -3,7 +3,7 @@
 
 const path = require('path');
 const {
-  collectGitContext, resolveWorktreeRoot, resolveHeadAt, ROOT_BASELINE_DEADLINE_MS,
+  collectGitContext, resolveWorktreeRoot, resolveHeadAt, readHead, ROOT_BASELINE_DEADLINE_MS,
 } = require('../../lib/git');
 const {
   writeGit,
@@ -91,16 +91,47 @@ async function recordEnteredRoot(data, directory) {
   const record = readTurnBaselines(data.session_id);
   if (!turnBaselinesMatch(record, expected)) return;
   // No Git for a baseline a service that takes no commit evidence never uses.
-  const { readCapabilityCache, capabilityAllowsEvidence } = require('../../lib/git-evidence-capability');
-  if (!capabilityAllowsEvidence(readCapabilityCache())) return;
+  // Capture, not delivery: an old cache still records the baseline.
+  const { readCapabilityCache, captureClosedReason } = require('../../lib/git-evidence-capability');
+  const closed = captureClosedReason(readCapabilityCache());
+  if (closed) {
+    require('../../lib/git-evidence-skip-log').logEvidenceSkip(data.session_id, `capability_${closed}`);
+    return;
+  }
 
   // One budget for the root and the reflog lookups together.
   const deadlineAt = Date.now() + ROOT_BASELINE_DEADLINE_MS;
   const root = await resolveWorktreeRoot(directory, ROOT_BASELINE_DEADLINE_MS, { deadlineAt });
   if (root === record.currentRoot) return;
+  // The root being left: the head it has now bounds the commits Stop reports
+  // for it, so a later commit there by another session is not this turn's.
+  // It is read last, with whatever budget the entered root's own baseline
+  // left over: without it Stop falls back to that root's head at Stop, while
+  // a missing baseline would lose the entered root altogether.
+  //
+  // A prompt root the submit-time read missed has no entry to hold that
+  // head: its head at submit is read from its reflog first, after the
+  // entered root's baseline, so it is recorded as the prompt baseline and
+  // then left like any other root.
+  const leavingRoot = async () => {
+    let promptHead = null;
+    const promptUnrecorded = typeof record.promptRoot === 'string'
+      && record.currentRoot === record.promptRoot
+      && !record.roots.some((entry) => entry.root === record.promptRoot);
+    if (promptUnrecorded) {
+      const recovered = await resolveHeadAt(record.promptRoot, record.submittedAt, { fallbackToCurrent: false, deadlineAt });
+      promptHead = recovered ? recovered.head : null;
+    }
+    const leaving = record.currentRoot
+      && (promptHead || record.roots.some((entry) => entry.root === record.currentRoot))
+      ? record.currentRoot
+      : null;
+    const leftHead = leaving ? await readHead(leaving, { deadlineAt }) : null;
+    return { leaving, leftHead, ...(promptHead ? { promptHead } : {}) };
+  };
   if (!root) {
     // Outside any worktree: the turn has left the current root.
-    enterTurnRoot(data.session_id, expected, { root: null });
+    enterTurnRoot(data.session_id, expected, { root: null, ...(await leavingRoot()) });
     return;
   }
 
@@ -121,6 +152,7 @@ async function recordEnteredRoot(data, directory) {
     head: baseline ? baseline.head : null,
     observedAt: baseline ? baseline.observedAt : new Date().toISOString(),
     source: baselineSource(data),
+    ...(await leavingRoot()),
   });
 }
 
