@@ -5,6 +5,20 @@ All notable changes to the Prism plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.7] - 2026-11-09
+
+### Added
+- Commits made in a worktree that a turn left before it ended (with `EnterWorktree`, `cd`, or `ExitWorktree` back to the main checkout) are now reported, each worktree separately, up to the commit it was on when the turn left it. Previously only the worktree the turn ended in was reported.
+
+### Changed
+- Commits are now captured even when the plugin has not rechecked within the last hour whether the ingest service accepts commit reports, for example in a session left open for hours. The reports wait on your machine, for up to 30 days, and are sent once that check succeeds at a later Stop or session start. Capture stops only when the service itself reports that it does not accept commit reports or that the API key is not valid.
+- Stop now sends up to eight waiting commit reports instead of one, so a backlog clears within a few turns.
+- Commit reports waiting on your machine are sent only to the API key and ingest URL they were captured for. When the local queue is full, reports for another API key or ingest URL are discarded first, never the current ones.
+- Each time commit reporting is skipped, the reason is written to the plugin's debug log, at most once an hour per session and reason.
+
+### Fixed
+- When Git could not be read in time when the prompt was submitted, the commits of the worktree the prompt was submitted from are no longer lost if the turn moves to another worktree.
+
 ## [0.9.6] - 2026-11-07
 
 ### Added
