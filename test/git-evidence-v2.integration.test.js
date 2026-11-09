@@ -364,6 +364,31 @@ function storedBaseline(sessionId) {
   return { coverage: row[0], reason: row[1], baselineHead: row[2], branch: row[3] };
 }
 
+// Every observation stored for the session, keyed by branch, once `count` of
+// them are there: a turn that left a worktree stores one per worktree.
+async function storedByBranch(sessionId, count) {
+  assert.match(sessionId, /^[0-9a-f-]{36}$/);
+  const deadline = Date.now() + PERSIST_TIMEOUT_MS;
+  for (;;) {
+    const rows = select(`
+      SELECT o.event_id, o.schema_version, coalesce(o.repository_branch, ''), o.evidence_coverage,
+             coalesce(o.baseline_head, ''), coalesce(rc.commit_sha, '')
+        FROM prism.git_evidence_observations o
+        LEFT JOIN prism.git_evidence_observation_changes oc ON oc.observation_id = o.id
+        LEFT JOIN prism.repository_changes rc ON rc.id = oc.repository_change_id
+       WHERE o.session_id = '${sessionId}'
+       ORDER BY o.event_id, oc.evidence_ordinal`);
+    const byBranch = {};
+    for (const [eventId, schemaVersion, branch, coverage, baselineHead, commitSha] of rows) {
+      byBranch[branch] = byBranch[branch] || { eventId, schemaVersion, coverage, baselineHead, commits: [] };
+      if (commitSha) byBranch[branch].commits.push(commitSha);
+    }
+    if (Object.keys(byBranch).length >= count) return byBranch;
+    assert.ok(Date.now() < deadline, `${Object.keys(byBranch).length} of ${count} observations stored for ${sessionId}`);
+    await sleep(1000);
+  }
+}
+
 function commitIn(cwd, file, line) {
   const git = (args) => execFileSync('git', args, { cwd, env: hookEnv, encoding: 'utf8' }).trim();
   fs.appendFileSync(path.join(cwd, file), `${line}\n`);
@@ -396,8 +421,9 @@ test('a turn that enters a worktree and ends there stores the worktree commits o
   });
 });
 
-test('a worktree created in the turn from a commit made in it stores only the worktree commits', { skip: SKIP }, async () => {
+test('a worktree created in the turn from a commit made in it stores the worktree commits, and the checkout it left its own', { skip: SKIP }, async () => {
   const { repo, git } = makeRepo();
+  const base = git(['rev-parse', 'HEAD']);
   // No pause after the repository's last commit: the worktree's base is a
   // commit newer than the turn's start, as after merging a pull request.
   const { sessionId, commits } = runTurn(repo, ({ sessionId: id, promptId, transcript }) => {
@@ -413,10 +439,63 @@ test('a worktree created in the turn from a commit made in it stores only the wo
   });
 
   await deliver(sessionId);
+  const stored = await storedByBranch(sessionId, 2);
+  assert.equal(stored['worktree-it-fresh'].coverage, 'ready');
+  assert.equal(stored['worktree-it-fresh'].baselineHead, commits.merged);
+  assert.deepEqual(stored['worktree-it-fresh'].commits, [commits.own]);
+  // The commit made in the checkout the turn left, under its own event.
+  assert.equal(stored.main.baselineHead, base);
+  assert.deepEqual(stored.main.commits, [commits.merged]);
+  assert.notEqual(stored.main.eventId, stored['worktree-it-fresh'].eventId);
+});
+
+test('a turn that commits in two worktrees of one repository stores both, one observation each', { skip: SKIP }, async () => {
+  const { repo, git } = makeRepo();
+  const worktree = (name) => {
+    const dir = path.join(repo, '.claude', 'worktrees', name);
+    git(['worktree', 'add', '-q', '-b', `worktree-${name}`, dir]);
+    return fs.realpathSync.native(dir);
+  };
+  const left = worktree('it-left');
+  const stop = worktree('it-stop');
+  const leftBase = git(['rev-parse', 'HEAD']);
+  await sleep(2000);
+  const { sessionId, commits } = runTurn(left, ({ sessionId: id, promptId, transcript }) => {
+    const inLeft = commitIn(left, 'tracked.txt', 'in the first worktree');
+    runHook(GIT_CONTEXT_HANDLER, {
+      hook_event_name: 'PostToolUse', session_id: id, prompt_id: promptId, cwd: stop, transcript_path: transcript,
+      tool_name: 'EnterWorktree', tool_input: { name: 'it-stop' }, tool_response: { worktreePath: stop, worktreeBranch: 'worktree-it-stop' },
+    });
+    return { inLeft, inStop: commitIn(stop, 'tracked.txt', 'in the second worktree'), stopCwd: stop };
+  });
+
+  await deliver(sessionId);
+  const stored = await storedByBranch(sessionId, 2);
+  assert.deepEqual(stored['worktree-it-stop'].commits, [commits.inStop]);
+  assert.deepEqual(stored['worktree-it-left'].commits, [commits.inLeft]);
+  assert.equal(stored['worktree-it-left'].baselineHead, leftBase);
+  assert.equal(stored['worktree-it-left'].schemaVersion, stored['worktree-it-stop'].schemaVersion);
+  if (V1_ONLY) assert.equal(stored['worktree-it-left'].schemaVersion, 'git-evidence/v1');
+});
+
+test('a turn captured on an hour-old capability cache is delivered once Stop refreshes it', { skip: SKIP }, async () => {
+  const { readCapabilityCache } = require('../lib/git-evidence-capability');
+  const { bindingDigest } = require('../lib/binding');
+  const old = new Date(Date.now() - 2 * 3600000).toISOString();
+  fs.writeFileSync(
+    path.join(dataDir, 'runtime', `git-evidence-capability-${bindingDigest(API_KEY, INGEST_URL)}.json`),
+    JSON.stringify({ ...readCapabilityCache(), last_success_at: old, checked_at: old }),
+  );
+  const { repo, git } = makeRepo();
+  const base = git(['rev-parse', 'HEAD']);
+  await sleep(2000);
+  const { sessionId, commits } = runTurn(repo, () => ({ own: commitIn(repo, 'tracked.txt', 'on an old cache') }));
+
+  await deliver(sessionId);
   const stored = await storedObservation(sessionId);
   assert.deepEqual(stored.commits.map((commit) => commit.commitSha), [commits.own]);
   assert.deepEqual(storedBaseline(sessionId), {
-    coverage: 'ready', reason: '', baselineHead: commits.merged, branch: 'worktree-it-fresh',
+    coverage: 'ready', reason: '', baselineHead: base, branch: 'main',
   });
 });
 
