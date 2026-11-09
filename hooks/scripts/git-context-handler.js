@@ -91,8 +91,13 @@ async function recordEnteredRoot(data, directory) {
   const record = readTurnBaselines(data.session_id);
   if (!turnBaselinesMatch(record, expected)) return;
   // No Git for a baseline a service that takes no commit evidence never uses.
-  const { readCapabilityCache, capabilityAllowsEvidence } = require('../../lib/git-evidence-capability');
-  if (!capabilityAllowsEvidence(readCapabilityCache())) return;
+  // Capture, not delivery: an old cache still records the baseline.
+  const { readCapabilityCache, captureClosedReason } = require('../../lib/git-evidence-capability');
+  const closed = captureClosedReason(readCapabilityCache());
+  if (closed) {
+    require('../../lib/git-evidence-skip-log').logEvidenceSkip(data.session_id, `capability_${closed}`);
+    return;
+  }
 
   // One budget for the root and the reflog lookups together.
   const deadlineAt = Date.now() + ROOT_BASELINE_DEADLINE_MS;

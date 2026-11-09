@@ -66,17 +66,24 @@ async function resumeEvidence(sessionId, report) {
   }
 }
 
-// Refreshes the git-evidence/v1 capability at most once every five minutes,
-// then drains the backlog when the gate is open. Runs after recoverOutbox so
-// a slow config endpoint can never delay prompt/response recovery.
+// Refreshes the git-evidence/v1 capability at most once every five minutes.
+// Runs after recoverOutbox so a slow config endpoint can never delay
+// prompt/response recovery, and before resume so a missing cache does not
+// drop the marker resume is about to collect.
+async function refreshEvidenceCapability(report) {
+  try {
+    await require('../../lib/git-evidence-capability').refreshCapability();
+  } catch {
+    report('git evidence capability refresh failed');
+  }
+}
+
+// Drains the backlog. drainEvidence checks the delivery gate itself (and
+// refreshes only when due, which the refresh above has just done).
 async function drainEvidenceBacklog(report) {
   try {
-    const { refreshCapability, capabilityAllowsEvidence } = require('../../lib/git-evidence-capability');
     const { drainEvidence } = require('../../lib/git-evidence-delivery');
-    const snapshot = await refreshCapability();
-    if (capabilityAllowsEvidence(snapshot)) {
-      await drainEvidence({ limit: 8, maxElapsedMs: 750 });
-    }
+    await drainEvidence({ limit: 8, maxElapsedMs: 750 });
   } catch {
     report('git evidence drain failed');
   }
@@ -100,6 +107,7 @@ async function main() {
   }
   if (!validLifecycle) return 0;
   await recoverOutbox(report);
+  await refreshEvidenceCapability(report);
   await resumeEvidence(data.session_id, report);
   await drainEvidenceBacklog(report);
 

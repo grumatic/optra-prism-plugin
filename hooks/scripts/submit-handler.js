@@ -142,8 +142,14 @@ async function gitMetadataForPrompt(data) {
 // directory was just seen not to be a repository.
 async function startTurnBaselinesForPrompt(data, activeRecord) {
   try {
-    const { readCapabilityCache, capabilityAllowsEvidence } = require('../../lib/git-evidence-capability');
-    if (!capabilityAllowsEvidence(readCapabilityCache())) return;
+    // Capture, not delivery: an old cache still records the baseline, and
+    // the refresh after this turn's Stop lets the evidence go out.
+    const { readCapabilityCache, captureClosedReason } = require('../../lib/git-evidence-capability');
+    const closed = captureClosedReason(readCapabilityCache());
+    if (closed) {
+      require('../../lib/git-evidence-skip-log').logEvidenceSkip(data.session_id, `capability_${closed}`);
+      return;
+    }
     const { startTurnBaselines } = require('../../lib/session');
     const { resolveWorktreeRoot, DEADLINE_MS } = require('../../lib/git');
     const { HEAD_PATTERN } = require('../../lib/git-evidence-contract');

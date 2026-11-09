@@ -32,8 +32,20 @@ const { validHostPromptId } = require('../../lib/host-prompt-id');
 // use them (matching the outbox-delivery / model-catalog pattern elsewhere
 // in this hook), not at module top level.
 
-const STOP_EVIDENCE_DRAIN_LIMIT = 1;
-const STOP_EVIDENCE_DRAIN_ELAPSED_MS = 500;
+// Enough to clear a backlog left while delivery waited for a refresh within a
+// few turns; this turn's own entry is still sent first (prioritizeIds).
+const STOP_EVIDENCE_DRAIN_LIMIT = 8;
+const STOP_EVIDENCE_DRAIN_ELAPSED_MS = 1000;
+
+function logEvidenceSkip(sessionId, reason) {
+  try { require('../../lib/git-evidence-skip-log').logEvidenceSkip(sessionId, reason); } catch {}
+}
+
+// Refreshes the capability cache when due (one request every five minutes
+// at most), after the response is published. Never throws.
+async function refreshCapabilityIfDue() {
+  try { await require('../../lib/git-evidence-capability').refreshCapability(); } catch {}
+}
 
 function sha256(value) {
   return typeof value === 'string' ? crypto.createHash('sha256').update(value).digest('hex') : null;
@@ -206,13 +218,22 @@ async function resolveBaseline(data, active, epoch) {
   }
 
   const missing = { baselineHead: null, baselineReason: 'baseline_missing', cwd };
-  if (!realCwd) return missing;
+  const missingBecause = (step) => {
+    logEvidenceSkip(data.session_id, `baseline_missing_${step}`);
+    return missing;
+  };
+  if (!realCwd) return missingBecause('no_cwd');
   // No Git before publication when its answer cannot matter: a directory
   // already known not to be a repository, or a service that takes no
-  // evidence (the capture step drops the marker then anyway).
-  if (envelope && envelope.status === 'not_repo' && envelope.canonicalCwd === realCwd) return missing;
-  const { readCapabilityCache, capabilityAllowsEvidence } = require('../../lib/git-evidence-capability');
-  if (!capabilityAllowsEvidence(readCapabilityCache())) return missing;
+  // evidence (the capture step drops the marker then anyway). A cache that
+  // is only old still captures: delivery waits for the refresh after Stop.
+  if (envelope && envelope.status === 'not_repo' && envelope.canonicalCwd === realCwd) return missingBecause('not_repo');
+  const { readCapabilityCache, captureClosedReason } = require('../../lib/git-evidence-capability');
+  const closed = captureClosedReason(readCapabilityCache());
+  if (closed) {
+    logEvidenceSkip(data.session_id, `capability_${closed}`);
+    return missing;
+  }
 
   const { resolveWorktreeRoot, resolveHeadAt, DEADLINE_MS } = require('../../lib/git');
   const candidate = readTurnBaselines(data.session_id);
@@ -221,7 +242,7 @@ async function resolveBaseline(data, active, epoch) {
   // contains the Stop directory stands in for it.
   const deadlineAt = Date.now() + DEADLINE_MS;
   const root = await resolveWorktreeRoot(realCwd, DEADLINE_MS, { deadlineAt }) || enclosingRecordedRoot(record, realCwd);
-  if (!root) return missing;
+  if (!root) return missingBecause('no_root');
 
   const entry = record ? record.roots.find((item) => item.root === root) : null;
   const found = (head) => ({ baselineHead: head, baselineReason: null, cwd });
@@ -232,7 +253,7 @@ async function resolveBaseline(data, active, epoch) {
   const at = entry && entry.emittedAt !== undefined ? entry.emittedAt : active.submittedAt;
   const reflog = await resolveHeadAt(root, at, { fallbackToCurrent: false, deadlineAt });
   if (reflog) return found(reflog.head);
-  return entry && entry.source !== 'prompt' ? found(entry.head) : missing;
+  return entry && entry.source !== 'prompt' ? found(entry.head) : missingBecause('no_reflog');
 }
 
 // The body version is negotiated here, once, and pinned in the marker: a
@@ -305,7 +326,9 @@ function unavailableDiff(reason, { baseHead, head, ancestry = 'unknown' } = {}) 
  * repository state for the one Stop could not capture in time.
  */
 async function captureAndEnqueueEvidence(sessionId, marker, { skipCollection = false } = {}) {
-  const { readCapabilityCache, capabilityAllowsEvidence } = require('../../lib/git-evidence-capability');
+  const {
+    readCapabilityCache, captureClosedReason, currentBindingDigest,
+  } = require('../../lib/git-evidence-capability');
   const { EVIDENCE_COLLECT_DEADLINE_MS, collectFinalGitState, collectCommittedRange } = require('../../lib/git');
   const {
     buildGitEvidenceEvent,
@@ -319,7 +342,11 @@ async function captureAndEnqueueEvidence(sessionId, marker, { skipCollection = f
   } = require('../../lib/git-evidence-contract');
   const { enqueueEvidence } = require('../../lib/git-evidence-outbox');
 
-  if (!capabilityAllowsEvidence(readCapabilityCache())) {
+  // Capture outlives delivery's one-hour freshness: the entry waits in the
+  // outbox for a refresh instead of being dropped here.
+  const closed = captureClosedReason(readCapabilityCache());
+  if (closed) {
+    logEvidenceSkip(sessionId, `capability_${closed}`);
     clearGitCapture(sessionId);
     return;
   }
@@ -343,6 +370,7 @@ async function captureAndEnqueueEvidence(sessionId, marker, { skipCollection = f
 
   const identity = repositoryIdentityFromFinalState(finalState) || repositoryIdentityFromPromptSnapshot(sessionId);
   if (!identity) {
+    logEvidenceSkip(sessionId, 'no_repository');
     clearGitCapture(sessionId);
     return;
   }
@@ -404,6 +432,7 @@ async function captureAndEnqueueEvidence(sessionId, marker, { skipCollection = f
     diff,
   });
   if (!event) {
+    logEvidenceSkip(sessionId, 'event_build_failed');
     clearGitCapture(sessionId);
     return;
   }
@@ -412,15 +441,18 @@ async function captureAndEnqueueEvidence(sessionId, marker, { skipCollection = f
     event = buildUnavailableGitEvidenceEvent(event, 'payload_budget_exceeded');
   }
   if (validateGitEvidenceEvent(event) !== null) {
+    logEvidenceSkip(sessionId, 'event_invalid');
     clearGitCapture(sessionId);
     return;
   }
 
+  const bindingDigest = currentBindingDigest();
   enqueueEvidence({
     eventId: event.event_id,
     schemaVersion: event.schema_version,
     observedAt: event.observed_at,
     createdAt: new Date().toISOString(),
+    ...(bindingDigest ? { bindingDigest } : {}),
     correlation: {
       sessionId,
       clientEventId: marker.clientEventId,
@@ -624,6 +656,9 @@ async function main() {
       maxElapsedMs: 2000,
       prioritizeIds: [responseOperationId(data, turn.active)],
     });
+    // The response is already published here: refresh before resume, so a
+    // missing cache does not drop the marker resume is about to collect.
+    await refreshCapabilityIfDue();
     try { await resumeEvidenceCapture(data.session_id); } catch {}
     try {
       const { drainEvidence } = require('../../lib/git-evidence-delivery');
@@ -690,6 +725,10 @@ async function main() {
   if (publication.state === 'published') {
     recordActiveAge(active, entry.id);
     await enrichAfterPublication(data, active, summary, delivered);
+    // After the response and its enrichment are sent, before collection: a
+    // turn whose binding has no cache yet (just after a key change) is
+    // still collected in this Stop.
+    await refreshCapabilityIfDue();
     if (marker) {
       try { await captureAndEnqueueEvidence(data.session_id, marker); } catch {}
       try {
