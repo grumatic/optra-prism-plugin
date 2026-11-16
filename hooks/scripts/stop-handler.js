@@ -58,7 +58,7 @@ const LEAVE_COLLECT_DEADLINE_MS = 2000;
 const MAX_LEAVE_ROOTS_PER_TURN = 4;
 // Reading the heads of left roots no hook saw the turn leave, right after
 // the response is published and before it is sent.
-const LEAVE_RECORD_HEAD_DEADLINE_MS = 250;
+const LEAVE_RECORD_HEAD_DEADLINE_MS = Number(process.env.MEASURE_GIT_DEADLINE_MS) || 250;
 
 function sha256(value) {
   return typeof value === 'string' ? crypto.createHash('sha256').update(value).digest('hex') : null;
