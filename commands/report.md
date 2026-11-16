@@ -6,19 +6,21 @@ disable-model-invocation: true
 model: haiku
 allowed-tools:
   - Agent(prism:prism-output)
-  - Bash(node "${CLAUDE_PLUGIN_ROOT}/lib/report.js" 2>&1 || true)
+  - Bash(node "${CLAUDE_PLUGIN_ROOT}/lib/report.js" --relay-output)
+  - PowerShell(node "${CLAUDE_PLUGIN_ROOT}/lib/report.js" --relay-output)
 ---
 
 Use the `prism:prism-output` Agent exactly once in the foreground. Delegate this
 exact task:
 
-Run exactly one Bash command:
-`node "${CLAUDE_PLUGIN_ROOT}/lib/report.js" 2>&1 || true`
+Run exactly one command, with the Bash tool or, when Bash is unavailable, with
+the PowerShell tool:
+`node "${CLAUDE_PLUGIN_ROOT}/lib/report.js" --relay-output`
 
-Return only its complete Bash tool-result text, reproduced verbatim and
+Return only its complete tool-result text, reproduced verbatim and
 character-for-character.
 
-Do not call Bash or any other tool yourself. After the Agent returns, make your
-final response exactly the first text content block in the Agent result. Ignore
-the continuation `agentId` and usage metadata that Claude Code appends. Do not
-summarize, explain, label, wrap, or add commentary.
+Do not call Bash, PowerShell, or any other tool yourself. After the Agent
+returns, make your final response exactly the first text content block in the
+Agent result. Ignore the continuation `agentId` and usage metadata that Claude
+Code appends. Do not summarize, explain, label, wrap, or add commentary.

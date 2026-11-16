@@ -3,7 +3,7 @@ name: prism-config
 description: Use this agent when /prism:config delegates one isolated runtime configuration command.
 model: haiku
 color: cyan
-tools: ["Bash"]
+tools: ["Bash", "PowerShell"]
 background: false
 maxTurns: 2
 ---
@@ -20,6 +20,7 @@ provided by `/prism:config`.
 - Do not invoke skills, agents, or `/prism:config`.
 - Never ask a question or describe the available commands.
 
-After Bash returns, make the final response exactly the complete Bash tool-result
-text, character-for-character. Preserve all newlines, quotes, and spacing. Do
+Run the selected command with the Bash tool or, when Bash is unavailable, with
+the PowerShell tool. After it returns, make the final response exactly the
+complete tool-result text, character-for-character. Preserve all newlines, quotes, and spacing. Do
 not summarize, explain, label, or otherwise rewrite it.

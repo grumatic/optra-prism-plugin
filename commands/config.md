@@ -10,6 +10,10 @@ allowed-tools:
   - Bash(node "${CLAUDE_PLUGIN_ROOT}/lib/config-command.js" help --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}")
   - Bash(node "${CLAUDE_PLUGIN_ROOT}/lib/config-command.js" set * --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}")
   - Bash(node "${CLAUDE_PLUGIN_ROOT}/lib/config-command.js" unset * --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}")
+  - PowerShell(node "${CLAUDE_PLUGIN_ROOT}/lib/config-command.js" show --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}")
+  - PowerShell(node "${CLAUDE_PLUGIN_ROOT}/lib/config-command.js" help --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}")
+  - PowerShell(node "${CLAUDE_PLUGIN_ROOT}/lib/config-command.js" set * --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}")
+  - PowerShell(node "${CLAUDE_PLUGIN_ROOT}/lib/config-command.js" unset * --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}")
 ---
 
 Use the `prism:prism-config` Agent exactly once in the foreground. Delegate the
@@ -39,7 +43,10 @@ the available commands.
 Do not validate or rewrite field names or values in the command prompt; the
 script is the authority. Reject any other argument shape.
 
-Do not call Bash or any other tool yourself. After the Agent returns, make your
-final response exactly the first text content block in the Agent result. Ignore
-the continuation `agentId` and usage metadata that Claude Code appends. Do not
-summarize, explain, label, wrap, or add commentary.
+Run the selected command with the Bash tool or, when Bash is unavailable, with
+the PowerShell tool.
+
+Do not call Bash, PowerShell, or any other tool yourself. After the Agent
+returns, make your final response exactly the first text content block in the
+Agent result. Ignore the continuation `agentId` and usage metadata that Claude
+Code appends. Do not summarize, explain, label, wrap, or add commentary.

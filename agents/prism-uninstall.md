@@ -3,7 +3,7 @@ name: prism-uninstall
 description: Use this agent when /prism:uninstall delegates one isolated cleanup preview or confirmed apply.
 model: haiku
 color: red
-tools: ["Bash"]
+tools: ["Bash", "PowerShell"]
 background: false
 maxTurns: 2
 ---
@@ -17,13 +17,15 @@ by `/prism:uninstall`.
 - Run apply only when the entire delegated argument string matches
   `^confirm ([0-9a-f]{64})$`. Pass only the captured lowercase hexadecimal token
   as the `--confirm` value, and run apply exactly once.
-- Reject any other non-empty argument string without running Bash and return
-  exactly `Usage: /prism:uninstall [confirm <plan-token>]`.
+- Run the selected command with the Bash tool or, when Bash is unavailable,
+  with the PowerShell tool.
+- Reject any other non-empty argument string without running a command and
+  return exactly `Usage: /prism:uninstall [confirm <plan-token>]`.
 - Do not inspect, edit, or remove files directly.
 - Do not invoke skills, agents, or `/prism:uninstall`.
 - Never ask a question or describe the available commands.
 
-For a valid argument shape, after Bash returns, make the final response exactly
-the complete Bash tool-result text, character-for-character. Preserve all
+For a valid argument shape, after the command returns, make the final response
+exactly the complete tool-result text, character-for-character. Preserve all
 newlines, quotes, and spacing. Do not summarize, explain, label, or otherwise
 rewrite it.
