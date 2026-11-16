@@ -12,12 +12,16 @@ const { renderHelp } = require('../lib/help');
 
 const ROOT = path.join(__dirname, '..');
 const READ_COMMANDS = Object.freeze({
-  doctor: 'node "${CLAUDE_PLUGIN_ROOT}/lib/doctor.js" --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}" 2>&1 || true',
-  help: 'node "${CLAUDE_PLUGIN_ROOT}/lib/help.js" 2>&1 || true',
+  doctor: 'node "${CLAUDE_PLUGIN_ROOT}/lib/doctor.js" --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}" --relay-output',
+  help: 'node "${CLAUDE_PLUGIN_ROOT}/lib/help.js" --relay-output',
   realtime: 'node "${CLAUDE_PLUGIN_ROOT}/lib/realtime-status.js" --data-dir "${CLAUDE_PLUGIN_DATA}"',
-  report: 'node "${CLAUDE_PLUGIN_ROOT}/lib/report.js" 2>&1 || true',
-  status: 'node "${CLAUDE_PLUGIN_ROOT}/lib/status.js" --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}" 2>&1 || true',
+  report: 'node "${CLAUDE_PLUGIN_ROOT}/lib/report.js" --relay-output',
+  status: 'node "${CLAUDE_PLUGIN_ROOT}/lib/status.js" --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}" --relay-output',
 });
+
+function permissionLines(metadata, tool) {
+  return metadata.split('\n').filter((line) => line.startsWith(`  - ${tool}(`));
+}
 
 function readCommand(name) {
   return fs.readFileSync(path.join(ROOT, 'commands', `${name}.md`), 'utf8');
@@ -62,26 +66,18 @@ test('read controllers pre-authorize and delegate only their exact entrypoints',
 
     assert.deepEqual(inlineShellInvocations(contents), []);
     assert.equal(body(contents).split(invocation).length - 1, 1);
-    if (name === 'realtime') {
-      assert.doesNotMatch(
-        invocation,
-        /2>&1|\|\|/,
-        `${name}.md normalizes failures inside its deterministic entrypoint`,
-      );
-    } else {
-      assert.match(
-        invocation,
-        / 2>&1 \|\| true$/,
-        `${name}.md must relay stderr and normalize only the read command exit`,
-      );
-    }
-    assert.ok(
-      metadata.includes(`- Bash(${invocation})`),
-      `${name}.md must pre-authorize only its exact delegated entrypoint`,
+    assert.doesNotMatch(
+      invocation,
+      /2>&1|\|\||;|&&/,
+      `${name}.md normalizes failures inside its deterministic entrypoint`,
     );
+    assert.equal(invocation.endsWith(' --relay-output'), name !== 'realtime', name);
+    assert.doesNotMatch(contents, /2>&1|\|\| true/, `${name}.md must be shell-neutral`);
+    assert.deepEqual(permissionLines(metadata, 'Bash'), [`  - Bash(${invocation})`]);
+    assert.deepEqual(permissionLines(metadata, 'PowerShell'), [`  - PowerShell(${invocation})`]);
     assert.match(metadata, /^  - Agent\(prism:prism-(?:output|status)\)$/m);
     assert.doesNotMatch(metadata, /\*/, `${name}.md must not pre-authorize a wildcard`);
-    assert.doesNotMatch(metadata, /Bash\(node:\*\)/, `${name}.md must not allow arbitrary Node commands`);
+    assert.doesNotMatch(metadata, /(?:Bash|PowerShell)\(node:\*\)/, `${name}.md must not allow arbitrary Node commands`);
     assert.match(contents, /final response exactly the first text content block/i);
   }
 });
@@ -95,18 +91,25 @@ test('setup pre-authorizes only its validated apply entrypoint shape', () => {
     /^  - Bash\(node "\$\{CLAUDE_PLUGIN_ROOT\}\/lib\/setup\.js" apply \* --project-dir "\$\{CLAUDE_PROJECT_DIR\}" --data-dir "\$\{CLAUDE_PLUGIN_DATA\}"\)$/m,
   );
   assert.equal((metadata.match(/^  - Bash\(/gm) || []).length, 1);
+  assert.match(
+    metadata,
+    /^  - PowerShell\(node "\$\{CLAUDE_PLUGIN_ROOT\}\/lib\/setup\.js" apply \* --project-dir "\$\{CLAUDE_PROJECT_DIR\}" --data-dir "\$\{CLAUDE_PLUGIN_DATA\}"\)$/m,
+  );
+  assert.equal((metadata.match(/^  - PowerShell\(/gm) || []).length, 1);
 });
 
 test('config pre-authorizes only its four validated action shapes', () => {
   const metadata = frontmatter(readCommand('config'));
-  const permissions = metadata.split('\n').filter((line) => line.trimStart().startsWith('- Bash('));
+  for (const tool of ['Bash', 'PowerShell']) {
+    const permissions = permissionLines(metadata, tool);
 
-  assert.equal(permissions.length, 4);
-  assert.match(permissions[0], /config-command\.js" show --project-dir/);
-  assert.match(permissions[1], /config-command\.js" help --project-dir/);
-  assert.match(permissions[2], /config-command\.js" set \* --project-dir/);
-  assert.match(permissions[3], /config-command\.js" unset \* --project-dir/);
-  assert.doesNotMatch(permissions.join('\n'), /Bash\(node:\*\)|Bash\(node \*\)/);
+    assert.equal(permissions.length, 4, tool);
+    assert.match(permissions[0], /config-command\.js" show --project-dir/);
+    assert.match(permissions[1], /config-command\.js" help --project-dir/);
+    assert.match(permissions[2], /config-command\.js" set \* --project-dir/);
+    assert.match(permissions[3], /config-command\.js" unset \* --project-dir/);
+    assert.doesNotMatch(permissions.join('\n'), /\(node:\*\)|\(node \*\)/);
+  }
 });
 
 test('deterministic commands are a single entrypoint call plus verbatim display', () => {
@@ -155,7 +158,7 @@ test('config uses a main-context controller and a dedicated executor', () => {
   assert.doesNotMatch(commandMetadata, /^(?:context|background|agent):/m);
   assert.match(commandMetadata, /^disable-model-invocation: true$/m);
   assert.match(agentMetadata, /^model: haiku$/m);
-  assert.match(agentMetadata, /^tools: \["Bash"\]$/m);
+  assert.match(agentMetadata, /^tools: \["Bash", "PowerShell"\]$/m);
   assert.match(agentMetadata, /^background: false$/m);
   assert.match(agentMetadata, /^maxTurns: 2$/m);
   assert.equal((agentMetadata.match(/^model:/gm) || []).length, 1);

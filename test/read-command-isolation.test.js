@@ -14,11 +14,11 @@ const ROOT = path.resolve(__dirname, '..');
 const READ_COMMANDS = Object.freeze({
   doctor: {
     agent: 'prism-output',
-    invocation: 'node "${CLAUDE_PLUGIN_ROOT}/lib/doctor.js" --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}" 2>&1 || true',
+    invocation: 'node "${CLAUDE_PLUGIN_ROOT}/lib/doctor.js" --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}" --relay-output',
   },
   help: {
     agent: 'prism-output',
-    invocation: 'node "${CLAUDE_PLUGIN_ROOT}/lib/help.js" 2>&1 || true',
+    invocation: 'node "${CLAUDE_PLUGIN_ROOT}/lib/help.js" --relay-output',
   },
   realtime: {
     agent: 'prism-output',
@@ -26,11 +26,11 @@ const READ_COMMANDS = Object.freeze({
   },
   report: {
     agent: 'prism-output',
-    invocation: 'node "${CLAUDE_PLUGIN_ROOT}/lib/report.js" 2>&1 || true',
+    invocation: 'node "${CLAUDE_PLUGIN_ROOT}/lib/report.js" --relay-output',
   },
   status: {
     agent: 'prism-status',
-    invocation: 'node "${CLAUDE_PLUGIN_ROOT}/lib/status.js" --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}" 2>&1 || true',
+    invocation: 'node "${CLAUDE_PLUGIN_ROOT}/lib/status.js" --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}" --relay-output',
   },
 });
 
@@ -58,10 +58,10 @@ test('shared read executor is a bounded foreground Haiku agent', () => {
 
   assert.match(agentMetadata, /^name: prism-output$/m);
   assert.match(agentMetadata, /^model: haiku$/m);
-  assert.match(agentMetadata, /^tools: \["Bash"\]$/m);
+  assert.match(agentMetadata, /^tools: \["Bash", "PowerShell"\]$/m);
   assert.match(agentMetadata, /^background: false$/m);
   assert.match(agentMetadata, /^maxTurns: 2$/m);
-  assert.match(agent, /Run that exact Bash command once/i);
+  assert.match(agent, /Run that exact command once, with the Bash tool or, when Bash is unavailable,\s+with the PowerShell tool/i);
   assert.match(agent, /character-for-character/i);
 });
 
@@ -71,10 +71,10 @@ test('status executor is a bounded foreground Haiku agent', () => {
 
   assert.match(agentMetadata, /^name: prism-status$/m);
   assert.match(agentMetadata, /^model: haiku$/m);
-  assert.match(agentMetadata, /^tools: \["Bash"\]$/m);
+  assert.match(agentMetadata, /^tools: \["Bash", "PowerShell"\]$/m);
   assert.match(agentMetadata, /^background: false$/m);
   assert.match(agentMetadata, /^maxTurns: 2$/m);
-  assert.match(agent, /Run that exact Bash command once/i);
+  assert.match(agent, /Run that exact command once, with the Bash tool or, when Bash is unavailable,\s+with the PowerShell tool/i);
   assert.match(agent, /character-for-character/i);
 });
 
@@ -83,7 +83,7 @@ test('read controllers expose execution steps and reserve final assistant output
     const contents = read(`commands/${commandName}.md`);
     const metadata = frontmatter(contents);
     const commandBody = body(contents);
-    const permissions = [...metadata.matchAll(/^  - (Bash\(.*\))$/gm)].map((match) => match[1]);
+    const permissions = [...metadata.matchAll(/^  - ((?:Bash|PowerShell)\(.*\))$/gm)].map((match) => match[1]);
 
     assert.match(metadata, /^user-invocable: true$/m, commandName);
     assert.match(metadata, /^disable-model-invocation: true$/m, commandName);
@@ -107,17 +107,21 @@ test('read controllers expose execution steps and reserve final assistant output
       /Ignore\s+the continuation `agentId` and usage metadata/i,
       commandName,
     );
-    assert.match(commandBody, /Do not call Bash or any other tool yourself/i, commandName);
+    assert.match(commandBody, /Do not call Bash, PowerShell, or any other tool yourself/i, commandName);
+    assert.doesNotMatch(contents, /2>&1|\|\| true/, commandName);
 
-    if (commandName === 'realtime') {
-      assert.doesNotMatch(contract.invocation, /2>&1|\|\|/, commandName);
-    } else {
-      assert.match(contract.invocation, / 2>&1 \|\| true$/, commandName);
-      assert.equal((contract.invocation.match(/2>&1/g) || []).length, 1, commandName);
-      assert.equal((contract.invocation.match(/\|\| true/g) || []).length, 1, commandName);
-    }
-    assert.deepEqual(permissions, [`Bash(${contract.invocation})`], commandName);
-    assert.doesNotMatch(metadata, /Bash\(node:\*\)|Bash\(node \*\)|:\*\)/, commandName);
+    assert.doesNotMatch(contract.invocation, /2>&1|\|\||;|&&/, commandName);
+    assert.equal(
+      (contract.invocation.match(/--relay-output/g) || []).length,
+      commandName === 'realtime' ? 0 : 1,
+      commandName,
+    );
+    assert.deepEqual(
+      permissions,
+      [`Bash(${contract.invocation})`, `PowerShell(${contract.invocation})`],
+      commandName,
+    );
+    assert.doesNotMatch(metadata, /\(node:\*\)|\(node \*\)|:\*\)/, commandName);
     assert.equal((metadata.match(/\*/g) || []).length, 0);
     assert.doesNotMatch(
       contract.invocation,
@@ -135,7 +139,7 @@ test('status and doctor receive the host project and plugin data directories exa
   for (const [commandName, invocation] of Object.entries(invocations)) {
     assert.match(
       invocation,
-      / --project-dir "\$\{CLAUDE_PROJECT_DIR\}" --data-dir "\$\{CLAUDE_PLUGIN_DATA\}" 2>&1 \|\| true$/,
+      / --project-dir "\$\{CLAUDE_PROJECT_DIR\}" --data-dir "\$\{CLAUDE_PLUGIN_DATA\}" --relay-output$/,
       commandName,
     );
     assert.equal((invocation.match(/--project-dir/g) || []).length, 1, commandName);
@@ -155,13 +159,11 @@ test('realtime command delegates all conditional output to its script', () => {
   );
 });
 
-test('a failing read entrypoint is normalized into relayable stdout', () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-read-error-'));
-  const invocation = READ_COMMANDS.report.invocation
-    .replace('${CLAUDE_PLUGIN_ROOT}', ROOT);
+function runEntrypoint(home, script, args) {
   const env = {
     ...process.env,
     HOME: home,
+    USERPROFILE: home,
     CLAUDE_PLUGIN_DATA: home,
   };
   for (const key of [
@@ -172,24 +174,90 @@ test('a failing read entrypoint is normalized into relayable stdout', () => {
   ]) {
     delete env[key];
   }
+  return spawnSync(process.execPath, [path.join(ROOT, 'lib', script), ...args], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    env,
+  });
+}
+
+test('report --relay-output moves the failure text to stdout and exits 0', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-read-error-'));
+  const message = "Couldn't load this week's data — try the dashboard: "
+    + 'https://dashboard.optra-prism.com/\n';
 
   try {
-    const result = spawnSync('bash', ['-c', invocation], {
-      cwd: ROOT,
-      encoding: 'utf8',
-      env,
-    });
+    const relayed = runEntrypoint(home, 'report.js', ['--relay-output']);
+    assert.equal(relayed.status, 0);
+    assert.equal(relayed.stderr, '');
+    assert.equal(relayed.stdout, message);
 
-    assert.equal(result.status, 0);
-    assert.equal(result.stderr, '');
-    assert.equal(
-      result.stdout,
-      "Couldn't load this week's data — try the dashboard: "
-        + 'https://dashboard.optra-prism.com/\n',
-    );
+    const plain = runEntrypoint(home, 'report.js', []);
+    assert.equal(plain.status, 2);
+    assert.equal(plain.stdout, '');
+    assert.equal(plain.stderr, message);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
+});
+
+test('doctor and status --relay-output move argument errors to stdout and exit 0', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-read-error-'));
+
+  try {
+    for (const name of ['doctor', 'status']) {
+      const script = `${name}.js`;
+      const bad = ['--data-dir', 'relative/dir'];
+      const text = `[prism:${name}] --data-dir must be an absolute path\n`;
+
+      const relayed = runEntrypoint(home, script, [...bad, '--relay-output']);
+      assert.equal(relayed.status, 0, name);
+      assert.equal(relayed.stderr, '', name);
+      assert.equal(relayed.stdout, text, name);
+
+      const plain = runEntrypoint(home, script, bad);
+      assert.equal(plain.status, 2, name);
+      assert.equal(plain.stdout, '', name);
+      assert.equal(plain.stderr, text, name);
+    }
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('help --relay-output prints the same text and exits 0', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-read-error-'));
+
+  try {
+    const relayed = runEntrypoint(home, 'help.js', ['--relay-output']);
+    const plain = runEntrypoint(home, 'help.js', []);
+    assert.equal(relayed.status, 0);
+    assert.equal(relayed.stderr, '');
+    assert.equal(relayed.stdout, `${require('../lib/help').renderHelp()}\n`);
+    assert.equal(plain.status, 0);
+    assert.equal(plain.stdout, relayed.stdout);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('relay-output keeps stderr and stdout order and survives a thrown error', () => {
+  const relayModule = path.join(ROOT, 'lib', 'relay-output.js');
+  const script = `
+    const { runCli } = require(${JSON.stringify(relayModule)});
+    runCli(async (argv) => {
+      process.stdout.write('out1\\n');
+      process.stderr.write('err1\\n');
+      process.stdout.write('out2\\n');
+      process.stderr.write('args:' + argv.join(',') + '\\n');
+      throw new Error('boom');
+    }, { argv: ['a', '--relay-output'] });
+  `;
+  const relayed = spawnSync(process.execPath, ['-e', script], { encoding: 'utf8' });
+
+  assert.equal(relayed.status, 0);
+  assert.equal(relayed.stderr, '');
+  assert.equal(relayed.stdout, 'out1\nerr1\nout2\nargs:a\nboom\n');
 });
 
 test('realtime no-data output includes deterministic retry guidance', () => {

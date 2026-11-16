@@ -38,14 +38,19 @@ test('setup uses a main-context controller and a bounded Haiku executor', () => 
     /^  - Bash\(node "\$\{CLAUDE_PLUGIN_ROOT\}\/lib\/setup\.js" apply \* --project-dir "\$\{CLAUDE_PROJECT_DIR\}" --data-dir "\$\{CLAUDE_PLUGIN_DATA\}"\)$/m,
   );
   assert.equal((commandMetadata.match(/^  - Bash\(/gm) || []).length, 1);
+  assert.match(
+    commandMetadata,
+    /^  - PowerShell\(node "\$\{CLAUDE_PLUGIN_ROOT\}\/lib\/setup\.js" apply \* --project-dir "\$\{CLAUDE_PROJECT_DIR\}" --data-dir "\$\{CLAUDE_PLUGIN_DATA\}"\)$/m,
+  );
+  assert.equal((commandMetadata.match(/^  - PowerShell\(/gm) || []).length, 1);
   assert.match(command, /Use the `prism:prism-setup` Agent exactly once/i);
-  assert.match(command, /Do not call Bash or any other tool yourself/i);
+  assert.match(command, /Do not call Bash, PowerShell, or any other tool yourself/i);
   assert.match(command, /final response exactly the first text content block/i);
   assert.match(command, /Ignore\s+the continuation `agentId` and usage metadata/i);
 
   assert.match(agentMetadata, /^name: prism-setup$/m);
   assert.match(agentMetadata, /^model: haiku$/m);
-  assert.match(agentMetadata, /^tools: \["Bash"\]$/m);
+  assert.match(agentMetadata, /^tools: \["Bash", "PowerShell"\]$/m);
   assert.match(agentMetadata, /^background: false$/m);
   assert.match(agentMetadata, /^maxTurns: 2$/m);
   assert.doesNotMatch(agentMetadata, /^allowed-tools:/m);
@@ -75,7 +80,8 @@ test('setup relays tool output without leaking the key or adding commentary', ()
 
   assert.match(command, /final response exactly the first text content block/i);
   assert.match(agent, /character-for-character/i);
-  assert.match(agent, /complete Bash tool-result\s+text/i);
+  assert.match(agent, /complete\s+tool-result text/i);
+  assert.match(agent, /with the Bash tool or, when Bash is unavailable, with the\s+PowerShell tool/i);
 
   assert.match(command, /do not\s+validate its prefix, rewrite it, log it, or include it in the final response/i);
   assert.match(agent, /Never print,\s+repeat, transform, validate, or otherwise disclose it/i);

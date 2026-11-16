@@ -660,12 +660,21 @@ test('command preauthorizes only validated preview and confirmed-apply shapes', 
     /^  - Bash\(node "\$\{CLAUDE_PLUGIN_ROOT\}\/lib\/uninstall\.js" apply --confirm \* --project-dir "\$\{CLAUDE_PROJECT_DIR\}" --data-dir "\$\{CLAUDE_PLUGIN_DATA\}" --plugin-root "\$\{CLAUDE_PLUGIN_ROOT\}"\)$/m,
   );
   assert.equal((frontmatter.match(/^  - Bash\(/gm) || []).length, 2);
+  assert.match(
+    frontmatter,
+    /^  - PowerShell\(node "\$\{CLAUDE_PLUGIN_ROOT\}\/lib\/uninstall\.js" preview --project-dir "\$\{CLAUDE_PROJECT_DIR\}" --data-dir "\$\{CLAUDE_PLUGIN_DATA\}" --plugin-root "\$\{CLAUDE_PLUGIN_ROOT\}"\)$/m,
+  );
+  assert.match(
+    frontmatter,
+    /^  - PowerShell\(node "\$\{CLAUDE_PLUGIN_ROOT\}\/lib\/uninstall\.js" apply --confirm \* --project-dir "\$\{CLAUDE_PROJECT_DIR\}" --data-dir "\$\{CLAUDE_PLUGIN_DATA\}" --plugin-root "\$\{CLAUDE_PLUGIN_ROOT\}"\)$/m,
+  );
+  assert.equal((frontmatter.match(/^  - PowerShell\(/gm) || []).length, 2);
   assert.match(agentFrontmatter, /^model: haiku$/m);
-  assert.match(agentFrontmatter, /^tools: \["Bash"\]$/m);
+  assert.match(agentFrontmatter, /^tools: \["Bash", "PowerShell"\]$/m);
   assert.match(agentFrontmatter, /^background: false$/m);
   assert.match(agentFrontmatter, /^maxTurns: 2$/m);
   assert.match(command, /Use the `prism:prism-uninstall` Agent exactly once/i);
-  assert.match(command, /Do not call Bash or any other tool yourself/i);
+  assert.match(command, /Do not call Bash, PowerShell, or any other tool yourself/i);
   assert.match(command, /final response exactly the first text content block/i);
   assert.match(command, /Ignore\s+the continuation `agentId` and usage metadata/i);
   assert.match(command, /run the selected command exactly once/i);
@@ -679,7 +688,7 @@ test('command preauthorizes only validated preview and confirmed-apply shapes', 
   assert.match(command, /\^confirm \(\[0-9a-f\]\{64\}\)\$/);
   assert.match(agent, /\^confirm \(\[0-9a-f\]\{64\}\)\$/);
   assert.match(agent, /run apply exactly once/i);
-  assert.match(command, /Reject every other argument shape without running Bash/i);
+  assert.match(command, /Reject every other argument shape without running a command/i);
   assert.match(command, /Usage: \/prism:uninstall \[confirm <plan-token>\]/);
 });
 

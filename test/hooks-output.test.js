@@ -15,7 +15,6 @@ const { buildBinding, bindingDigest } = require('../lib/binding');
 
 const ROOT = path.resolve(__dirname, '..');
 const SUBMIT_HANDLER = path.join(ROOT, 'hooks', 'scripts', 'submit-handler.js');
-const SESSION_START = path.join(ROOT, 'hooks', 'scripts', 'session-start.sh');
 const SESSION_START_HANDLER = path.join(ROOT, 'hooks', 'scripts', 'session-start-handler.js');
 const STOP_HANDLER = path.join(ROOT, 'hooks', 'scripts', 'stop-handler.js');
 const SENTINEL = 'prism_submit_handler_secret_sentinel';
@@ -101,6 +100,7 @@ function runtimeEnv(home, dataDir, config, extra = {}) {
   return {
     ...process.env,
     HOME: home,
+    USERPROFILE: home,
     CLAUDE_PLUGIN_DATA: dataDir,
     PRISM_API_KEY: 'hostile-prism-key',
     PRISM_GCK_KEY: 'hostile-gck-key',
@@ -265,13 +265,14 @@ function writeCrashAfterPrompt2xxInterceptor(home) {
 
 function runSessionStart(home, dataDir, input, env = {}) {
   seedFreshPluginUpdateCache(dataDir);
-  return spawnSync('bash', [SESSION_START], {
+  return spawnSync(process.execPath, [SESSION_START_HANDLER], {
     cwd: ROOT,
     encoding: 'utf8',
     input: JSON.stringify(input),
     env: {
       ...process.env,
       HOME: home,
+      USERPROFILE: home,
       CLAUDE_PLUGIN_DATA: dataDir,
       CLAUDE_PLUGIN_ROOT: ROOT,
       ...env,
@@ -651,6 +652,74 @@ test('SessionStart reports a malformed config instead of claiming the key is mis
   assertLifecycleInvalidated(dataDir, sessionId);
 });
 
+function refreshProbe(home) {
+  const marker = path.join(home, 'refresh-started');
+  const preload = path.join(home, 'probe-refresh.js');
+  fs.writeFileSync(preload, [
+    "const fs = require('node:fs');",
+    "if (process.argv[1] && process.argv[1].endsWith('model-catalog-refresh.js')) {",
+    "  fs.writeFileSync(process.env.PRISM_REFRESH_MARKER, 'started');",
+    '}',
+  ].join('\n'));
+  return {
+    marker,
+    env: { PRISM_REFRESH_MARKER: marker, NODE_OPTIONS: `--require=${preload}` },
+  };
+}
+
+async function waitFor(predicate, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return predicate();
+}
+
+test('SessionStart prints the startup stderr lines and starts the detached catalog refresh', async () => {
+  const home = makeTempDir('prism-session-start-refresh-home-');
+  const dataDir = makeDataDir(home);
+  const probe = refreshProbe(home);
+  writeRuntimeConfig(home, { apiKey: 'opaque-key', ingest_url: 'http://127.0.0.1:1' });
+  seedActive(dataDir, 'refresh-session');
+
+  const result = runSessionStart(home, dataDir, { session_id: 'refresh-session', source: 'startup' }, probe.env);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), '');
+  assert.match(result.stderr, /\[Prism\] Session started — Prism API key present\n\[Prism\] Endpoints:\n {8}Ingest: {4}http:\/\/127\.0\.0\.1:1\n$/);
+  assert.equal(await waitFor(() => fs.existsSync(probe.marker), 5000), true);
+});
+
+test('SessionStart does not start the catalog refresh without CLAUDE_PLUGIN_DATA', async () => {
+  const home = makeTempDir('prism-session-start-no-data-home-');
+  const dataDir = makeDataDir(home);
+  const probe = refreshProbe(home);
+  writeRuntimeConfig(home, { apiKey: 'opaque-key', ingest_url: 'http://127.0.0.1:1' });
+
+  const result = runSessionStart(home, dataDir, { session_id: 'no-data-session', source: 'startup' }, {
+    ...probe.env,
+    CLAUDE_PLUGIN_DATA: '',
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /Session started/);
+  assert.equal(await waitFor(() => fs.existsSync(probe.marker), 1000), false);
+});
+
+test('SessionStart does not start the catalog refresh when the config check fails', async () => {
+  const home = makeTempDir('prism-session-start-bad-config-home-');
+  const dataDir = makeDataDir(home);
+  const probe = refreshProbe(home);
+  writeRuntimeConfig(home, { apiKey: 'opaque-key', ingest_url: 'http://remote.example' });
+
+  const result = runSessionStart(home, dataDir, { session_id: 'bad-config-session', source: 'startup' }, probe.env);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /missing or unsupported/);
+  assert.equal(await waitFor(() => fs.existsSync(probe.marker), 1000), false);
+});
+
 test('SessionStart skips activation when the lifecycle barrier is unavailable', () => {
   const home = makeTempDir('prism-session-barrier-home-');
   const dataDir = makeDataDir(home);
@@ -685,6 +754,7 @@ test('SessionStart skips activation when the lifecycle barrier is unavailable', 
     env: {
       ...process.env,
       HOME: home,
+      USERPROFILE: home,
       CLAUDE_PLUGIN_DATA: dataDir,
       PRISM_PLUGIN_ROOT: ROOT,
       PRISM_ACTIVATION_MARKER: activationMarker,
@@ -1331,9 +1401,10 @@ test('SessionStart advances lifecycle barriers with missing HOME and fallback pl
   seedFreshPluginUpdateCache(dataDir);
   const env = { ...process.env, CLAUDE_PLUGIN_DATA: dataDir };
   delete env.HOME;
+  delete env.USERPROFILE;
   delete env.CLAUDE_PLUGIN_ROOT;
 
-  const result = spawnSync('bash', [SESSION_START], {
+  const result = spawnSync(process.execPath, [SESSION_START_HANDLER], {
     cwd: ROOT,
     encoding: 'utf8',
     input: JSON.stringify({ session_id: sessionId, source: 'startup' }),
@@ -1391,12 +1462,13 @@ test('SessionStart drain aborts a trickling POST at its deadline', async () => {
   }));
   try {
     const startedAt = Date.now();
-    const result = await runHook('bash', [SESSION_START], {
+    const result = await runHook(process.execPath, [SESSION_START_HANDLER], {
       session_id: 'session-start-trickle-session',
       source: 'startup',
     }, {
       ...process.env,
       HOME: home,
+      USERPROFILE: home,
       CLAUDE_PLUGIN_DATA: dataDir,
       CLAUDE_PLUGIN_ROOT: ROOT,
       PRISM_API_KEY: apiKey,

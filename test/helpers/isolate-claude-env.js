@@ -19,5 +19,6 @@ function isolateClaudeEnv(env = process.env) {
 }
 
 isolateClaudeEnv();
+require('./windows-home');
 
 module.exports = { ISOLATED_VARIABLES, isolateClaudeEnv };

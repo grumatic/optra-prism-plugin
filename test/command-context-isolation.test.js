@@ -21,37 +21,47 @@ const COMMAND_AGENTS = Object.freeze({
 });
 
 const AGENT_TOOLS = Object.freeze({
-  'prism-config': ['Bash'],
-  'prism-output': ['Bash'],
-  'prism-setup': ['Bash'],
-  'prism-status': ['Bash'],
-  'prism-uninstall': ['Bash'],
+  'prism-config': ['Bash', 'PowerShell'],
+  'prism-output': ['Bash', 'PowerShell'],
+  'prism-setup': ['Bash', 'PowerShell'],
+  'prism-status': ['Bash', 'PowerShell'],
+  'prism-uninstall': ['Bash', 'PowerShell'],
 });
 
+const SHELL_TOOLS = ['Bash', 'PowerShell'];
+
 const READ_COMMAND_INVOCATIONS = Object.freeze({
-  doctor: 'node "${CLAUDE_PLUGIN_ROOT}/lib/doctor.js" --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}" 2>&1 || true',
-  help: 'node "${CLAUDE_PLUGIN_ROOT}/lib/help.js" 2>&1 || true',
+  doctor: 'node "${CLAUDE_PLUGIN_ROOT}/lib/doctor.js" --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}" --relay-output',
+  help: 'node "${CLAUDE_PLUGIN_ROOT}/lib/help.js" --relay-output',
   realtime: 'node "${CLAUDE_PLUGIN_ROOT}/lib/realtime-status.js" --data-dir "${CLAUDE_PLUGIN_DATA}"',
-  report: 'node "${CLAUDE_PLUGIN_ROOT}/lib/report.js" 2>&1 || true',
-  status: 'node "${CLAUDE_PLUGIN_ROOT}/lib/status.js" --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}" 2>&1 || true',
+  report: 'node "${CLAUDE_PLUGIN_ROOT}/lib/report.js" --relay-output',
+  status: 'node "${CLAUDE_PLUGIN_ROOT}/lib/status.js" --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}" --relay-output',
 });
 
 const MUTATION_COMMANDS = ['config', 'setup', 'uninstall'];
-const MUTATION_ENTRYPOINT_PERMISSIONS = Object.freeze({
+const MUTATION_ENTRYPOINTS = Object.freeze({
   config: [
-    'Bash(node "${CLAUDE_PLUGIN_ROOT}/lib/config-command.js" show --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}")',
-    'Bash(node "${CLAUDE_PLUGIN_ROOT}/lib/config-command.js" help --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}")',
-    'Bash(node "${CLAUDE_PLUGIN_ROOT}/lib/config-command.js" set * --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}")',
-    'Bash(node "${CLAUDE_PLUGIN_ROOT}/lib/config-command.js" unset * --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}")',
+    'node "${CLAUDE_PLUGIN_ROOT}/lib/config-command.js" show --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}"',
+    'node "${CLAUDE_PLUGIN_ROOT}/lib/config-command.js" help --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}"',
+    'node "${CLAUDE_PLUGIN_ROOT}/lib/config-command.js" set * --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}"',
+    'node "${CLAUDE_PLUGIN_ROOT}/lib/config-command.js" unset * --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}"',
   ],
   setup: [
-    'Bash(node "${CLAUDE_PLUGIN_ROOT}/lib/setup.js" apply * --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}")',
+    'node "${CLAUDE_PLUGIN_ROOT}/lib/setup.js" apply * --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}"',
   ],
   uninstall: [
-    'Bash(node "${CLAUDE_PLUGIN_ROOT}/lib/uninstall.js" preview --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}" --plugin-root "${CLAUDE_PLUGIN_ROOT}")',
-    'Bash(node "${CLAUDE_PLUGIN_ROOT}/lib/uninstall.js" apply --confirm * --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}" --plugin-root "${CLAUDE_PLUGIN_ROOT}")',
+    'node "${CLAUDE_PLUGIN_ROOT}/lib/uninstall.js" preview --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}" --plugin-root "${CLAUDE_PLUGIN_ROOT}"',
+    'node "${CLAUDE_PLUGIN_ROOT}/lib/uninstall.js" apply --confirm * --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}" --plugin-root "${CLAUDE_PLUGIN_ROOT}"',
   ],
 });
+
+function shellPermissions(entrypoints) {
+  return SHELL_TOOLS.flatMap((tool) => entrypoints.map((entrypoint) => `${tool}(${entrypoint})`));
+}
+
+const MUTATION_ENTRYPOINT_PERMISSIONS = Object.freeze(Object.fromEntries(
+  Object.entries(MUTATION_ENTRYPOINTS).map(([name, entrypoints]) => [name, shellPermissions(entrypoints)]),
+));
 
 function readMarkdown(directory, name) {
   return fs.readFileSync(path.join(ROOT, directory, `${name}.md`), 'utf8');
@@ -127,9 +137,9 @@ function inlineShellInvocations(contents) {
 }
 
 function assertNoBroadBashPermission(value, subject) {
-  assert.doesNotMatch(value, /Bash\(\s*node\s*:\s*\*\s*\)/i, subject);
-  assert.doesNotMatch(value, /Bash\(\s*node\s+\*\s*\)/i, subject);
-  assert.doesNotMatch(value, /Bash\(\s*\*\s*\)/i, subject);
+  assert.doesNotMatch(value, /(?:Bash|PowerShell)\(\s*node\s*:\s*\*\s*\)/i, subject);
+  assert.doesNotMatch(value, /(?:Bash|PowerShell)\(\s*node\s+\*\s*\)/i, subject);
+  assert.doesNotMatch(value, /(?:Bash|PowerShell)\(\s*\*\s*\)/i, subject);
 }
 
 test('all user-invocable commands declare a main-context controller boundary', () => {
@@ -167,7 +177,7 @@ test('all user-invocable commands declare a main-context controller boundary', (
     const expectedTools = [
       `Agent(prism:${agentName})`,
       ...(READ_COMMAND_INVOCATIONS[commandName]
-        ? [`Bash(${READ_COMMAND_INVOCATIONS[commandName]})`]
+        ? shellPermissions([READ_COMMAND_INVOCATIONS[commandName]])
         : MUTATION_ENTRYPOINT_PERMISSIONS[commandName]),
     ];
     assert.deepEqual(list(metadata, 'allowed-tools', subject), expectedTools);
@@ -227,34 +237,27 @@ test('read controllers delegate and pre-authorize only their one fixed entrypoin
       1,
       `${subject} must delegate its fixed entrypoint exactly once`,
     );
+    assert.doesNotMatch(
+      invocation,
+      /2>&1|\|\||;|&&/,
+      `${subject} must be valid unchanged in both bash and PowerShell`,
+    );
+    assert.doesNotMatch(contents, /2>&1|\|\| true/, `${subject} must be shell-neutral`);
     if (commandName === 'realtime') {
-      assert.doesNotMatch(
-        invocation,
-        /2>&1|\|\|/,
-        `${subject} normalizes failures inside its deterministic entrypoint`,
-      );
+      assert.doesNotMatch(invocation, /--relay-output/, subject);
     } else {
-      assert.match(
-        invocation,
-        / 2>&1 \|\| true$/,
-        `${subject} must merge stderr and normalize the script failure status`,
-      );
       assert.equal(
-        (invocation.match(/2>&1/g) || []).length,
+        (invocation.match(/--relay-output/g) || []).length,
         1,
-        `${subject} must declare the stderr redirect exactly once`,
+        `${subject} must relay stderr and normalize the exit status inside the entrypoint`,
       );
-      assert.equal(
-        (invocation.match(/\|\| true/g) || []).length,
-        1,
-        `${subject} must normalize the read command exit status exactly once`,
-      );
+      assert.ok(invocation.endsWith(' --relay-output'), `${subject} passes the flag last`);
     }
     assert.deepEqual(
       list(metadata, 'allowed-tools', subject),
       [
         `Agent(prism:${COMMAND_AGENTS[commandName]})`,
-        `Bash(${invocation})`,
+        ...shellPermissions([invocation]),
       ],
       `${subject} must pre-authorize only its fixed entrypoint and argument shape`,
     );
@@ -262,7 +265,8 @@ test('read controllers delegate and pre-authorize only their one fixed entrypoin
       commandBody,
       new RegExp(`Use the \`prism:${COMMAND_AGENTS[commandName]}\` Agent exactly once`, 'i'),
     );
-    assert.match(commandBody, /Do not call Bash or any other tool yourself/i);
+    assert.match(commandBody, /Do not call Bash, PowerShell, or any other tool yourself/i);
+    assert.match(commandBody, /with the Bash tool or, when Bash is unavailable, with\s+the PowerShell tool/i);
     assert.match(commandBody, /final response exactly the first text content block/i);
     assert.match(commandBody, /Ignore\s+the continuation `agentId` and usage metadata/i);
   }
@@ -282,7 +286,7 @@ test('mutating commands pre-authorize only validated plugin entrypoint shapes', 
     const metadata = frontmatter(readMarkdown('commands', commandName), subject);
 
     const permissions = list(metadata, 'allowed-tools', subject)
-      .filter((permission) => permission.startsWith('Bash('));
+      .filter((permission) => /^(?:Bash|PowerShell)\(/.test(permission));
     assert.deepEqual(permissions, MUTATION_ENTRYPOINT_PERMISSIONS[commandName]);
 
     for (const permission of permissions) {
