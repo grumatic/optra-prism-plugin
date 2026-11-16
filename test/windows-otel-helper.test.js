@@ -10,6 +10,7 @@ const {
   test,
 } = require('node:test');
 const { LEGACY_HOST_VERSION, pinClaudeHostVersion } = require('./helpers/claude-host');
+const { posixOnly } = require('./helpers/platform');
 
 pinClaudeHostVersion(LEGACY_HOST_VERSION);
 
@@ -103,7 +104,7 @@ test('win32 inspection still rejects a helper that differs from the bundled sour
   assert.equal(inspected.reason, 'managed helper differs from bundled source');
 });
 
-test('POSIX inspection still requires mode 0700', () => {
+test('POSIX inspection still requires mode 0700', posixOnly('POSIX file modes do not exist on native Windows'), () => {
   const settings = require('../lib/settings');
   const dataDir = path.join(homeDir, 'plugin-data');
 
@@ -161,7 +162,7 @@ test('win32 value matching ignores case and slash direction only', () => {
   ), false);
 });
 
-test('POSIX value matching stays an exact string comparison', () => {
+test('POSIX value matching stays an exact string comparison', posixOnly('asserts the POSIX bare-path setting value, which native Windows replaces with the node command form'), () => {
   const settings = require('../lib/settings');
   const helperPath = path.join(homeDir, 'plugin-data', 'bin', 'prism-otel-headers-helper.js');
 
@@ -268,7 +269,7 @@ test('win32 doctor reports the helper as passing with the mode not applicable', 
   assert.equal(check.remediation, null);
 });
 
-test('POSIX status artifact keeps the exact mode label', () => {
+test('POSIX status artifact keeps the exact mode label', posixOnly('asserts the POSIX mode label and bare-path value, which native Windows renders as n/a and the node command form'), () => {
   const settings = require('../lib/settings');
   const status = require('../lib/status');
   const dataDir = path.join(homeDir, 'plugin-data');

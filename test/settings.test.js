@@ -10,6 +10,7 @@ const {
   test,
 } = require('node:test');
 const { LEGACY_HOST_VERSION, pinClaudeHostVersion } = require('./helpers/claude-host');
+const { IS_WINDOWS } = require('./helpers/platform');
 
 // These tests exercise hosts that still apply OTEL from project and local settings.
 pinClaudeHostVersion(LEGACY_HOST_VERSION);
@@ -422,9 +423,9 @@ test('sync installs a stable executable helper in plugin data and projects its e
   }), true);
 
   const helperPath = settings.helperPathForDataDir(dataDir);
-  assert.equal(readJson(projectFile).otelHeadersHelper, helperPath);
+  assert.equal(readJson(projectFile).otelHeadersHelper, settings.helperSettingValueForPath(helperPath));
   assert.equal(fs.existsSync(helperPath), true);
-  assert.equal(fs.statSync(helperPath).mode & 0o777, 0o700);
+  if (!IS_WINDOWS) assert.equal(fs.statSync(helperPath).mode & 0o777, 0o700);
   assert.deepEqual(settings.checkOtelSettings({ projectDir, dataDir }), {
     ok: true,
     mismatches: [],
@@ -573,7 +574,7 @@ test('managed helper inspector verifies the safe chain, ownership, mode, and exa
     notSymlink: true,
     safePath: true,
     ownedByCurrentUser: true,
-    exactMode: true,
+    exactMode: IS_WINDOWS ? null : true,
     executable: true,
     matchesBundledSource: true,
     dataDirExists: true,
@@ -591,9 +592,9 @@ test('managed helper inspector verifies the safe chain, ownership, mode, and exa
   fs.chmodSync(helperPath, 0o755);
   const corrupt = settings.inspectManagedOtelHeadersHelper(dataDir);
   assert.equal(corrupt.ok, false);
-  assert.equal(corrupt.exactMode, false);
+  assert.equal(corrupt.exactMode, IS_WINDOWS ? null : false);
   assert.equal(corrupt.matchesBundledSource, false);
-  assert.match(corrupt.reason, /mode is not 0700/);
+  if (!IS_WINDOWS) assert.match(corrupt.reason, /mode is not 0700/);
 });
 
 test('version activation updates only the static headers and owned helper metadata', () => {
@@ -629,9 +630,9 @@ test('version activation updates only the static headers and owned helper metada
     projected.env.OTEL_EXPORTER_OTLP_HEADERS,
     `x-api-key=${encodeURIComponent(API_KEY)},x-prism-plugin-version=1.2.3`,
   );
-  assert.equal(projected.otelHeadersHelper, settings.helperPathForDataDir(dataDir));
+  assert.equal(projected.otelHeadersHelper, settings.helperSettingValueForPath(settings.helperPathForDataDir(dataDir)));
   assert.deepEqual(projected.permissions, { allow: ['Bash(npm test)'] });
-  assert.equal(fs.statSync(localFile).mode & 0o777, 0o640);
+  if (!IS_WINDOWS) assert.equal(fs.statSync(localFile).mode & 0o777, 0o640);
 });
 
 test('version activation removes only the legacy Prism assistant-response opt-out', () => {
@@ -922,7 +923,7 @@ test('explicit removal deletes only the exact Prism-owned helper path', () => {
   const projectFile = settings.pathForScope('project', projectDir);
   const localFile = settings.pathForScope('local', projectDir);
   writeJson(projectFile, {
-    otelHeadersHelper: settings.helperPathForDataDir(dataDir),
+    otelHeadersHelper: settings.helperSettingValueForPath(settings.helperPathForDataDir(dataDir)),
     unrelated: 'preserve',
   });
   writeJson(localFile, {

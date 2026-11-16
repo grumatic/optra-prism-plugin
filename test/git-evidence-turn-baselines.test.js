@@ -15,6 +15,9 @@ const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
 const { afterEach, test } = require('node:test');
 const { CURRENT_HOST_VERSION, pinClaudeHostVersion } = require('./helpers/claude-host');
+const { posixOnly } = require('./helpers/platform');
+
+const SLOW_GIT_REASON = 'a slow fake git shell script on PATH needs /bin/sh and cannot stand in for git.exe';
 
 pinClaudeHostVersion(CURRENT_HOST_VERSION);
 
@@ -1352,7 +1355,7 @@ function slowGit(install, subcommand, seconds) {
 // the turn left the root at. A plain cd: no hook sees the move, and Stop
 // reads the baseline from the reflog itself.
 for (const move of ['EnterWorktree', 'cd without a hook']) {
-  test(`a prompt root the submit-time read missed is still reported once the turn leaves it, from its reflog (${move})`, () => {
+  test(`a prompt root the submit-time read missed is still reported once the turn leaves it, from its reflog (${move})`, posixOnly(SLOW_GIT_REASON), () => {
     const install = makeInstall();
     const repo = makeRepo(install);
     const first = addWorktree(install, repo, 'slow-a');
@@ -1411,7 +1414,7 @@ test('enterTurnRoot records a prompt baseline the leaving hook recovered only fo
 // EnterWorktree records the prompt root on the way out; a plain cd leaves it
 // unrecorded, so Stop must still see that it ended there.
 for (const move of ['EnterWorktree', 'cd without a hook']) {
-  test(`a turn that ends in the prompt root the submit-time read missed reports it once, as its own Stop event (${move})`, () => {
+  test(`a turn that ends in the prompt root the submit-time read missed reports it once, as its own Stop event (${move})`, posixOnly(SLOW_GIT_REASON), () => {
     const install = makeInstall();
     const repo = makeRepo(install);
     const first = addWorktree(install, repo, 'home-a');
@@ -1433,7 +1436,7 @@ for (const move of ['EnterWorktree', 'cd without a hook']) {
   });
 }
 
-test('a prompt root the submit-time read missed and that keeps no reflog is logged, not given its current head', () => {
+test('a prompt root the submit-time read missed and that keeps no reflog is logged, not given its current head', posixOnly(SLOW_GIT_REASON), () => {
   const install = makeInstall();
   const repo = makeRepo(install, { reflog: false });
   const first = addWorktree(install, repo, 'bare-a');
@@ -1561,7 +1564,7 @@ function leaveRecordRoots(install, sessionId) {
 // 5s capture still fits.
 const slowRange = (install) => slowGit(install, 'merge-base', 2.3);
 
-test('a left worktree held over for a later hook is bounded by the head its Stop recorded, not a later turn\'s commit', () => {
+test('a left worktree held over for a later hook is bounded by the head its Stop recorded, not a later turn\'s commit', posixOnly(SLOW_GIT_REASON), () => {
   const install = makeInstall();
   const repo = makeRepo(install);
   const worktree = addWorktree(install, repo, 'held-a');
@@ -1583,7 +1586,7 @@ test('a left worktree held over for a later hook is bounded by the head its Stop
   assert.deepEqual(committedShas(leave[0].payload), [mine]);
 });
 
-test('a left worktree no hook can collect in time is given up on its third try, not held over forever', () => {
+test('a left worktree no hook can collect in time is given up on its third try, not held over forever', posixOnly(SLOW_GIT_REASON), () => {
   const install = makeInstall();
   const repo = makeRepo(install);
   const worktree = addWorktree(install, repo, 'huge-a');
@@ -1659,7 +1662,7 @@ test('a left root with no recorded head and no reflog is not given a head commit
   assert.deepEqual(leaveRoots(install, sessionId), []);
 });
 
-test('a root that only ran out of the time other roots used is kept without counting a try', () => {
+test('a root that only ran out of the time other roots used is kept without counting a try', posixOnly(SLOW_GIT_REASON), () => {
   const install = makeInstall();
   const first = pendingLeave(install, 'early-a');
   const second = pendingLeave(install, 'late-b');

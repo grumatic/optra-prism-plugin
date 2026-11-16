@@ -20,6 +20,8 @@ const STOP_HANDLER = path.join(ROOT, 'hooks', 'scripts', 'stop-handler.js');
 const SENTINEL = 'prism_submit_handler_secret_sentinel';
 const tempDirs = [];
 const session = require('../lib/session');
+const { helperPathForDataDir, helperSettingValueForPath } = require('../lib/settings');
+const { IS_WINDOWS, posixOnly } = require('./helpers/platform');
 const PREFLIGHT_FIXTURE = JSON.parse(fs.readFileSync(
   path.resolve(ROOT, 'test', 'fixtures', 'preflight-fixture.json'),
   'utf8',
@@ -781,12 +783,12 @@ test('SessionStart advances the current lifecycle barrier before cleanup and the
     'const load = Module._load;',
     'Module._load = function(request, parent, isMain) {',
     '  const value = load.call(this, request, parent, isMain);',
-    "  if (parent && parent.filename.endsWith('session-start-handler.js') && request === '../../lib/session') {",
+    "  if (parent && parent.filename && parent.filename.endsWith('session-start-handler.js') && request === '../../lib/session') {",
     '    const advance = value.advanceBarrier; const cleanup = value.cleanupStaleSessions;',
     "    value.advanceBarrier = (...args) => { fs.appendFileSync(process.env.PRISM_ORDER_MARKER, 'advance\\n'); return advance(...args); };",
     "    value.cleanupStaleSessions = (...args) => { fs.appendFileSync(process.env.PRISM_ORDER_MARKER, 'cleanup\\n'); return cleanup(...args); };",
     '  }',
-    "  if (parent && parent.filename.endsWith('session-start-handler.js') && request === '../../lib/response-outbox') {",
+    "  if (parent && parent.filename && parent.filename.endsWith('session-start-handler.js') && request === '../../lib/response-outbox') {",
     '    const drain = value.drain;',
     "    value.drain = (...args) => { fs.appendFileSync(process.env.PRISM_ORDER_MARKER, 'drain\\n'); return drain(...args); };",
     '  }',
@@ -858,7 +860,7 @@ test('SessionStart projects activated metadata before one combined restart and u
   );
   assert.equal(
     settings.otelHeadersHelper,
-    path.join(dataDir, 'bin', 'prism-otel-headers-helper.js'),
+    helperSettingValueForPath(helperPathForDataDir(dataDir)),
   );
   assert.equal(fs.readFileSync(path.join(dataDir, 'last-version.txt'), 'utf8'), currentVersion);
 });
@@ -868,7 +870,7 @@ test('SessionStart activates a new version without a restart notice when the hel
   const dataDir = makeDataDir(home);
   const projectDir = path.join(home, 'project');
   const settingsFile = path.join(projectDir, '.claude', 'settings.local.json');
-  const helperPath = path.join(dataDir, 'bin', 'prism-otel-headers-helper.js');
+  const helperPath = helperPathForDataDir(dataDir);
   const apiKey = 'opaque session helper key';
   fs.mkdirSync(projectDir);
   seedInstalledPlugin(home, projectDir);
@@ -878,7 +880,7 @@ test('SessionStart activates a new version without a restart notice when the hel
     show_realtime_summary: false,
   });
   writeJsonFile(settingsFile, {
-    otelHeadersHelper: helperPath,
+    otelHeadersHelper: helperSettingValueForPath(helperPath),
     env: {
       OTEL_EXPORTER_OTLP_HEADERS: `x-api-key=${encodeURIComponent(apiKey)},x-prism-plugin-version=0.0.1`,
     },
@@ -904,8 +906,8 @@ test('SessionStart activates a new version without a restart notice when the hel
     settings.env.OTEL_EXPORTER_OTLP_HEADERS,
     `x-api-key=${encodeURIComponent(apiKey)},x-prism-plugin-version=${currentVersion}`,
   );
-  assert.equal(settings.otelHeadersHelper, helperPath);
-  assert.equal(fs.statSync(helperPath).mode & 0o777, 0o700);
+  assert.equal(settings.otelHeadersHelper, helperSettingValueForPath(helperPath));
+  if (!IS_WINDOWS) assert.equal(fs.statSync(helperPath).mode & 0o777, 0o700);
   assert.equal(fs.readFileSync(path.join(dataDir, 'last-version.txt'), 'utf8'), currentVersion);
 });
 
@@ -1808,13 +1810,14 @@ test('first normal prompt after plugin reload recommends restart when it registe
     `x-api-key=${encodeURIComponent(apiKey)},x-prism-plugin-version=${currentVersion}`,
   );
   assert.equal(projected.unrelated, 'preserve');
-  assert.equal(fs.statSync(projected.otelHeadersHelper).mode & 0o777, 0o700);
+  assert.equal(projected.otelHeadersHelper, helperSettingValueForPath(helperPathForDataDir(dataDir)));
+  if (!IS_WINDOWS) assert.equal(fs.statSync(helperPathForDataDir(dataDir)).mode & 0o777, 0o700);
   assert.equal(fs.readFileSync(path.join(dataDir, 'last-version.txt'), 'utf8'), currentVersion);
   // Activation records the current config root once ~/.prism exists.
   const inventoryFile = path.join(home, '.prism', 'installs.json');
   const inventory = JSON.parse(fs.readFileSync(inventoryFile, 'utf8'));
   assert.deepEqual(Object.keys(inventory.roots), [fs.realpathSync(path.join(home, '.claude'))]);
-  assert.equal(fs.statSync(inventoryFile).mode & 0o777, 0o600);
+  if (!IS_WINDOWS) assert.equal(fs.statSync(inventoryFile).mode & 0o777, 0o600);
   const inventoryBytes = fs.readFileSync(inventoryFile, 'utf8');
 
   const second = spawnSync(process.execPath, [SUBMIT_HANDLER], {
@@ -2116,7 +2119,7 @@ function seedSupportedCapability(dataDir, apiKey, ingestUrl, versions = ['git-ev
   return runtimeDir;
 }
 
-test('git_evidence_after_response_v1: an open capability gate and an unwritable evidence spool never affect prompt/response capture', () => {
+test('git_evidence_after_response_v1: an open capability gate and an unwritable evidence spool never affect prompt/response capture', posixOnly('chmod on Windows only toggles read-only and does not deny writes in a directory'), () => {
   const home = makeTempDir('prism-evidence-after-response-home-');
   const dataDir = makeDataDir(home);
   const repo = makeGitRepoWithRemote();

@@ -7,6 +7,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { after, test } = require('node:test');
 const { LEGACY_HOST_VERSION, pinClaudeHostVersion } = require('./helpers/claude-host');
+const { escapeRegExp } = require('./helpers/platform');
 
 // Status and doctor are read-only reports of the install context and other roots.
 pinClaudeHostVersion(LEGACY_HOST_VERSION);
@@ -91,8 +92,8 @@ test('status reports the config root, its source, and a matching install context
   const result = runScript(STATUS, fx, statusArgs(fx));
 
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, new RegExp(`\\*\\*Claude config root:\\*\\* ${fx.cfg} \\(source: CLAUDE_CONFIG_DIR\\)`));
-  assert.match(result.stdout, new RegExp(`\\*\\*Install context:\\*\\* ok \\(inline install; plugin data ${fx.dataDir}\\)`));
+  assert.match(result.stdout, new RegExp(`\\*\\*Claude config root:\\*\\* ${escapeRegExp(fx.cfg)} \\(source: CLAUDE_CONFIG_DIR\\)`));
+  assert.match(result.stdout, new RegExp(`\\*\\*Install context:\\*\\* ok \\(inline install; plugin data ${escapeRegExp(fx.dataDir)}\\)`));
   assert.match(result.stdout, /\*\*Install scope:\*\* user/);
   assert.match(result.stdout, /\*\*Other Claude config roots:\*\*\n- .*\.claude: absent/);
   assert.deepEqual(snapshotTree(fx.sandbox), before, 'status must not write');
@@ -105,7 +106,7 @@ test('status reports the default root and a missing data dir as not checked', ()
   const result = runScript(STATUS, fx, statusArgs(fx, null), { CLAUDE_CONFIG_DIR: '' });
 
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, new RegExp(`\\*\\*Claude config root:\\*\\* ${path.join(fx.home, '.claude')} \\(source: default\\)`));
+  assert.match(result.stdout, new RegExp(`\\*\\*Claude config root:\\*\\* ${escapeRegExp(path.join(fx.home, '.claude'))} \\(source: default\\)`));
   assert.match(result.stdout, /\*\*Install context:\*\* not checked \(the plugin data directory/);
   assert.match(result.stdout, /\*\*Other Claude config roots:\*\* none/);
 });
@@ -116,7 +117,7 @@ test('status shows both paths on a mismatch and the scrub hint when the variable
   const mismatch = runScript(STATUS, fx, statusArgs(fx, path.join(fx.home, '.claude', 'plugins', 'data', 'prism-inline')));
   assert.equal(mismatch.status, 0, mismatch.stderr);
   assert.match(mismatch.stdout, /\*\*Install context:\*\* mismatch \(CLAUDE_PLUGIN_DATA does not match the inline plugin root/);
-  assert.match(mismatch.stdout, new RegExp(`plugin root ${ROOT}; plugin data `));
+  assert.match(mismatch.stdout, new RegExp(`plugin root ${escapeRegExp(ROOT)}; plugin data `));
 
   const scrubbed = runScript(STATUS, fx, statusArgs(fx), { CLAUDE_CONFIG_DIR: '' });
   assert.equal(scrubbed.status, 0, scrubbed.stderr);
@@ -153,7 +154,7 @@ test('status and doctor list other roots and name a corrupt or full inventory', 
     roots: { [other]: { firstSeen: '2026-01-01T00:00:00.000Z', lastSeen: '2026-01-01T00:00:00.000Z' } },
   });
   const status = runScript(STATUS, fx, statusArgs(fx));
-  assert.match(status.stdout, new RegExp(`- ${other}: installed \\(1 Prism registry entry\\)`));
+  assert.match(status.stdout, new RegExp(`- ${escapeRegExp(other)}: installed \\(1 Prism registry entry\\)`));
   assert.match(status.stdout, /\*\*Install inventory:\*\* full; .*preserves ~\/\.prism/);
 
   const doctor = runScript(DOCTOR, fx, ['--json', ...statusArgs(fx)]);
@@ -177,7 +178,7 @@ test('doctor has an Install Context check that passes, fails, skips, and warns',
 
   const ok = contextCheck(runScript(DOCTOR, fx, ['--json', ...statusArgs(fx)]));
   assert.equal(ok.status, 'pass');
-  assert.match(ok.message, new RegExp(`Claude config root ${fx.cfg} \\(source: CLAUDE_CONFIG_DIR\\)`));
+  assert.match(ok.message, new RegExp(`Claude config root ${escapeRegExp(fx.cfg)} \\(source: CLAUDE_CONFIG_DIR\\)`));
 
   const mismatch = contextCheck(runScript(DOCTOR, fx, ['--json', ...statusArgs(fx)], { CLAUDE_CONFIG_DIR: '' }));
   assert.equal(mismatch.status, 'fail');

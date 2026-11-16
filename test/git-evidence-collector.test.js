@@ -10,6 +10,7 @@ const path = require('node:path');
 const { afterEach, test } = require('node:test');
 
 const { collectCommittedRange, collectFinalGitState } = require('../lib/git');
+const { IS_WINDOWS, posixOnly } = require('./helpers/platform');
 
 const tempDirs = [];
 
@@ -71,7 +72,8 @@ test('baselineHead === finalHead yields an empty ready range', async () => {
 test('a filename with a space, a newline, and non-ASCII text parses correctly and never appears in the payload', async () => {
   const repo = makeRepo();
   const baseline = commit(repo, 'a.txt', 'seed\n', 'seed');
-  const weirdName = 'weird file\nname 안녕.txt';
+  // Windows filenames cannot contain a newline.
+  const weirdName = IS_WINDOWS ? 'weird file name 안녕.txt' : 'weird file\nname 안녕.txt';
   fs.writeFileSync(path.join(repo, weirdName), 'content\n');
   git(repo, ['add', '.']);
   git(repo, ['commit', '-q', '-m', 'add weird file']);
@@ -291,7 +293,7 @@ test('git_evidence_v2: without judgeAuthors the range carries no verdict and no 
   assert.equal(range.commits[0].parentCount, 1);
 }));
 
-test('git_evidence_v2: without judgeAuthors the Git calls are exactly the v1 sequence', () => withIsolatedGitConfig(async () => {
+test('git_evidence_v2: without judgeAuthors the Git calls are exactly the v1 sequence', posixOnly('a fake git shell script on PATH needs /bin/sh and cannot stand in for git.exe'), () => withIsolatedGitConfig(async () => {
   const repo = makeRepo();
   const baseline = commit(repo, 'a.txt', 'one\n', 'c1');
   commit(repo, 'a.txt', 'one\ntwo\n', 'c2');
@@ -343,7 +345,7 @@ test('git_evidence_v2: without judgeAuthors the Git calls are exactly the v1 seq
   ]);
 }));
 
-test('git_evidence_v2: a stalled author lookup costs only the verdict, never the committed range', () => withIsolatedGitConfig(async () => {
+test('git_evidence_v2: a stalled author lookup costs only the verdict, never the committed range', posixOnly('a fake git shell script on PATH needs /bin/sh and cannot stand in for git.exe'), () => withIsolatedGitConfig(async () => {
   const repo = makeRepo();
   const baseline = commit(repo, 'a.txt', 'one\n', 'c1');
   const final = commit(repo, 'a.txt', 'one\ntwo\n', 'c2');
@@ -506,7 +508,9 @@ test('git_evidence_v2: an includeIf email applies', async () => {
   git(repo, ['config', '--unset', 'user.email']);
   const included = path.join(tempDir('prism-git-evidence-include-'), 'work.gitconfig');
   fs.writeFileSync(included, '[user]\n\temail = work@example.test\n');
-  const globalConfig = `[includeIf "gitdir:${fs.realpathSync(repo)}/"]\n\tpath = ${included}\n`;
+  // A gitconfig must not hold raw backslash paths, so write forward slashes.
+  const toGitPath = (value) => value.replace(/\\/g, '/');
+  const globalConfig = `[includeIf "gitdir:${toGitPath(fs.realpathSync(repo))}/"]\n\tpath = ${toGitPath(included)}\n`;
 
   await withIsolatedGitConfig(async () => {
     const baseline = commitAs(repo, 'work@example.test', 'a.txt', 'one\n', 'c1');

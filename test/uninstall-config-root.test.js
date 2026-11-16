@@ -9,6 +9,7 @@ const { after, test } = require('node:test');
 
 const { PLUGIN_ID } = require('../lib/settings');
 const { inventoryPath } = require('../lib/install-inventory');
+const { escapeRegExp } = require('./helpers/platform');
 
 const SCRIPT = path.resolve(__dirname, '..', 'lib', 'uninstall.js');
 const UNINSTALL = require('../lib/uninstall');
@@ -164,7 +165,7 @@ test('a marketplace root is classified under the config root, not under ~/.claud
   const result = preview(fx);
 
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, new RegExp(`Remove marketplace plugin data at ${fx.dataDir}\\.`));
+  assert.match(result.stdout, new RegExp(`Remove marketplace plugin data at ${escapeRegExp(fx.dataDir)}\\.`));
   assert.match(result.stdout, /Remove the exact Prism plugin cache at /);
   assert.equal(result.stdout.includes(path.join(fx.home, '.claude')), false);
 });
@@ -239,7 +240,7 @@ test('~/.prism is preserved while another config root has Prism installed', () =
   const previewResult = preview(fx);
   assert.equal(previewResult.status, 0, previewResult.stderr);
   assert.match(previewResult.stdout, new RegExp(
-    `Preserve shared Prism config at ${path.join(fx.home, '.prism')} because Prism may still be installed in other Claude config roots: ${other} \\(installed`,
+    `Preserve shared Prism config at ${escapeRegExp(path.join(fx.home, '.prism'))} because Prism may still be installed in other Claude config roots: ${escapeRegExp(other)} \\(installed`,
   ));
 
   const result = apply(fx, tokenOf(previewResult));
@@ -260,7 +261,7 @@ test('the default root is probed even when no inventory exists', () => {
   const result = apply(fx, tokenOf(preview(fx)));
 
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, new RegExp(`was preserved because Prism may still be installed in other Claude config roots: ${path.join(fx.home, '.claude')} \\(installed`));
+  assert.match(result.stdout, new RegExp(`was preserved because Prism may still be installed in other Claude config roots: ${escapeRegExp(path.join(fx.home, '.claude'))} \\(installed`));
   assert.equal(fs.existsSync(path.join(fx.home, '.prism', 'config.json')), true);
   assert.equal(fs.existsSync(inventoryPath(fx.home)), false, 'the inventory file is not created by uninstall');
 });

@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { IS_WINDOWS } = require('./helpers/platform');
 const {
   afterEach,
   beforeEach,
@@ -165,8 +166,10 @@ test('write drops dead registry fields while preserving unknown fields', () => {
     custom: { preserved: true },
     show_realtime_summary: true,
   });
-  assert.equal(fs.statSync(path.dirname(configFile())).mode & 0o777, 0o700);
-  assert.equal(fs.statSync(configFile()).mode & 0o777, 0o600);
+  if (!IS_WINDOWS) {
+    assert.equal(fs.statSync(path.dirname(configFile())).mode & 0o777, 0o700);
+    assert.equal(fs.statSync(configFile()).mode & 0o777, 0o600);
+  }
 });
 
 test('canonical summary setting wins over legacy and unset removes both names', () => {

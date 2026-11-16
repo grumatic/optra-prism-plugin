@@ -8,6 +8,8 @@ const { spawnSync } = require('node:child_process');
 const { afterEach, beforeEach, test } = require('node:test');
 const { LEGACY_HOST_VERSION, pinClaudeHostVersion } = require('./helpers/claude-host');
 
+const { helperSettingValueForPath } = require('../lib/settings');
+
 // These tests exercise hosts that still apply OTEL from project and local settings.
 pinClaudeHostVersion(LEGACY_HOST_VERSION);
 
@@ -110,7 +112,7 @@ test('setup CLI requires one positional opaque KEY and auto-detects scope', asyn
   const localSettings = path.join(projectDir, '.claude', 'settings.local.json');
   assert.equal(
     readJson(localSettings).otelHeadersHelper,
-    path.join(pluginDataDir, 'bin', 'prism-otel-headers-helper.js'),
+    helperSettingValueForPath(path.join(pluginDataDir, 'bin', 'prism-otel-headers-helper.js')),
   );
   assert.equal(
     fs.readFileSync(path.join(pluginDataDir, 'last-version.txt'), 'utf8'),
@@ -187,12 +189,15 @@ test('shell installer delegates an opaque key to the installed setup entrypoint'
   });
 
   assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(JSON.parse(fs.readFileSync(setupCall, 'utf8')), [
+  // Git Bash hands Node forward-slash paths; compare in the native form.
+  const setupArgs = JSON.parse(fs.readFileSync(setupCall, 'utf8'));
+  assert.deepEqual([...setupArgs.slice(0, 3), path.resolve(setupArgs[3])], [
     'apply',
     opaqueKey,
     '--data-dir',
-    path.join(homeDir, '.claude', 'plugins', 'data', 'prism-optra-prism'),
+    path.resolve(path.join(homeDir, '.claude', 'plugins', 'data', 'prism-optra-prism')),
   ]);
+  assert.equal(setupArgs.length, 4);
   assert.match(result.stdout, /Prism configured/);
   assert.doesNotMatch(result.stdout, /invalid.*key|config-cache|scope repair/i);
 });

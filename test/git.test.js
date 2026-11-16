@@ -8,6 +8,7 @@ const path = require('node:path');
 const { afterEach, test } = require('node:test');
 
 const { collectGitContext, parseRemoteUrl } = require('../lib/git');
+const { posixOnly } = require('./helpers/platform');
 const session = require('../lib/session');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -151,7 +152,7 @@ test('reports non-repositories and missing or timed-out git as fail-open states'
     process.env.PATH = originalPath;
   }
 }));
-test('enforces a shared output budget across git commands', () => withDataDir(tempDir('prism-git-data-'), async () => {
+test('enforces a shared output budget across git commands', posixOnly('a fake git shell script on PATH needs /bin/sh and cannot stand in for git.exe'), () => withDataDir(tempDir('prism-git-data-'), async () => {
   const repo = makeRepo();
   const fakeBin = tempDir('prism-output-budget-bin-');
   const payload = path.join(fakeBin, 'payload');

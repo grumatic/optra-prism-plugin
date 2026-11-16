@@ -6,6 +6,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 
+const { posixOnly } = require('./helpers/platform');
+
 const ROOT = path.resolve(__dirname, '..');
 const PLACEHOLDER = '${CLAUDE_PLUGIN_ROOT}';
 // A plugin root under a CLAUDE_CONFIG_DIR such as ".../Application Support/claude".
@@ -41,7 +43,7 @@ test('every hook command quotes the plugin root placeholder', () => {
   }
 });
 
-test('a plugin root containing spaces stays one argument after literal substitution', () => {
+test('a plugin root containing spaces stays one argument after literal substitution', posixOnly('needs /bin/sh to tokenize the command'), () => {
   for (const { event, command } of hookCommands()) {
     const words = shellWords(command.split(PLACEHOLDER).join(SPACED_ROOT));
     assert.equal(words.length, 2, event);
@@ -49,7 +51,7 @@ test('a plugin root containing spaces stays one argument after literal substitut
   }
 });
 
-test('a plugin root containing spaces stays one argument after shell expansion', () => {
+test('a plugin root containing spaces stays one argument after shell expansion', posixOnly('needs /bin/sh to expand the command'), () => {
   for (const { event, command } of hookCommands()) {
     const words = shellWords(command, { CLAUDE_PLUGIN_ROOT: SPACED_ROOT });
     assert.equal(words.length, 2, event);

@@ -9,6 +9,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { afterEach, test } = require('node:test');
 
+const { IS_WINDOWS } = require('./helpers/platform');
+
 const tempDirs = [];
 
 function tempDir(prefix) {
@@ -95,8 +97,10 @@ test('git_capability_cache_v1: cache file is 0600 in a 0700 directory, named by 
       const file = path.join(dataDir, 'runtime', `git-evidence-capability-${digest}.json`);
       const dirStat = fs.statSync(path.join(dataDir, 'runtime'));
       const fileStat = fs.lstatSync(file);
-      assert.equal(dirStat.mode & 0o777, 0o700);
-      assert.equal(fileStat.mode & 0o777, 0o600);
+      if (!IS_WINDOWS) {
+        assert.equal(dirStat.mode & 0o777, 0o700);
+        assert.equal(fileStat.mode & 0o777, 0o600);
+      }
       assert.ok(fileStat.isFile());
       const raw = fs.readFileSync(file, 'utf8');
       assert.ok(!raw.includes('prism_capability_test'));
