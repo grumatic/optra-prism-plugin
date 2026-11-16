@@ -56,8 +56,29 @@ jobs:
             node --check "$f"
           done
 
-      - name: Test
-        run: npm test
+      - name: Measure git timing without suite load (temporary)
+        run: node .github/measure/git-timing.js
+
+      - name: Suite x3 with the 250 ms deadline (temporary)
+        run: |
+          export MEASURE_GIT_LOG="$RUNNER_TEMP/git-250.log"
+          for i in 1 2 3; do
+            npm test > "$RUNNER_TEMP/suite-250-$i.log" 2>&1 || echo "run $i: FAILED"
+            grep -E "^# (tests|pass|fail|skipped) " "$RUNNER_TEMP/suite-250-$i.log" | tr '\n' ' '; echo
+            grep -E "^\s*not ok" -A 14 "$RUNNER_TEMP/suite-250-$i.log" || true
+          done
+          node .github/measure/summarize.js "$MEASURE_GIT_LOG"
+
+      - name: Suite x3 with a 1000 ms deadline (temporary)
+        run: |
+          export MEASURE_GIT_LOG="$RUNNER_TEMP/git-1000.log"
+          export MEASURE_GIT_DEADLINE_MS=1000
+          for i in 1 2 3; do
+            npm test > "$RUNNER_TEMP/suite-1000-$i.log" 2>&1 || echo "run $i: FAILED"
+            grep -E "^# (tests|pass|fail|skipped) " "$RUNNER_TEMP/suite-1000-$i.log" | tr '\n' ' '; echo
+            grep -E "^\s*not ok" -A 14 "$RUNNER_TEMP/suite-1000-$i.log" || true
+          done
+          node .github/measure/summarize.js "$MEASURE_GIT_LOG"
 
       - name: Validate hooks.json
         run: node -e "JSON.parse(require('fs').readFileSync('hooks/hooks.json', 'utf8'))"
