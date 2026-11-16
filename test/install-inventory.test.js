@@ -308,7 +308,7 @@ test('every successful write leaves installs.json at 0600', () => {
   fs.rmSync(file);
   fs.symlinkSync(target, file);
   assert.equal(registerRoot({ configRoot: second, homeDir: home, now: NOW }).registered, false);
-  assert.equal(fs.statSync(target).mode & 0o777, 0o644);
+  if (!IS_WINDOWS) assert.equal(fs.statSync(target).mode & 0o777, 0o644);
   assert.equal(fs.lstatSync(file).isSymbolicLink(), true);
 });
 
