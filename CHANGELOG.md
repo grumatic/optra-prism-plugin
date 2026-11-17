@@ -5,6 +5,11 @@ All notable changes to the Prism plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.1] - 2026-11-17
+
+### Fixed
+- On Windows, a hook that had to wait for another hook of the same session could give up after 200 ms and skip its record without an error, because a Windows file operation stalls for hundreds of milliseconds now and then. The wait is now up to 1000 ms there. A lock that Windows reports as not permitted while the previous hook is still removing it is retried for up to 100 ms instead of failing at once. Other platforms are unchanged.
+
 ## [0.10.0] - 2026-11-17
 
 ### Added
