@@ -48,9 +48,15 @@ resolve_claude_config_dir() {
   case "$value" in
     "~"*) error "CLAUDE_CONFIG_DIR must be an absolute path: '~' is not expanded; use an absolute path." ;;
     /*) ;;
+    [A-Za-z]:[\\/]*)
+      case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*) ;;
+        *) error "CLAUDE_CONFIG_DIR must be an absolute path." ;;
+      esac
+      ;;
     *) error "CLAUDE_CONFIG_DIR must be an absolute path." ;;
   esac
-  CLAUDE_CONFIG_ROOT=$(node -e 'process.stdout.write(require("path").resolve(process.argv[1]))' "$value")
+  CLAUDE_CONFIG_ROOT=$(node -e 'const p = require("path").resolve(process.argv[1]); process.stdout.write(process.platform === "win32" ? p.replace(/\\/g, "/") : p)' "$value")
 }
 
 # ─── Main ───
