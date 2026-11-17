@@ -5,6 +5,18 @@ All notable changes to the Prism plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-11-17
+
+### Added
+- On native Windows with Git for Windows installed, `/prism:setup` now installs the OTEL headers helper and registers it as a `node "<path>"` command, the form Claude Code can run through the shell on Windows. `/prism:status`, `/prism:doctor`, and `/prism:uninstall` recognize that form. The helper's `0700` mode check is skipped there, because Windows files have no POSIX permission bits.
+- `install.sh` run in Git Bash accepts a `CLAUDE_CONFIG_DIR` that starts with a drive letter, such as `C:\Users\me\.claude`.
+- The README describes the Windows requirements: Git for Windows and `node` on `PATH`. WSL behaves as Linux.
+
+### Changed
+- The SessionStart hook now runs with `node` instead of a Bash script. It does the same work in the same order and prints the same messages.
+- On Windows, the Git commands that run before a prompt or a response is sent may take up to 1000 ms instead of 250 ms, because each Git process starts several times slower there and the commits of a turn could otherwise go unreported. Other platforms keep 250 ms.
+- The plugin's text files are checked out with LF line endings whatever the Git line-ending setting is.
+
 ## [0.9.7] - 2026-11-09
 
 ### Added
