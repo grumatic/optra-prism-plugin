@@ -23,6 +23,14 @@ Claude Code 2.1.161+ is required for core telemetry and Score v3 support. Claude
 | Exact prompt correlation | 2.1.196+ | Use legacy session-order fallback |
 | OTEL telemetry from project and local settings | Ignored from 2.1.282 | Install at user scope; project and local installs capture prompts without OTEL telemetry |
 
+### Windows
+
+Native Windows is supported with [Git for Windows](https://git-scm.com/downloads/win) installed; WSL behaves as Linux.
+
+- Git for Windows provides the Git Bash that slash commands and `install.sh` run in, and the `git` that commit evidence needs.
+- Install from inside Claude Code with the Quick Start commands below.
+- `node` must be on `PATH`: hooks, slash commands, and the OTEL headers helper all run through it.
+
 ## Quick Start
 
 ```bash

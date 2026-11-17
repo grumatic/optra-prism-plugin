@@ -57,8 +57,9 @@ async function refreshCapabilityIfDue() {
 const LEAVE_COLLECT_DEADLINE_MS = 2000;
 const MAX_LEAVE_ROOTS_PER_TURN = 4;
 // Reading the heads of left roots no hook saw the turn leave, right after
-// the response is published and before it is sent.
-const LEAVE_RECORD_HEAD_DEADLINE_MS = 250;
+// the response is published and before it is sent. Longer on Windows for
+// the reason lib/git.js gives for DEADLINE_MS.
+const LEAVE_RECORD_HEAD_DEADLINE_MS = process.platform === 'win32' ? 1000 : 250;
 
 function sha256(value) {
   return typeof value === 'string' ? crypto.createHash('sha256').update(value).digest('hex') : null;
@@ -1099,4 +1100,5 @@ module.exports = {
   captureLeaveEvidence,
   resolveBaseline,
   gitCaptureMarker,
+  LEAVE_RECORD_HEAD_DEADLINE_MS,
 };

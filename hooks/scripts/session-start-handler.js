@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 'use strict';
 
+const path = require('path');
+const { spawn } = require('child_process');
+
 const MAX_SYSTEM_MESSAGE_LENGTH = 10_000;
 
 function readHookStdin() {
@@ -129,8 +132,76 @@ async function main() {
   return 0;
 }
 
+function resolvePluginRoot() {
+  return process.env.CLAUDE_PLUGIN_ROOT || path.join(__dirname, '..', '..');
+}
+
+// Returns the validated ingest URL, or null after writing the reason to stderr.
+function checkConfig() {
+  try {
+    const { getConfig, isSupportedIngestUrl } = require('../../lib/config');
+    const { verifyBinding } = require('../../lib/binding');
+    const config = getConfig();
+    if (typeof config.apiKey !== 'string' || config.apiKey.length === 0) {
+      process.stderr.write('\n[Prism] No API key configured.\n');
+      process.stderr.write('        Run: /prism:setup YOUR_KEY\n\n');
+      return null;
+    }
+    if (!isSupportedIngestUrl(config.ingest_url)) {
+      process.stderr.write('[Prism] ingest_url in ~/.prism/config.json is missing or unsupported.\n');
+      process.stderr.write('        Use HTTPS, or HTTP on loopback, without credentials, query, or fragment.\n');
+      process.stderr.write('        Run /prism:setup YOUR_KEY, or set it with /prism:config, then retry.\n');
+      return null;
+    }
+    const binding = verifyBinding(config);
+    if (binding.status === 'mismatch') {
+      process.stderr.write('\n[Prism] API key is not bound to the configured ingest_url.\n');
+      process.stderr.write(`        Key was verified for ${binding.boundHost || 'another host'}; ingest_url now points to ${binding.currentHost || 'an unreadable host'}.\n`);
+      process.stderr.write('        Telemetry stays off until the pair matches. Run: /prism:setup YOUR_KEY\n\n');
+      return null;
+    }
+    return config.ingest_url;
+  } catch (error) {
+    process.stderr.write(`[Prism] Unable to read ~/.prism/config.json: ${error.message}\n`);
+    return null;
+  }
+}
+
+// The refresh runs in its own process that the hook never waits for: all stdio
+// is closed so no inherited pipe keeps the hook alive.
+function startModelCatalogRefresh() {
+  try {
+    const child = spawn(process.execPath, [path.join(__dirname, 'model-catalog-refresh.js')], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    child.on('error', () => {});
+    child.unref();
+  } catch {}
+}
+
+// Hook entry point: the lifecycle work never affects the config check, which
+// always ends with exit code 0.
+async function startup() {
+  process.env.PRISM_PLUGIN_ROOT = resolvePluginRoot();
+  try {
+    await main();
+  } catch {}
+
+  const ingestUrl = checkConfig();
+  if (ingestUrl === null) return 0;
+
+  if (ingestUrl && process.env.CLAUDE_PLUGIN_DATA) startModelCatalogRefresh();
+
+  process.stderr.write('[Prism] Session started — Prism API key present\n');
+  process.stderr.write('[Prism] Endpoints:\n');
+  process.stderr.write(`        Ingest:    ${ingestUrl}\n`);
+  return 0;
+}
+
 if (require.main === module) {
-  main().then((exitCode) => {
+  startup().then((exitCode) => {
     process.exitCode = exitCode;
   }).catch(() => {
     process.exitCode = 0;
@@ -138,6 +209,8 @@ if (require.main === module) {
 }
 
 module.exports = {
+  startup,
+  checkConfig,
   advanceLifecycle,
   recoverOutbox,
   resumeEvidence,
