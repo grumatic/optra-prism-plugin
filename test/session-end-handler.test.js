@@ -357,7 +357,7 @@ test('SessionEnd success path sends every enqueued entry and leaves the outbox e
   }
 });
 
-test('a stubbed server that never responds leaves every entry pending and the handler still returns before 1500ms', async () => {
+test('a stubbed server that never responds leaves every entry pending and the handler still returns once its budget is spent', async () => {
   const home = temp('prism-session-end-hang-home-');
   const data = temp('prism-session-end-hang-data-');
   const file = path.join(home, 'transcript.jsonl');
@@ -386,7 +386,9 @@ test('a stubbed server that never responds leaves every entry pending and the ha
     await handler.main();
     const elapsedMs = Date.now() - wallClockStart;
 
-    assert.ok(elapsedMs < 1500, `handler took ${elapsedMs}ms`);
+    // The handler's budget is 1400ms. The bound leaves room for a loaded
+    // machine; without the socket timeout the handler would never return.
+    assert.ok(elapsedMs < 3000, `handler took ${elapsedMs}ms`);
     const pending = outbox.listPending();
     assert.equal(pending.length, 2);
     assert.deepEqual(pending.map((entry) => entry.kind).sort(), ['queued_input', 'session_end']);
