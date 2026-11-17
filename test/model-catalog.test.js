@@ -207,8 +207,10 @@ test('refreshCatalog atomically publishes only valid authorized 200 snapshots an
     assert.deepEqual(loadCatalog(dir, api.url), snapshot(9));
     for (const next of ['invalid', 'unavailable', 'timeout', 'unauthorized', 'oversized']) {
       mode = next;
+      // The oversized body must arrive before the timeout for the size limit
+      // to be what ends the request; the refresh stops reading once past it.
       const result = await refreshCatalog({
-        ingestUrl: api.url, apiKey: 'prism_test', dataDir: dir, timeoutMs: 30,
+        ingestUrl: api.url, apiKey: 'prism_test', dataDir: dir, timeoutMs: next === 'oversized' ? 5000 : 30,
       });
       if (next === 'oversized') assert.equal(result, 'kept-cache oversized-response');
       else assert.match(result, /^kept-cache /);
