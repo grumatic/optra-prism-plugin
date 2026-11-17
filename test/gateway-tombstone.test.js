@@ -114,11 +114,12 @@ test('SessionStart accepts an opaque config key and never rewrites the host env 
     }),
   }), true);
 
-  const result = spawnSync('bash', [path.join(ROOT, 'hooks', 'scripts', 'session-start.sh')], {
+  const result = spawnSync(process.execPath, [path.join(ROOT, 'hooks', 'scripts', 'session-start-handler.js')], {
     encoding: 'utf8',
     input: JSON.stringify({ session_id: 'opaque-config-session', source: 'startup' }),
     env: hostilePrismEnv({
       HOME: home,
+      USERPROFILE: home,
       CLAUDE_PLUGIN_ROOT: ROOT,
       CLAUDE_PLUGIN_DATA: dataDir,
       CLAUDE_ENV_FILE: envFile,

@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { test } = require('node:test');
+const { IS_WINDOWS } = require('./helpers/platform');
 
 const {
   CHECK_INTERVAL_MS,
@@ -144,7 +145,7 @@ test('active version helpers validate, atomically publish, and use mode 0600', (
   assert.equal(writeActiveVersion(dataDir, '1.2.3'), true);
   assert.equal(fs.readFileSync(file, 'utf8'), '1.2.3');
   assert.equal(readActiveVersion(dataDir), '1.2.3');
-  assert.equal(mode(file), 0o600);
+  if (!IS_WINDOWS) assert.equal(mode(file), 0o600);
   assert.deepEqual(fs.readdirSync(dataDir), ['last-version.txt']);
 
   for (const invalid of ['v1.2.4', '1.2.4\n', '1.2.4-beta.1', '01.2.4']) {
@@ -203,7 +204,7 @@ test('cache helpers atomically persist the exact schema with mode 0600', (t) => 
     etag: '"release-1"',
     latestVersion: '2.0.0',
   });
-  assert.equal(mode(cachePathFor(dataDir)), 0o600);
+  if (!IS_WINDOWS) assert.equal(mode(cachePathFor(dataDir)), 0o600);
   assert.deepEqual(fs.readdirSync(dataDir), ['update-check.json']);
   assert.equal(writeUpdateCache(dataDir, { ...input, checkedAt: 'invalid' }), false);
 });

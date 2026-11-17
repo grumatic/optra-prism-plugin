@@ -13,6 +13,7 @@ const { afterEach, test } = require('node:test');
 const { collectGitContext, classifyTransientReason } = require('../lib/git');
 const contract = require('../lib/git-evidence-contract');
 const session = require('../lib/session');
+const { IS_WINDOWS, posixOnly } = require('./helpers/platform');
 
 const ROOT = path.resolve(__dirname, '..');
 const SUBMIT_HANDLER = path.join(ROOT, 'hooks', 'scripts', 'submit-handler.js');
@@ -287,8 +288,10 @@ test('the install key is created once, reused across process boundaries, and lea
   const dirPath = path.dirname(keyPath);
   const firstStat = fs.statSync(keyPath);
   assert.equal(firstStat.size, 32);
-  assert.equal(firstStat.mode & 0o777, 0o600);
-  assert.equal(fs.statSync(dirPath).mode & 0o777, 0o700);
+  if (!IS_WINDOWS) {
+    assert.equal(firstStat.mode & 0o777, 0o600);
+    assert.equal(fs.statSync(dirPath).mode & 0o777, 0o700);
+  }
   const firstContent = fs.readFileSync(keyPath);
 
   const second = spawnSync(process.execPath, [script, repo], {
@@ -328,7 +331,7 @@ test('a corrupt install key degrades to root_key_unavailable without touching th
   }
 });
 
-test('an unwritable key directory degrades to root_key_unavailable and leaves no partial file', async () => {
+test('an unwritable key directory degrades to root_key_unavailable and leaves no partial file', posixOnly('chmod on Windows only toggles read-only and does not deny writes in a directory'), async () => {
   if (process.getuid && process.getuid() === 0) return;
   const dataDir = tempDir('prism-git-meta-unwritable-');
   const keyDir = path.join(dataDir, 'runtime');
@@ -378,7 +381,7 @@ test('a non-repository directory yields the not_repository envelope reason', asy
   assert.equal(wire.reason, 'not_repository');
 });
 
-test('a git timeout from a mid-command kill classifies as git_timeout', async () => {
+test('a git timeout from a mid-command kill classifies as git_timeout', posixOnly('a fake git shell script on PATH needs /bin/sh and cannot stand in for git.exe'), async () => {
   const repo = makeRepo();
 
   // execFile's own `timeout` option kills a still-running command with
@@ -400,7 +403,7 @@ test('a git timeout from a mid-command kill classifies as git_timeout', async ()
   }
 });
 
-test('output budget exhaustion accumulated across commands classifies as git_output_limit', async () => {
+test('output budget exhaustion accumulated across commands classifies as git_output_limit', posixOnly('a fake git shell script on PATH needs /bin/sh and cannot stand in for git.exe'), async () => {
   const repo = makeRepo();
   const fakeBin = tempDir('prism-git-meta-output-budget-bin-');
   const payload = path.join(fakeBin, 'payload');
@@ -436,7 +439,7 @@ test('output budget exhaustion accumulated across commands classifies as git_out
   }
 });
 
-test('a single command exceeding the output budget in one shot also classifies as git_output_limit', async () => {
+test('a single command exceeding the output budget in one shot also classifies as git_output_limit', posixOnly('a fake git shell script on PATH needs /bin/sh and cannot stand in for git.exe'), async () => {
   const repo = makeRepo();
   const fakeBin = tempDir('prism-git-meta-single-maxbuffer-');
   const fakeGit = path.join(fakeBin, 'git');
@@ -588,7 +591,7 @@ test('git binary absent from PATH omits metadata.git and still captures the prom
   assert.deepEqual(Object.keys(sent).sort(), [...V0_7_8_PAYLOAD_KEYS, 'metadata'].sort());
 });
 
-test('a timed-out git still captures the prompt and attaches the unavailable variant with git_timeout', () => {
+test('a timed-out git still captures the prompt and attaches the unavailable variant with git_timeout', posixOnly('a fake git shell script on PATH needs /bin/sh and cannot stand in for git.exe'), () => {
   const home = tempDir('prism-git-meta-timeout-home-');
   const dataDir = tempDir('prism-git-meta-timeout-data-');
   const marker = path.join(home, 'prompt.json');

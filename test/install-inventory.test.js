@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { after, beforeEach, test } = require('node:test');
+const { IS_WINDOWS } = require('./helpers/platform');
 
 const {
   INVENTORY_FILENAME,
@@ -92,7 +93,7 @@ test('registration writes a 0600 canonical inventory and is throttled to once a 
   });
   const file = inventoryPath(home);
   assert.equal(path.basename(file), INVENTORY_FILENAME);
-  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  if (!IS_WINDOWS) assert.equal(fs.statSync(file).mode & 0o777, 0o600);
   const written = readInventoryFile();
   assert.deepEqual(written, {
     version: 1,
@@ -294,11 +295,11 @@ test('every successful write leaves installs.json at 0600', () => {
 
   fs.chmodSync(file, 0o644);
   assert.equal(registerRoot({ configRoot: second, homeDir: home, now: NOW }).registered, true);
-  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  if (!IS_WINDOWS) assert.equal(fs.statSync(file).mode & 0o777, 0o600);
 
   fs.chmodSync(file, 0o666);
   assert.equal(removeRoots({ rootsToRemove: [second], homeDir: home }).ok, true);
-  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  if (!IS_WINDOWS) assert.equal(fs.statSync(file).mode & 0o777, 0o600);
   assert.deepEqual(Object.keys(readInventoryFile().roots), [first]);
 
   // A symlinked inventory is still never rewritten or chmod-ed through.
@@ -307,7 +308,7 @@ test('every successful write leaves installs.json at 0600', () => {
   fs.rmSync(file);
   fs.symlinkSync(target, file);
   assert.equal(registerRoot({ configRoot: second, homeDir: home, now: NOW }).registered, false);
-  assert.equal(fs.statSync(target).mode & 0o777, 0o644);
+  if (!IS_WINDOWS) assert.equal(fs.statSync(target).mode & 0o777, 0o644);
   assert.equal(fs.lstatSync(file).isSymbolicLink(), true);
 });
 

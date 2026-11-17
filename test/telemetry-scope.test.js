@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { afterEach, beforeEach, test } = require('node:test');
+const { IS_WINDOWS } = require('./helpers/platform');
 
 const hostTelemetry = require('../lib/host-telemetry');
 
@@ -154,7 +155,7 @@ test('local sync on a current host withdraws only Prism-owned values', () => {
   const expected = settings.buildExpectedOtelEnv();
   const helperPath = settings.helperPathForDataDir(dataDir);
   writeJson(localFile(), {
-    otelHeadersHelper: helperPath,
+    otelHeadersHelper: settings.helperSettingValueForPath(helperPath),
     env: {
       ...expected.otelEnv,
       OTEL_EXPORTER_OTLP_HEADERS: `x-api-key=${encodeURIComponent(API_KEY)},x-prism-plugin-version=0.1.0`,
@@ -240,7 +241,7 @@ test('version activation withholds local metadata and writes the user opt-out fi
   assert.equal(optOutFile, path.join(homeDir, '.prism', 'prism-off.settings.json'));
   assert.equal(projected.optOutSettingsFile, optOutFile);
   assert.deepEqual(readJson(optOutFile), settings.buildOptOutSettings());
-  assert.equal(fs.statSync(optOutFile).mode & 0o777, 0o600);
+  if (!IS_WINDOWS) assert.equal(fs.statSync(optOutFile).mode & 0o777, 0o600);
   assert.deepEqual(readJson(optOutFile).enabledPlugins, { 'prism@optra-prism': false });
   assert.equal(settings.writeOptOutSettings().changed, false);
 });

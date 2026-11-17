@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { test } = require('node:test');
+const { IS_WINDOWS } = require('./helpers/platform');
 
 const {
   NOTICE_TTL_MS,
@@ -26,7 +27,7 @@ test('a notice key is claimed once per session', (t) => {
   assert.equal(claim('session-a', 'activation-failure@1.2.3'), false);
   assert.equal(claim('session-a', 'activation-failure@1.2.4'), true);
   assert.equal(claim('session-b', 'activation-failure@1.2.3'), true);
-  assert.equal(fs.statSync(noticeDirFor(dataDir)).mode & 0o777, 0o700);
+  if (!IS_WINDOWS) assert.equal(fs.statSync(noticeDirFor(dataDir)).mode & 0o777, 0o700);
 });
 
 test('claims fail open without a usable data directory or session id', (t) => {

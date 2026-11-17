@@ -12,6 +12,8 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const { renderStatus } = require('../lib/status');
+const { helperSettingValueForPath } = require('../lib/settings');
+const { escapeRegExp } = require('./helpers/platform');
 const ROOT = path.resolve(__dirname, '..');
 
 function snapshotTree(root) {
@@ -104,8 +106,9 @@ test('status is read-only and resolves effective settings user to project to loc
     assert.match(
       result.stdout,
       new RegExp(
-        `Expected Prism OTEL Headers Helper:\\*\\* ${path.join(pluginData, 'bin', 'prism-otel-headers-helper.js')
-          .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`,
+        `Expected Prism OTEL Headers Helper:\\*\\* ${escapeRegExp(
+          helperSettingValueForPath(path.join(pluginData, 'bin', 'prism-otel-headers-helper.js')),
+        )}`,
       ),
     );
     assert.match(

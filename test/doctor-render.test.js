@@ -9,6 +9,9 @@ const { spawnSync } = require('node:child_process');
 
 const { renderReport } = require('../lib/doctor');
 const { buildBinding } = require('../lib/binding');
+const { helperSettingValueForPath } = require('../lib/settings');
+const { IS_WINDOWS } = require('./helpers/platform');
+const MODE_LABEL = IS_WINDOWS ? 'n/a' : 'yes';
 const ROOT = path.resolve(__dirname, '..');
 
 function snapshotTree(root) {
@@ -54,7 +57,7 @@ test('doctor rejects an arbitrary executable at the expected helper path without
   fs.mkdirSync(path.join(projectDir, '.claude'), { recursive: true });
   fs.writeFileSync(
     path.join(projectDir, '.claude', 'settings.local.json'),
-    `${JSON.stringify({ otelHeadersHelper: helper }, null, 2)}\n`,
+    `${JSON.stringify({ otelHeadersHelper: helperSettingValueForPath(helper) }, null, 2)}\n`,
   );
   const before = snapshotTree(home);
 
@@ -93,7 +96,7 @@ test('doctor rejects an arbitrary executable at the expected helper path without
     assert.equal(helperCheck.status, 'fail');
     assert.match(
       helperCheck.message,
-      /managed artifact: exists=yes, regular file=yes, not symlink=yes, safe path=yes, current UID \(where supported\)=yes, exact mode 0700=yes, executable=yes, bundled bytes=no/,
+      new RegExp(`managed artifact: exists=yes, regular file=yes, not symlink=yes, safe path=yes, current UID \\(where supported\\)=yes, exact mode 0700=${MODE_LABEL}, executable=yes, bundled bytes=no`),
     );
     assert.match(helperCheck.message, /managed settings and CLI overrides are outside this reader/);
     assert.match(helperCheck.remediation, /Run \/prism:setup KEY to restore the Prism-managed helper/);
@@ -124,7 +127,7 @@ test('doctor passes the exact bundled managed helper without executing it', () =
   fs.chmodSync(helper, 0o700);
   fs.writeFileSync(
     path.join(projectDir, '.claude', 'settings.local.json'),
-    `${JSON.stringify({ otelHeadersHelper: helper })}\n`,
+    `${JSON.stringify({ otelHeadersHelper: helperSettingValueForPath(helper) })}\n`,
   );
   const before = snapshotTree(home);
 
@@ -147,7 +150,7 @@ test('doctor passes the exact bundled managed helper without executing it', () =
     assert.equal(helperCheck.status, 'pass');
     assert.match(
       helperCheck.message,
-      /managed artifact: exists=yes, regular file=yes, not symlink=yes, safe path=yes, current UID \(where supported\)=yes, exact mode 0700=yes, executable=yes, bundled bytes=yes/,
+      new RegExp(`managed artifact: exists=yes, regular file=yes, not symlink=yes, safe path=yes, current UID \\(where supported\\)=yes, exact mode 0700=${MODE_LABEL}, executable=yes, bundled bytes=yes`),
     );
     assert.equal(helperCheck.remediation, null);
     assert.deepEqual(snapshotTree(home), before);

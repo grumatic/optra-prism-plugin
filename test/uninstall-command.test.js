@@ -7,7 +7,8 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { test } = require('node:test');
 const { buildOtelHeaders } = require('../lib/plugin-version');
-const { OTEL_KEYS, PLUGIN_ID } = require('../lib/settings');
+const { OTEL_KEYS, PLUGIN_ID, helperSettingValueForPath } = require('../lib/settings');
+const { escapeRegExp } = require('./helpers/platform');
 const CURRENT_OTEL_KEYS = OTEL_KEYS.filter(
   (key) => key !== 'OTEL_LOG_ASSISTANT_RESPONSES',
 );
@@ -819,7 +820,7 @@ test('otelHeadersHelper drift after preview invalidates the plan token with zero
   try {
     const helperPath = expectedOtelHeadersHelperPath(fx);
     const settings = readJson(fx.localSettings);
-    settings.otelHeadersHelper = helperPath;
+    settings.otelHeadersHelper = helperSettingValueForPath(helperPath);
     writeJson(fx.localSettings, settings);
     const args = [
       '--project-dir',
@@ -873,7 +874,7 @@ test('exact otelHeadersHelper cleanup is explicit in plan/apply metadata and use
   try {
     const helperPath = expectedOtelHeadersHelperPath(fx);
     writeJson(fx.localSettings, {
-      otelHeadersHelper: helperPath,
+      otelHeadersHelper: helperSettingValueForPath(helperPath),
       unrelated: 'preserve',
     });
     writeFile(helperPath, '#!/usr/bin/env node\n');
@@ -900,7 +901,7 @@ test('exact otelHeadersHelper cleanup is explicit in plan/apply metadata and use
       preserved: false,
     });
     assert.match(metadata.preview, /Remove otelHeadersHelper because it exactly matches/);
-    assert.match(metadata.preview, new RegExp(helperPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    assert.match(metadata.preview, new RegExp(escapeRegExp(helperSettingValueForPath(helperPath))));
     assert.match(metadata.applied, /otelHeadersHelper removed after exact path match/);
     assert.deepEqual(readJson(fx.localSettings), { unrelated: 'preserve' });
     assert.equal(fs.existsSync(fx.dataDir), false);

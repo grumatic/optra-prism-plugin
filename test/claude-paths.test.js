@@ -35,11 +35,12 @@ test('an unset or empty CLAUDE_CONFIG_DIR resolves to ~/.claude', () => {
   for (const env of [{}, { CLAUDE_CONFIG_DIR: '' }]) {
     const paths = resolveClaudePaths({ env, homeDir: HOME });
     assert.equal(paths.source, 'default');
-    assert.equal(paths.configRoot, '/home/dev/.claude');
-    assert.equal(paths.userSettings, '/home/dev/.claude/settings.json');
-    assert.equal(paths.installedPlugins, '/home/dev/.claude/plugins/installed_plugins.json');
-    assert.equal(paths.pluginCacheRoot, '/home/dev/.claude/plugins/cache');
-    assert.equal(paths.pluginDataRoot, '/home/dev/.claude/plugins/data');
+    const root = path.join(HOME, '.claude');
+    assert.equal(paths.configRoot, root);
+    assert.equal(paths.userSettings, path.join(root, 'settings.json'));
+    assert.equal(paths.installedPlugins, path.join(root, 'plugins', 'installed_plugins.json'));
+    assert.equal(paths.pluginCacheRoot, path.join(root, 'plugins', 'cache'));
+    assert.equal(paths.pluginDataRoot, path.join(root, 'plugins', 'data'));
     assert.equal(paths.pluginCacheDirEnv, null);
   }
 });
@@ -55,9 +56,10 @@ test('an absolute CLAUDE_CONFIG_DIR is normalized without a trailing slash or do
   for (const [value, expected] of cases) {
     const paths = resolveClaudePaths({ env: { CLAUDE_CONFIG_DIR: value }, homeDir: HOME });
     assert.equal(paths.source, 'env', value);
-    assert.equal(paths.configRoot, expected, value);
-    assert.equal(paths.userSettings, `${expected}/settings.json`);
-    assert.equal(paths.pluginDataRoot, `${expected}/plugins/data`);
+    const expectedRoot = path.resolve(expected);
+    assert.equal(paths.configRoot, expectedRoot, value);
+    assert.equal(paths.userSettings, path.join(expectedRoot, 'settings.json'));
+    assert.equal(paths.pluginDataRoot, path.join(expectedRoot, 'plugins', 'data'));
   }
 });
 
@@ -83,9 +85,9 @@ test('resolution reads the environment on every call', () => {
   const previous = process.env.CLAUDE_CONFIG_DIR;
   try {
     process.env.CLAUDE_CONFIG_DIR = '/srv/one';
-    assert.equal(resolveClaudePaths().configRoot, '/srv/one');
+    assert.equal(resolveClaudePaths().configRoot, path.resolve('/srv/one'));
     process.env.CLAUDE_CONFIG_DIR = '/srv/two';
-    assert.equal(resolveClaudePaths().configRoot, '/srv/two');
+    assert.equal(resolveClaudePaths().configRoot, path.resolve('/srv/two'));
     delete process.env.CLAUDE_CONFIG_DIR;
     assert.equal(resolveClaudePaths().source, 'default');
   } finally {
@@ -97,10 +99,11 @@ test('resolution reads the environment on every call', () => {
   const before = process.env.CLAUDE_CONFIG_DIR;
   try {
     process.env.CLAUDE_CONFIG_DIR = '/srv/live';
-    assert.equal(settings.userSettingsPath(), '/srv/live/settings.json');
-    assert.equal(settings.USER_SETTINGS, '/srv/live/settings.json');
-    assert.equal(settings.INSTALLED_PLUGINS, '/srv/live/plugins/installed_plugins.json');
-    assert.equal(settings.pathForScope('user'), '/srv/live/settings.json');
+    const liveRoot = path.resolve('/srv/live');
+    assert.equal(settings.userSettingsPath(), path.join(liveRoot, 'settings.json'));
+    assert.equal(settings.USER_SETTINGS, path.join(liveRoot, 'settings.json'));
+    assert.equal(settings.INSTALLED_PLUGINS, path.join(liveRoot, 'plugins', 'installed_plugins.json'));
+    assert.equal(settings.pathForScope('user'), path.join(liveRoot, 'settings.json'));
   } finally {
     if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR;
     else process.env.CLAUDE_CONFIG_DIR = before;
@@ -319,20 +322,20 @@ test('inspectClaudeContext reports instead of throwing', () => {
 test('the fallback plugin data directory follows CLAUDE_CONFIG_DIR and survives an invalid value', () => {
   assert.equal(
     defaultPluginDataDir({ env: { CLAUDE_CONFIG_DIR: '/srv/cfg' }, homeDir: HOME }),
-    '/srv/cfg/plugins/data/prism-optra-prism',
+    path.join(path.resolve('/srv/cfg'), 'plugins', 'data', 'prism-optra-prism'),
   );
   assert.equal(
     defaultPluginDataDir({ env: {}, homeDir: HOME }),
-    '/home/dev/.claude/plugins/data/prism-optra-prism',
+    path.join(HOME, '.claude', 'plugins', 'data', 'prism-optra-prism'),
   );
   assert.equal(
     defaultPluginDataDir({ env: { CLAUDE_CONFIG_DIR: '~/cfg' }, homeDir: HOME }),
-    '/home/dev/.claude/plugins/data/prism-optra-prism',
+    path.join(HOME, '.claude', 'plugins', 'data', 'prism-optra-prism'),
   );
 });
 
 test('runtime stores fall back to the data directory under CLAUDE_CONFIG_DIR when CLAUDE_PLUGIN_DATA is unset', () => {
-  const cfg = '/srv/cfg-fallback';
+  const cfg = path.resolve('/srv/cfg-fallback');
   const saved = {
     CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
     CLAUDE_PLUGIN_DATA: process.env.CLAUDE_PLUGIN_DATA,
@@ -353,7 +356,7 @@ test('runtime stores fall back to the data directory under CLAUDE_CONFIG_DIR whe
     );
 
     process.env.CLAUDE_PLUGIN_DATA = '/srv/explicit-data';
-    assert.equal(outbox.getOutboxDir(), '/srv/explicit-data/runtime/outbox');
+    assert.equal(outbox.getOutboxDir(), path.join('/srv/explicit-data', 'runtime', 'outbox'));
   } finally {
     for (const [key, value] of Object.entries(saved)) {
       if (value === undefined) delete process.env[key];

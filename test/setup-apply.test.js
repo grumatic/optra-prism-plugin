@@ -10,6 +10,8 @@ const { LEGACY_HOST_VERSION, pinClaudeHostVersion } = require('./helpers/claude-
 // These tests exercise hosts that still apply OTEL from project and local settings.
 pinClaudeHostVersion(LEGACY_HOST_VERSION);
 const { bindingDigest } = require('../lib/binding');
+const { helperSettingValueForPath } = require('../lib/settings');
+const { escapeRegExp } = require('./helpers/platform');
 
 const ROOT = path.resolve(__dirname, '..');
 const API_KEY = 'opaque setup key';
@@ -370,7 +372,7 @@ test('setup fails visibly when the active version marker cannot be published', a
   const userSettings = readJson(path.join(homeDir, '.claude', 'settings.json'));
   assert.equal(
     userSettings.otelHeadersHelper,
-    path.join(pluginData, 'bin', 'prism-otel-headers-helper.js'),
+    helperSettingValueForPath(path.join(pluginData, 'bin', 'prism-otel-headers-helper.js')),
   );
 });
 
@@ -431,10 +433,13 @@ test('setup under CLAUDE_CONFIG_DIR projects to that config dir and records the 
 
   assert.equal(exitCode, 0, captured.errors.join('\n'));
   assert.match(captured.logs.join('\n'), /Scope: user/);
-  assert.match(captured.logs.join('\n'), new RegExp(`Settings file: ${cfg}/settings\\.json`));
+  assert.match(captured.logs.join('\n'), new RegExp(`Settings file: ${escapeRegExp(path.join(cfg, 'settings.json'))}`));
   const settings = readJson(path.join(cfg, 'settings.json'));
   assert.equal(settings.env.OTEL_LOGS_EXPORTER, 'otlp');
-  assert.equal(settings.otelHeadersHelper, path.join(dataDir(cfg), 'bin', 'prism-otel-headers-helper.js'));
+  assert.equal(
+    settings.otelHeadersHelper,
+    helperSettingValueForPath(path.join(dataDir(cfg), 'bin', 'prism-otel-headers-helper.js')),
+  );
   assert.equal(fs.existsSync(path.join(homeDir, '.claude')), false);
   assert.equal(fs.readFileSync(path.join(dataDir(cfg), 'last-version.txt'), 'utf8').trim().length > 0, true);
 
